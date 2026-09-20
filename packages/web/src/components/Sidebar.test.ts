@@ -114,9 +114,63 @@ describe("Sidebar — spaces", () => {
     const wrapper = mountSidebar(makeConnection());
     expect(wrapper.find(".sidebar-spaces .sidebar-row").classes()).toContain("sidebar-row-selected");
   });
+
+  // 20260920-ui-selection-visuals：以前は「表示中」を示す見た目が無く、navigate モード中のカーソルだけだった（AC1）。
+  it("表示中の workspace の行に、モードに関係なく表示中のスタイルと aria-current を付ける", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.workspaceUpserted(makeWorkspace("w2"));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountSidebar(makeConnection());
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row");
+    expect(rows[0]!.classes()).toContain("sidebar-row-current");
+    expect(rows[0]!.attributes("aria-current")).toBe("true");
+    // 表示中でない行には**属性ごと**付けない（`aria-current` は既定 false で、AT に露出してはいけない）。
+    expect(rows[1]!.classes()).not.toContain("sidebar-row-current");
+    expect(rows[1]!.attributes("aria-current")).toBeUndefined();
+  });
+
+  // AC2：表示中（面）と navigate のカーソル（線）は別の表し方なので、同じ行で重なっても両方読める。
+  it("表示中かつ navigate で選択中の行には、2 つのクラスが同時に付く", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    view.onModeChange("navigate");
+    view.setNavigateSelection("w1");
+    const wrapper = mountSidebar(makeConnection());
+    const classes = wrapper.find(".sidebar-spaces .sidebar-row").classes();
+    expect(classes).toContain("sidebar-row-current");
+    expect(classes).toContain("sidebar-row-selected");
+  });
+
+  // AC3：`↑n ↓n` は縮めると意味を失うので、縮ませない印を付ける（省略の対象はブランチ名だけ）。
+  it("2 行目の ↑n ↓n に、縮ませない印（sidebar-git-counts）を付ける", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 2, behind: 1 } }));
+    const wrapper = mountSidebar(makeConnection());
+    expect(wrapper.find(".sidebar-row-line2 .sidebar-git-counts").text()).toBe("↑2 ↓1");
+  });
 });
 
 describe("Sidebar — agents", () => {
+  // AC1：agents 区画の行が指すのは pane なので、workspace の「表示中」は付けない。
+  it("表示中の workspace に属する agents の行にも、表示中のスタイルは付かない", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.paneUpserted(makePane("p1", "t1", makeAgent()));
+    view.setView("w1", "t1");
+    const wrapper = mountSidebar(makeConnection());
+    const row = wrapper.find(".sidebar-agents .sidebar-row");
+    expect(row.classes()).not.toContain("sidebar-row-current");
+    expect(row.attributes("aria-current")).toBeUndefined();
+  });
+
   it("エージェントの行に状態・workspace・tab・エージェント名を出す", () => {
     const session = useSessionStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1", { label: "proj" }));

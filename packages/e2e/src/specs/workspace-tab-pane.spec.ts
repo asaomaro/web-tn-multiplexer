@@ -1,3 +1,9 @@
+import { execFile } from "node:child_process";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import type { Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures.js";
 import { focusTerminal, prefixKey, typeLine } from "../support/keys.js";
 import { markFocusedPane, shownPanes, watchShownPanes } from "../support/panes.js";
@@ -357,4 +363,62 @@ test("分割の応答待ちの間に元の pane の上でホイールを回し�
   expect(arrows.every((s) => s.paneId === p1)).toBe(true);
   expect(sent.slice(mark).some((s) => s.paneId === p2 && isArrow(s.text))).toBe(false);
   await page.keyboard.press("q"); // less を終える（焦点は p2 なので p2 に q が入るが無害）
+});
+
+/**
+ * AC3（20260920-ui-selection-visuals）：サイドバーに横スクロールバーが出ない。
+ * 横に溢れる原因は 2 つある——2 行目（ブランチ名・エージェント名）が縮まないことと、
+ * 幅変更のつまみが右へ 3px はみ出していたこと（decisions.md D3）。
+ * 2 行目は `ahead > 0 || behind > 0` のときだけ描かれる（`Sidebar.vue` の `showGit`）ので、
+ * **上流を持ち 1 コミット進んだ**作業ツリーを用意して実際に描かせる。
+ */
+async function makeAheadRepo(branch: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "wtm-e2e-git-"));
+  const origin = join(dir, "origin.git");
+  const work = join(dir, "work");
+  // 利用者の ~/.gitconfig（署名・既定ブランチ名など）に左右されないようにする。
+  // `/dev/null` は POSIX 前提。この E2E 一式は Linux・chromium で走らせる想定（docs/verification.md）。
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  const git = (cwd: string, args: string[]): Promise<unknown> => promisify(execFile)("git", args, { cwd, env });
+  await git(dir, ["init", "--bare", "-q", origin]);
+  await git(dir, ["clone", "-q", origin, work]);
+  await git(work, ["config", "user.email", "e2e@example.com"]);
+  await git(work, ["config", "user.name", "wtm e2e"]);
+  await git(work, ["commit", "-q", "--allow-empty", "-m", "init"]); // push の前に 1 つ要る（空のままでは push できない）
+  await git(work, ["checkout", "-q", "-b", branch]);
+  await git(work, ["push", "-q", "-u", "origin", branch]); // 上流が無いと ahead は 0 のまま
+  await git(work, ["commit", "-q", "--allow-empty", "-m", "ahead"]); // ahead=1
+  return work;
+}
+
+/** `.sidebar` のスクロール領域と表示領域。横スクロールバーが出るのは前者が後者より広いとき。 */
+function sidebarWidths(page: Page): Promise<{ scroll: number; client: number }> {
+  return page.evaluate(() => {
+    const el = document.querySelector(".sidebar") as HTMLElement;
+    return { scroll: el.scrollWidth, client: el.clientWidth };
+  });
+}
+
+test("サイドバー：区切りの無い長いブランチ名でも横に溢れない（AC3）", async ({ page, appServer }) => {
+  const client = await appServer.openClient();
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  // 区切り文字（`-` `/` `_`）を含まない長い名前にする。区切りがあると折り返せてしまい、横へは溢れない。
+  const branch = "verylongbranchnamewithnoseparatorswhatsoeversothatitcannotwrap";
+  await client.request("workspace.create", { cwd: await makeAheadRepo(branch) });
+
+  // `GitInfoPoller` は 5s 周期なので、2 行目が出るのは次の周回。既定の 5s では足りない。
+  const row = page.locator(".sidebar-spaces .sidebar-row").filter({ hasText: branch });
+  await expect(row).toHaveCount(1, { timeout: 15_000 });
+
+  const wide = await sidebarWidths(page);
+  expect(wide.scroll, `既定幅（実測 ${JSON.stringify(wide)}）`).toBeLessThanOrEqual(wide.client);
+
+  // 折りたたんでも溢れない（2 行目は描かれなくなるが、つまみのはみ出しはここでも効く）。
+  await focusTerminal(page);
+  await prefixKey(page, "b");
+  await expect(page.locator(".sidebar-collapsed")).toHaveCount(1);
+  const narrow = await sidebarWidths(page);
+  expect(narrow.scroll, `折りたたみ時（実測 ${JSON.stringify(narrow)}）`).toBeLessThanOrEqual(narrow.client);
 });

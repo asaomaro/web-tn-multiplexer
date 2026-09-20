@@ -127,6 +127,58 @@ describe("PaneFrame（pane の枠。M7 の後半・D110）", () => {
     await wrapper.vm.$nextTick();
     expect(edge.attributes("aria-expanded")).toBe("false");
   });
+
+  // 20260920-ui-selection-visuals の AC7：ポインタを重ねるたびに出る説明のツールチップを外す。
+  it("枠に title 属性を置かない（aria-label は残す）", () => {
+    const session = useSessionStore(pinia);
+    session.paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.attributes("title")).toBeUndefined();
+    expect(edge.attributes("aria-label")).toBe("pane「build」のメニュー");
+  });
+
+  // AC8：枠は role="button" のメニューボタンなので、そこに aria-current を置くと「ボタンが current」になる。
+  // pane そのものを指すのは外側の要素（role="group" ＋ pane の名前）。
+  it("選ばれている pane の外側の要素に role=group・pane の名前・aria-current を付ける", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.paneUpserted(makePane("p1", { label: "build" }));
+    view.focusPane("p2");
+    const { wrapper } = mountFrame();
+    const frame = wrapper.get(".pane-frame");
+    expect(frame.attributes("role")).toBe("group");
+    expect(frame.attributes("aria-label")).toBe("pane「build」"); // メニューの名前は流用しない
+    expect(frame.attributes("aria-current")).toBeUndefined(); // 選ばれていない間は属性ごと出さない
+    view.focusPane("p1");
+    await wrapper.vm.$nextTick();
+    expect(frame.attributes("aria-current")).toBe("true");
+  });
+
+  it("enabled でなければ role も aria も付けない（モバイルではストアに触れないため）", () => {
+    const { wrapper } = mountFrame({ enabled: false, withPinia: false });
+    const frame = wrapper.get(".pane-frame");
+    expect(frame.attributes("role")).toBeUndefined();
+    expect(frame.attributes("aria-label")).toBeUndefined();
+    expect(frame.attributes("aria-current")).toBeUndefined();
+  });
+});
+
+// AC4・AC5：強調はマウスの位置ではなく選択で決まる（以前は `:hover` だけが枠を塗っていた）。
+describe("PaneFrame — 強調は選ばれている pane に付く", () => {
+  it("選ばれている pane の枠にだけ強調のクラスが付き、選び直すと移る", async () => {
+    const view = useViewStore(pinia);
+    view.focusPane("p2");
+    const { wrapper } = mountFrame();
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.classes()).not.toContain("pane-frame-edge-current");
+    view.focusPane("p1");
+    await wrapper.vm.$nextTick();
+    expect(edge.classes()).toContain("pane-frame-edge-current");
+    view.focusPane("p2");
+    await wrapper.vm.$nextTick();
+    expect(edge.classes()).not.toContain("pane-frame-edge-current");
+  });
 });
 
 describe("PaneFrame — Tab で止まるのは選ばれている pane の枠だけ（roving tabindex。独立点検 #2）", () => {

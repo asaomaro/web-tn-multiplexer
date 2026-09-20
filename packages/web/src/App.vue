@@ -81,6 +81,9 @@ const isMobile = isMobileViewport();
   --wtm-menu-fg: #f8f8f2;
   --wtm-menu-border: #44475a;
   --wtm-menu-active-bg: #44475a;
+  /* 一時的なホバーの面。--wtm-menu-bg(#282a36) より明るく --wtm-menu-active-bg(#44475a) より暗い色にして、
+   * 表示中と取り違えないようにする。 */
+  --wtm-menu-hover-bg: #343746;
 }
 html,
 body,

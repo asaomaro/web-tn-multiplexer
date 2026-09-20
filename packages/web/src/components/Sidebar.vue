@@ -30,7 +30,9 @@ const spaces = computed(() =>
   [...session.workspaces.values()].map((ws) => {
     const states = session.panesInWorkspace(ws.id).map((p) => displayStateFor(p.agent, seen.getSeenSeq(p.agent?.instanceId ?? "", p.agent?.serverSeenSeq ?? 0)));
     const showGit = !!ws.git && (ws.git.ahead > 0 || ws.git.behind > 0);
-    return { workspace: ws, state: aggregate(states) as keyof typeof STATE_PRIORITY | null, showGit };
+    // いま表示している workspace か（`PaneFrame` の `selected` と同じ考え方で、判定は 1 箇所に置く）。
+    const isCurrent = ws.id === view.workspaceId;
+    return { workspace: ws, state: aggregate(states) as keyof typeof STATE_PRIORITY | null, showGit, isCurrent };
   }),
 );
 
@@ -96,10 +98,14 @@ function onDividerPointerUp(): void {
   <nav ref="el" class="sidebar" :class="{ 'sidebar-collapsed': view.sidebarCollapsed }" :style="view.sidebarCollapsed ? {} : { width: `${width}px` }">
     <section class="sidebar-spaces" aria-label="spaces">
       <div
-        v-for="{ workspace, state, showGit } in spaces"
+        v-for="{ workspace, state, showGit, isCurrent } in spaces"
         :key="workspace.id"
         class="sidebar-row"
-        :class="{ 'sidebar-row-selected': view.mode === 'navigate' && view.navigateSelection === workspace.id }"
+        :class="{
+          'sidebar-row-current': isCurrent,
+          'sidebar-row-selected': view.mode === 'navigate' && view.navigateSelection === workspace.id,
+        }"
+        :aria-current="isCurrent ? 'true' : undefined"
         @click="focusWorkspace(workspace.id)"
         @contextmenu="onWorkspaceContextMenu($event, workspace.id)"
       >
@@ -109,7 +115,7 @@ function onDividerPointerUp(): void {
         </div>
         <div v-if="!view.sidebarCollapsed && showGit" class="sidebar-row-line2">
           <span>{{ workspace.git!.branch }}</span>
-          <span>↑{{ workspace.git!.ahead }} ↓{{ workspace.git!.behind }}</span>
+          <span class="sidebar-git-counts">↑{{ workspace.git!.ahead }} ↓{{ workspace.git!.behind }}</span>
         </div>
       </div>
     </section>
@@ -144,6 +150,8 @@ function onDividerPointerUp(): void {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  /* `overflow-y` を指定すると `overflow-x` も `auto` に計算されるので、横は明示して止める（AC3）。 */
+  overflow-x: hidden;
   background: var(--wtm-menu-bg, #282a36);
   color: var(--wtm-fg, #f8f8f2);
   border-right: 1px solid var(--wtm-menu-border, #44475a);
@@ -165,9 +173,19 @@ function onDividerPointerUp(): void {
   padding: 0.4em 0.8em;
   cursor: pointer;
 }
-.sidebar-row:hover,
-.sidebar-row-selected {
+/* 3 つの状態を別の表し方に分ける（20260920-ui-selection-visuals の AC2）。以前は hover と
+ * navigate の選択が同じ宣言で、しかもタブのアクティブと同じ色だったので見分けが付かなかった。
+ * 持続する状態（表示中）は面、一時的なカーソル（navigate）は線にして、重なっても両方読めるようにする。 */
+.sidebar-row:hover {
+  background: var(--wtm-menu-hover-bg, #343746);
+}
+/* `.sidebar-row:hover` と詳細度をそろえ、後に置くことで表示中を勝たせる（一時的な状態で上書きしない）。 */
+.sidebar-row.sidebar-row-current {
   background: var(--wtm-menu-active-bg, #44475a);
+}
+.sidebar-row-selected {
+  outline: 1px solid var(--wtm-fg, #f8f8f2);
+  outline-offset: -1px;
 }
 .sidebar-row-line1 {
   display: flex;
@@ -180,6 +198,17 @@ function onDividerPointerUp(): void {
   padding-left: 1.1em;
   font-size: 0.85em;
   opacity: 0.75;
+}
+/* 長いブランチ名・エージェント名を省略記号で切る（AC3）。flex アイテムに overflow があると
+ * main 軸の自動最小サイズが 0 になって縮む——1 行目の `.sidebar-label` と同じ仕組み。 */
+.sidebar-row-line2 > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 縮めると意味を失うので縮ませない。 */
+.sidebar-git-counts {
+  flex: none;
 }
 .sidebar-label {
   overflow: hidden;
@@ -211,12 +240,15 @@ function onDividerPointerUp(): void {
   color: #6272a4;
 }
 .sidebar-unverified {
+  flex: none;
   color: #ffb86c;
 }
+/* 以前は `right: -3px` で外へ 3px はみ出しており、文字が 1 つも無くても横スクロールバーが出ていた
+ * （decisions.md D3）。幅の変更は移動量の差分で決まるので、内側へ寄せても操作感は変わらない。 */
 .sidebar-divider {
   position: absolute;
   top: 0;
-  right: -3px;
+  right: 0;
   width: 6px;
   height: 100%;
   cursor: col-resize;
