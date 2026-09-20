@@ -1,0 +1,76 @@
+import type { PaneId } from "@wtm/protocol";
+import type { PtyBackend } from "../pty/PtyBackend.js";
+import type { ProcessInspector } from "../platform/ProcessInspector.js";
+import { DefaultTerminalHost, type TerminalHost } from "./TerminalHost.js";
+
+export interface CreatePaneOptions {
+  cwd: string;
+  shell?: string;
+  cols: number;
+  rows: number;
+  env?: Record<string, string>;
+}
+
+/** pane の id → `TerminalHost` の対応（architecture.md「TerminalManager」）。 */
+export interface TerminalManager {
+  get(paneId: PaneId): TerminalHost | undefined;
+  create(paneId: PaneId, opts: CreatePaneOptions): TerminalHost;
+  resize(paneId: PaneId, cols: number, rows: number): void;
+  dispose(paneId: PaneId): void;
+}
+
+export class DefaultTerminalManager implements TerminalManager {
+  private readonly hosts = new Map<PaneId, TerminalHost>();
+
+  constructor(
+    private readonly ptyBackend: PtyBackend,
+    private readonly processInspector: ProcessInspector,
+    private readonly scrollbackLines: number,
+  ) {}
+
+  get(paneId: PaneId): TerminalHost | undefined {
+    return this.hosts.get(paneId);
+  }
+
+  /**
+   * 同期のまま作る（D37）。起動そのものが失敗したか（存在しない実行ファイル等）は、node-pty では
+   * 同期的には分からない——PTY の出力とその後の `onExit` を見て、呼び出し側（SessionService。T17）が
+   * 短い猶予で判定する。
+   */
+  create(paneId: PaneId, opts: CreatePaneOptions): TerminalHost {
+    const defaultShell = opts.shell ? undefined : this.processInspector.defaultShell();
+    const shell = opts.shell ?? defaultShell!.shell;
+    const args = opts.shell ? [] : defaultShell!.args;
+    const proc = this.ptyBackend.spawn({
+      shell,
+      args,
+      cwd: opts.cwd,
+      env: opts.env ?? (process.env as Record<string, string>),
+      cols: opts.cols,
+      rows: opts.rows,
+    });
+    const host = new DefaultTerminalHost(paneId, proc, opts.cols, opts.rows, this.scrollbackLines);
+    this.hosts.set(paneId, host);
+    // シェルが自分で終了したとき、`SessionService` が明示的に `dispose(paneId)` を呼ぶ前に
+    // このリスナー（`create` 時点で真っ先に登録される）が `hosts` から消してしまうと、
+    // 後から来る `dispose(paneId)` は「既に無い」として何もせず、`Mirror`/リスナーが解放されない
+    // （レビュー指摘。リーク）。ここで直接 `dispose()` してから消すことで、呼び出し順によらず必ず解放する
+    // （`TerminalHost.dispose()` は多重呼び出しに対して安全）。
+    host.onExit(() => {
+      this.hosts.delete(paneId);
+      host.dispose();
+    });
+    return host;
+  }
+
+  resize(paneId: PaneId, cols: number, rows: number): void {
+    this.hosts.get(paneId)?.resize(cols, rows);
+  }
+
+  dispose(paneId: PaneId): void {
+    const host = this.hosts.get(paneId);
+    if (!host) return;
+    this.hosts.delete(paneId);
+    host.dispose();
+  }
+}

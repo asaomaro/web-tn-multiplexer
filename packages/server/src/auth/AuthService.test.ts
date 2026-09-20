@@ -1,0 +1,142 @@
+import { readFile, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { makeTempDir } from "../persist/atomicFile.js";
+import { FsAuthFile } from "../persist/AuthFile.js";
+import { DefaultAuthService, SESSION_COOKIE_NAME } from "./AuthService.js";
+
+describe("DefaultAuthService", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await makeTempDir("wtm-authsvc-");
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function makeService() {
+    return new DefaultAuthService(new FsAuthFile(dir));
+  }
+
+  it("ensureToken creates a token only once", async () => {
+    const auth = makeService();
+    const first = await auth.ensureToken();
+    expect(first.created).toBe(true);
+    expect(first.token).toBeTruthy();
+    const second = await auth.ensureToken();
+    expect(second.created).toBe(false);
+    expect(second.token).toBeUndefined();
+  });
+
+  it("login succeeds with the right token and fails with a wrong one", async () => {
+    const auth = makeService();
+    const { token } = await auth.ensureToken();
+    const ok = await auth.login(token!);
+    expect(ok.ok).toBe(true);
+    const bad = await auth.login("wrong-token");
+    expect(bad.ok).toBe(false);
+  });
+
+  it("verifySession is true for a session from login, false for an unknown one", async () => {
+    const auth = makeService();
+    const { token } = await auth.ensureToken();
+    const result = await auth.login(token!);
+    if (!result.ok) throw new Error("unreachable");
+    expect(auth.verifySession(result.sessionId)).toBe(true);
+    expect(auth.verifySession("not-a-real-session")).toBe(false);
+    expect(auth.verifySession(undefined)).toBe(false);
+  });
+
+  it("logout invalidates the session and notifies onSessionRevoked", async () => {
+    const auth = makeService();
+    const { token } = await auth.ensureToken();
+    const result = await auth.login(token!);
+    if (!result.ok) throw new Error("unreachable");
+    const revoked: string[] = [];
+    auth.onSessionRevoked((id) => revoked.push(id));
+    await auth.logout(result.sessionId);
+    expect(auth.verifySession(result.sessionId)).toBe(false);
+    expect(revoked).toEqual([result.sessionId]);
+  });
+
+  it("知らないセッションの logout では auth.json を書き直さない（認証前の誰でも呼べる。D103）", async () => {
+    const auth = makeService();
+    await auth.ensureToken();
+    const authPath = join(dir, "auth.json");
+    const before = { content: await readFile(authPath, "utf8"), mtimeMs: (await stat(authPath)).mtimeMs };
+    await new Promise((r) => setTimeout(r, 20)); // mtime の分解能より空ける
+    await auth.logout("no-such-session");
+    expect(await readFile(authPath, "utf8")).toBe(before.content);
+    expect((await stat(authPath)).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("resetToken invalidates all live sessions and issues a new token", async () => {
+    const auth = makeService();
+    const { token } = await auth.ensureToken();
+    const a = await auth.login(token!);
+    const b = await auth.login(token!);
+    if (!a.ok || !b.ok) throw new Error("unreachable");
+    const revoked: string[] = [];
+    auth.onSessionRevoked((id) => revoked.push(id));
+
+    const newToken = await auth.resetToken();
+    expect(newToken).not.toBe(token);
+    expect(auth.verifySession(a.sessionId)).toBe(false);
+    expect(auth.verifySession(b.sessionId)).toBe(false);
+    expect(revoked.sort()).toEqual([a.sessionId, b.sessionId].sort());
+
+    // 古い token ではもうログインできない
+    expect((await auth.login(token!)).ok).toBe(false);
+    expect((await auth.login(newToken)).ok).toBe(true);
+  });
+
+  it("cookie round-trip: build then parse recovers the session id", async () => {
+    const auth = makeService();
+    const header = auth.buildSetCookieHeader("abc123", false);
+    expect(header).toContain(`${SESSION_COOKIE_NAME}=abc123`);
+    expect(header).toContain("HttpOnly");
+    expect(header).toContain("SameSite=Strict");
+    expect(header).not.toContain("Secure");
+    const parsed = auth.parseSessionIdFromCookie(`other=1; ${SESSION_COOKIE_NAME}=abc123; more=2`);
+    expect(parsed).toBe("abc123");
+  });
+
+  it("Cookie の値の % の並びが壊れていても投げず、セッション無しとして扱う（認証前の誰でも送れる。D103）", async () => {
+    const auth = makeService();
+    expect(auth.parseSessionIdFromCookie(`${SESSION_COOKIE_NAME}=%E0%A4%A`)).toBeUndefined();
+    expect(auth.parseSessionIdFromCookie(`${SESSION_COOKIE_NAME}=%`)).toBeUndefined();
+    expect(await auth.authorizeUpgrade({ headers: { cookie: `${SESSION_COOKIE_NAME}=%` }, remoteAddress: "127.0.0.1" })).toEqual({ ok: false });
+    expect(auth.parseSessionIdFromCookie(`${SESSION_COOKIE_NAME}=a%2Bb`)).toBe("a+b"); // 正しい % の並びは今までどおり解く
+  });
+
+  it("cookie header includes Secure when requested", async () => {
+    const auth = makeService();
+    expect(auth.buildSetCookieHeader("x", true)).toContain("Secure");
+    expect(auth.buildClearCookieHeader(true)).toContain("Secure");
+    expect(auth.buildClearCookieHeader(true)).toContain("Max-Age=0");
+  });
+
+  it("authorizeUpgrade reads the cookie header and checks the session", async () => {
+    const auth = makeService();
+    const { token } = await auth.ensureToken();
+    const result = await auth.login(token!);
+    if (!result.ok) throw new Error("unreachable");
+
+    const ok = await auth.authorizeUpgrade({ headers: { cookie: `${SESSION_COOKIE_NAME}=${result.sessionId}` }, remoteAddress: "127.0.0.1" });
+    expect(ok).toEqual({ ok: true, sessionId: result.sessionId });
+
+    const missing = await auth.authorizeUpgrade({ headers: {}, remoteAddress: "127.0.0.1" });
+    expect(missing).toEqual({ ok: false });
+  });
+
+  it("persists sessions across a new AuthService instance reading the same file", async () => {
+    const first = makeService();
+    const { token } = await first.ensureToken();
+    const result = await first.login(token!);
+    if (!result.ok) throw new Error("unreachable");
+
+    const second = makeService();
+    await second.initialize(); // 実運用では main.ts が起動時に呼ぶ（verifySession は同期なので先に読み込む）
+    expect(second.verifySession(result.sessionId)).toBe(true);
+  });
+});

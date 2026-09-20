@@ -1,0 +1,233 @@
+import type { HostInfo } from "@wtm/protocol";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { Disposable } from "../../util/Disposable.js";
+import { MemoryLogger } from "../../log/Logger.js";
+import { EventBus } from "../../bus/EventBus.js";
+import type { CreatePaneOptions, TerminalManager } from "../../terminal/TerminalManager.js";
+import type { TerminalHost } from "../../terminal/TerminalHost.js";
+import type { OutputFanout, ClientSink } from "../../terminal/OutputFanout.js";
+import type { PersistScheduler } from "../../session/PersistScheduler.js";
+import { SessionModel } from "../../session/SessionModel.js";
+import { SessionService } from "../../session/SessionService.js";
+import { DefaultClientRegistry } from "../../clients/ClientRegistry.js";
+import { DefaultSizeAuthority } from "../../clients/SizeAuthority.js";
+import { ControlSurface } from "../ControlSurface.js";
+import { registerAllMethods } from "./index.js";
+
+class FakeFanout implements OutputFanout {
+  readonly subscribed: string[] = [];
+  readonly unsubscribed: string[] = [];
+  subscribe(sink: ClientSink): void {
+    this.subscribed.push(sink.clientId);
+  }
+  unsubscribe(clientId: string): void {
+    this.unsubscribed.push(clientId);
+  }
+  push(): void {
+    // no-op
+  }
+  retryStale(): void {
+    // no-op
+  }
+}
+
+class FakeHost implements TerminalHost {
+  readonly pid = 1;
+  readonly mirror = {} as TerminalHost["mirror"];
+  readonly fanout = new FakeFanout();
+  private readonly exitListeners = new Set<(code: number) => void>();
+  constructor(
+    readonly paneId: string,
+    failWithCode: number | null,
+  ) {
+    if (failWithCode !== null) {
+      queueMicrotask(() => this.fireExit(failWithCode));
+    }
+  }
+  write(): void {}
+  resize(): void {}
+  lastOutputAt(): number {
+    return Date.now();
+  }
+  onExit(cb: (code: number) => void): Disposable {
+    this.exitListeners.add(cb);
+    return { dispose: () => this.exitListeners.delete(cb) };
+  }
+  dispose(): void {}
+  fireExit(code: number): void {
+    for (const fn of [...this.exitListeners]) fn(code);
+  }
+}
+
+class FakeTerminalManager implements TerminalManager {
+  readonly hosts = new Map<string, FakeHost>();
+  /** 次に create するとき、この終了コードで即座に失敗させる（null なら成功）。 */
+  nextSpawnFailure: number | null = null;
+  create(paneId: string, _opts: CreatePaneOptions): TerminalHost {
+    const host = new FakeHost(paneId, this.nextSpawnFailure);
+    this.nextSpawnFailure = null;
+    this.hosts.set(paneId, host);
+    return host;
+  }
+  get(paneId: string): TerminalHost | undefined {
+    return this.hosts.get(paneId);
+  }
+  resize(): void {
+    // no-op
+  }
+  dispose(paneId: string): void {
+    this.hosts.delete(paneId);
+  }
+}
+
+class NoopPersist implements PersistScheduler {
+  touch(): void {}
+  async flush(): Promise<void> {}
+  cancel(): void {}
+}
+
+const HOST_INFO: HostInfo = { os: "linux", windowsBuild: null, hostname: "test" };
+const fakeSink = (clientId: string): ClientSink => ({ clientId, sendOutput: () => undefined, sendSnapshot: () => undefined, bufferedAmount: 0 });
+
+function makeContext() {
+  const terminals = new FakeTerminalManager();
+  const session = new SessionService({
+    model: new SessionModel(),
+    terminals,
+    bus: new EventBus(),
+    persist: new NoopPersist(),
+    serverVersion: "test",
+    host: HOST_INFO,
+    scrollbackLines: 1000,
+    spawnGraceMs: 1,
+    defaultCwd: "/home/u",
+    logger: new MemoryLogger(),
+  });
+  const clients = new DefaultClientRegistry();
+  const sizeAuthority = new DefaultSizeAuthority(clients, session);
+  const surface = new ControlSurface(new MemoryLogger());
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals });
+  return { terminals, session, clients, surface };
+}
+
+describe("registerAllMethods — client / workspace / tab / pane flow", () => {
+  let ctx: Awaited<ReturnType<typeof makeContext>>;
+  let clientId: string;
+
+  beforeEach(() => {
+    ctx = makeContext();
+    clientId = ctx.clients.register();
+  });
+
+  it("client.hello sets the kind and returns a snapshot", async () => {
+    const result = await ctx.surface.invoke({ clientId, sink: fakeSink(clientId) }, "client.hello", { protocol: 1, kind: "mobile" });
+    expect(result.ok).toBe(true);
+    expect(ctx.clients.get(clientId)?.kind).toBe("mobile");
+    if (!result.ok) throw new Error("unreachable");
+    expect((result.result as { snapshot: { workspaces: unknown[] } }).snapshot.workspaces).toEqual([]);
+  });
+
+  it("モバイルは client.view だけでは権限を取らず、client.fit を有効にすると取り、無効にすると手放す（D13・D106）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    await ctx.surface.invoke(c, "client.hello", { protocol: 1, kind: "mobile" });
+    const { tab, pane } = await ctx.session.createWorkspace("/home/u", "api");
+    const sizeBefore = { cols: ctx.session.getPane(pane.id)!.cols, rows: ctx.session.getPane(pane.id)!.rows };
+
+    const view = { workspaceId: tab.workspaceId, tabId: tab.id, visible: [{ paneId: pane.id, cols: 40, rows: 20 }] };
+    expect((await ctx.surface.invoke(c, "client.view", view)).ok).toBe(true);
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBeNull();
+    expect(ctx.session.getPane(pane.id)).toMatchObject(sizeBefore);
+
+    expect((await ctx.surface.invoke(c, "client.fit", { enabled: true })).ok).toBe(true);
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBe(clientId);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 40, rows: 20 });
+
+    expect((await ctx.surface.invoke(c, "client.fit", { enabled: false })).ok).toBe(true);
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBeNull();
+    await ctx.surface.invoke(c, "client.view", { ...view, visible: [{ paneId: pane.id, cols: 30, rows: 15 }] });
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 40, rows: 20 }); // 手放した後の申告では動かさない
+  });
+
+  it("client.hello で fit なしのモバイルに変わったら、デスクトップとして持っていた権限を手放す（D106）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    await ctx.surface.invoke(c, "client.hello", { protocol: 1, kind: "desktop" });
+    const { tab, pane } = await ctx.session.createWorkspace("/home/u", "api");
+    await ctx.surface.invoke(c, "client.view", { workspaceId: tab.workspaceId, tabId: tab.id, visible: [{ paneId: pane.id, cols: 60, rows: 30 }] });
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBe(clientId);
+
+    expect((await ctx.surface.invoke(c, "client.hello", { protocol: 1, kind: "mobile" })).ok).toBe(true);
+
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBeNull();
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 60, rows: 30 });
+  });
+
+  it("workspace.create → tab.create → pane.split round trip, and pane.focus notes size ownership", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const wsResult = await ctx.surface.invoke(c, "workspace.create", { cwd: "/home/u/api", label: "api" });
+    expect(wsResult.ok).toBe(true);
+    if (!wsResult.ok) throw new Error("unreachable");
+    const { workspace, tab, pane } = wsResult.result as { workspace: { id: string }; tab: { id: string }; pane: { id: string } };
+
+    const tabResult = await ctx.surface.invoke(c, "tab.create", { workspaceId: workspace.id, label: "logs" });
+    expect(tabResult.ok).toBe(true);
+
+    const splitResult = await ctx.surface.invoke(c, "pane.split", { paneId: pane.id, direction: "right" });
+    expect(splitResult.ok).toBe(true);
+    if (!splitResult.ok) throw new Error("unreachable");
+    const newPane = (splitResult.result as { pane: { id: string } }).pane;
+
+    const focusResult = await ctx.surface.invoke(c, "pane.focus", { paneId: newPane.id });
+    expect(focusResult.ok).toBe(true);
+    expect(ctx.session.getTab(tab.id)).toBeDefined();
+  });
+
+  it("pane.focus on an unknown pane returns not_found", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const result = await ctx.surface.invoke(c, "pane.focus", { paneId: "p999" });
+    expect(result).toEqual({ ok: false, error: { code: "not_found", message: expect.stringContaining("p999") } });
+  });
+
+  it("a shell that fails to start turns workspace.create into spawn_failed", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    ctx.terminals.nextSpawnFailure = 1; // execvp 失敗を模する（D37）
+    const result = await ctx.surface.invoke(c, "workspace.create", { cwd: "/home/u", label: "x" });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.error.code).toBe("spawn_failed");
+  });
+
+  it("pane.subscribe wires the client sink into the pane's fanout and returns its size", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const wsResult = await ctx.surface.invoke(c, "workspace.create", { cwd: "/home/u", label: "api" });
+    if (!wsResult.ok) throw new Error("unreachable");
+    const { pane } = wsResult.result as { pane: { id: string; cols: number; rows: number } };
+
+    const subResult = await ctx.surface.invoke(c, "pane.subscribe", { paneId: pane.id, scrollbackLines: 500 });
+    expect(subResult).toEqual({ ok: true, result: { cols: pane.cols, rows: pane.rows } });
+    const fanout = ctx.terminals.get(pane.id)!.fanout as FakeFanout;
+    expect(fanout.subscribed).toEqual([clientId]);
+    expect(ctx.clients.subscriptions(clientId)).toEqual([pane.id]);
+
+    await ctx.surface.invoke(c, "pane.unsubscribe", { paneId: pane.id });
+    expect(fanout.unsubscribed).toEqual([clientId]);
+    expect(ctx.clients.subscriptions(clientId)).toEqual([]);
+  });
+
+  it("pane.subscribe on an unknown pane returns not_found", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const result = await ctx.surface.invoke(c, "pane.subscribe", { paneId: "p999", scrollbackLines: 100 });
+    expect(result).toEqual({ ok: false, error: { code: "not_found", message: expect.stringContaining("p999") } });
+  });
+
+  it("workspace.close cascades and, when it was the last workspace, a new one appears (D24)", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const wsResult = await ctx.surface.invoke(c, "workspace.create", { cwd: "/home/u", label: "api" });
+    if (!wsResult.ok) throw new Error("unreachable");
+    const { workspace } = wsResult.result as { workspace: { id: string } };
+
+    const closeResult = await ctx.surface.invoke(c, "workspace.close", { workspaceId: workspace.id });
+    expect(closeResult).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().workspaces.length).toBe(1);
+    expect(ctx.session.snapshot().workspaces[0]!.id).not.toBe(workspace.id);
+  });
+});

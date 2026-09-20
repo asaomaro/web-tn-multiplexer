@@ -1,0 +1,539 @@
+import type {
+  AgentInfo,
+  Dir,
+  GitInfo,
+  HostInfo,
+  Pane,
+  PaneId,
+  RightClickTarget,
+  SessionSnapshot,
+  SplitDirection,
+  SplitId,
+  Tab,
+  TabId,
+  Workspace,
+  WorkspaceId,
+} from "@wtm/protocol";
+import { RpcError } from "@wtm/protocol";
+import type { SessionFileData, SessionFilePane, SessionFileTab, SessionFileWorkspace } from "../persist/SessionFile.js";
+import type { TerminalManager } from "../terminal/TerminalManager.js";
+import type { EventBus } from "../bus/EventBus.js";
+import { NotFoundError, SessionModel } from "./SessionModel.js";
+import type { PersistScheduler } from "./PersistScheduler.js";
+import type { Logger } from "../log/Logger.js";
+
+/** クライアントが 1 台も無いときの既定サイズ（design「サイズ権限」。herdr の headless_cols/rows と同じ考え方）。 */
+const HEADLESS_COLS = 120;
+const HEADLESS_ROWS = 40;
+/** D37：シェルの起動が「短い猶予の間に終了するか」で失敗を判定する。 */
+const DEFAULT_SPAWN_GRACE_MS = 300;
+
+export interface PaneRuntimePatch {
+  busy?: boolean;
+  cwd?: string;
+  title?: string;
+  agent?: AgentInfo | null;
+}
+
+export interface SessionServiceOptions {
+  model: SessionModel;
+  terminals: TerminalManager;
+  bus: EventBus;
+  persist: PersistScheduler;
+  serverVersion: string;
+  host: HostInfo;
+  scrollbackLines: number;
+  spawnGraceMs?: number;
+  defaultCwd: string;
+  /** `--shell`（新しい pane のシェル）。省略時は OS の既定（`ProcessInspector.defaultShell()`。T27）。 */
+  shell?: string | undefined;
+  logger: Logger;
+}
+
+/**
+ * モデルを書き換える唯一の入口（architecture.md「SessionService」・依存の規則 3）。
+ * 検証 → モデルの変更 → 端末の生成・破棄 → イベント → 保存の予約、の順で行う。
+ */
+export class SessionService {
+  private readonly model: SessionModel;
+  private readonly terminals: TerminalManager;
+  private readonly bus: EventBus;
+  private readonly persist: PersistScheduler;
+  private readonly serverVersion: string;
+  private readonly host: HostInfo;
+  private readonly scrollbackLines: number;
+  private readonly spawnGraceMs: number;
+  private readonly defaultCwd: string;
+  private readonly shell: string | undefined;
+  private readonly logger: Logger;
+
+  constructor(opts: SessionServiceOptions) {
+    this.model = opts.model;
+    this.terminals = opts.terminals;
+    this.bus = opts.bus;
+    this.persist = opts.persist;
+    this.serverVersion = opts.serverVersion;
+    this.host = opts.host;
+    this.scrollbackLines = opts.scrollbackLines;
+    this.spawnGraceMs = opts.spawnGraceMs ?? DEFAULT_SPAWN_GRACE_MS;
+    this.defaultCwd = opts.defaultCwd;
+    this.shell = opts.shell;
+    this.logger = opts.logger;
+  }
+
+  snapshot(): SessionSnapshot {
+    return this.model.buildSnapshot(this.serverVersion, this.host, { scrollbackLines: this.scrollbackLines });
+  }
+
+  // --- 読み取り専用のアクセサ（`SizeAuthority`・`AgentMonitor` 等、読むだけの相手向け） -------
+
+  getWorkspace(id: WorkspaceId): Workspace | undefined {
+    return this.model.getWorkspace(id);
+  }
+  getTab(id: TabId): Tab | undefined {
+    return this.model.getTab(id);
+  }
+  getPane(id: PaneId): Pane | undefined {
+    return this.model.getPane(id);
+  }
+
+  /** tab ごとのサイズ権限（`SizeAuthority`。design「サイズ権限」）。イベントは出さない内部の帳簿なので、
+   *  ここだけ意図的に `SessionModel` を直接書き換える薄い通り道にする。 */
+  setTabSizeOwner(tabId: TabId, clientId: string | null): void {
+    this.model.setTabSizeOwner(tabId, clientId);
+  }
+
+  /** `session.json` の保存に使う（`nextId` の引き継ぎ。design「永続化の形式」）。 */
+  getNextIdCounters(): ReturnType<SessionModel["getNextIdCounters"]> {
+    return this.model.getNextIdCounters();
+  }
+
+  /** 検出したエージェントのインスタンス id を払い出す（`"a1"` 等。02-agent-detection の `AgentTracker` が使う。T8）。
+   *  `nextId` は `session.json` に永続化されるので、再起動後も重複しない（design「done」の注記）。 */
+  allocateAgentInstanceId(): string {
+    const id = this.model.nextId("a");
+    this.persist.touch();
+    return id;
+  }
+
+  // --- workspace ------------------------------------------------------------
+
+  async createWorkspace(cwd: string | undefined, label: string | undefined): Promise<{ workspace: Workspace; tab: Tab; pane: Pane }> {
+    const resolvedCwd = cwd ?? this.defaultCwd;
+    // D37「成功を確認してからモデルを更新する順にする」：先に id とオブジェクトだけ用意し（reserve）、
+    // spawn の成功を確認してから初めて Map へ入れる（commit）。レビュー指摘：以前は逆順で、
+    // 猶予期間中に他クライアントが「存在するはずの無い」workspace を読めてしまっていた。
+    const reserved = this.model.reserveWorkspace(resolvedCwd, label ?? "1", {
+      cwd: resolvedCwd,
+      shell: this.shell ?? "",
+      cols: HEADLESS_COLS,
+      rows: HEADLESS_ROWS,
+    });
+    const spawn = await this.spawnForPane(reserved.pane.id, resolvedCwd);
+    if (!spawn.ok) {
+      // まだ Map に入れていないので、モデル側のロールバックは不要（イベントも出していない）。
+      throw new RpcError("spawn_failed", `failed to start a shell for workspace ${reserved.workspace.id}`);
+    }
+    this.model.commitWorkspace(reserved);
+    this.bus.publish({ event: "workspace.created", data: { workspace: reserved.workspace } });
+    // `workspace.create` は最初の tab も一緒に作る（design「`workspace.create`」の応答に `tab` を含む）。
+    // 応答の `tab` だけでは、この操作を出した本人以外のクライアント（複数タブ・複数ブラウザ。AC9）が
+    // `session.tabs` にその tab を持てない——`tab.created` を必ず別途 publish する（05-e2e-docs T2 の
+    // E2E で発見。D88）。
+    this.bus.publish({ event: "tab.created", data: { tab: reserved.tab } });
+    this.bus.publish({ event: "pane.created", data: { pane: reserved.pane } });
+    this.persist.touch();
+    if (spawn.alreadyExited) await this.closePaneAfterExit(reserved.pane.id, 0); // D37：猶予中に code 0 で即終了していた
+    return { workspace: reserved.workspace, tab: reserved.tab, pane: reserved.pane };
+  }
+
+  renameWorkspace(id: WorkspaceId, label: string): void {
+    const ws = this.model.renameWorkspace(id, label);
+    this.bus.publish({ event: "workspace.updated", data: { workspace: ws } });
+    this.persist.touch();
+  }
+
+  focusWorkspace(id: WorkspaceId): void {
+    this.model.focusWorkspace(id);
+    this.bus.publish({ event: "session.focus_changed", data: { focus: this.model.getFocus() } });
+    this.persist.touch(); // focus は session.json に永続化される（レビュー指摘：抜けていた）
+  }
+
+  async closeWorkspace(id: WorkspaceId): Promise<void> {
+    const result = this.model.closeWorkspace(id);
+    for (const paneId of result.removedPaneIds) this.terminals.dispose(paneId);
+    // design「連鎖して閉じるときは pane.closed → tab.closed → workspace.closed の順」（D42 で漏れを修正）。
+    for (const paneId of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId } });
+    for (const tabId of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId } });
+    this.bus.publish({ event: "workspace.closed", data: { workspaceId: id } });
+    this.persist.touch();
+    await this.recreateIfEmpty(); // D24
+  }
+
+  // --- tab --------------------------------------------------------------------
+
+  async createTab(workspaceId: WorkspaceId | undefined, label: string | undefined): Promise<{ tab: Tab; pane: Pane }> {
+    const wsId = workspaceId ?? this.model.getFocus()?.workspaceId;
+    if (!wsId) throw new RpcError("not_found", "no workspace to create a tab in");
+    const ws = this.requireWorkspace(wsId);
+    const reserved = this.model.reserveTab(ws.id, label, { cwd: ws.cwd, shell: this.shell ?? "", cols: HEADLESS_COLS, rows: HEADLESS_ROWS });
+    const spawn = await this.spawnForPane(reserved.pane.id, ws.cwd);
+    if (!spawn.ok) {
+      throw new RpcError("spawn_failed", `failed to start a shell for tab ${reserved.tab.id}`);
+    }
+    try {
+      this.model.commitTab(reserved); // 猶予中に workspace 自体が閉じられていたら NotFoundError
+    } catch (err) {
+      this.terminals.dispose(reserved.pane.id); // 孤児化した PTY を破棄してから伝える
+      throw err;
+    }
+    this.bus.publish({ event: "tab.created", data: { tab: reserved.tab } });
+    this.bus.publish({ event: "pane.created", data: { pane: reserved.pane } });
+    // `commitTab` は workspace の `tabIds`/`activeTabId` も更新する（`SessionModel.commitTab`）が、
+    // それを知らせる `workspace.updated` が無かった——サイドバー・tab バー等、`workspace.tabIds` を
+    // 読む側（`TabBar.vue` 等）が新しい tab を認識できないまま止まっていた（同上・D88）。
+    const updatedWs = this.model.getWorkspace(ws.id);
+    if (updatedWs) this.bus.publish({ event: "workspace.updated", data: { workspace: updatedWs } });
+    this.persist.touch();
+    if (spawn.alreadyExited) await this.closePaneAfterExit(reserved.pane.id, 0);
+    return { tab: reserved.tab, pane: reserved.pane };
+  }
+
+  renameTab(id: TabId, label: string): void {
+    const tab = this.model.renameTab(id, label);
+    this.bus.publish({ event: "tab.updated", data: { tab } });
+    this.persist.touch();
+  }
+
+  focusTab(id: TabId): void {
+    this.model.focusTab(id);
+    this.bus.publish({ event: "session.focus_changed", data: { focus: this.model.getFocus() } });
+    this.persist.touch();
+  }
+
+  async closeTab(id: TabId): Promise<void> {
+    const workspaceId = this.requireTab(id).workspaceId; // tab が消える前に控える（下の workspace.updated 用。D88）
+    const result = this.model.closeTab(id);
+    for (const paneId of result.removedPaneIds) this.terminals.dispose(paneId);
+    // design「連鎖して閉じるときは pane.closed → tab.closed → workspace.closed の順」（D42 で漏れを修正）。
+    for (const paneId of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId } });
+    for (const tabId of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId } });
+    if (result.closedWorkspaceId) {
+      this.bus.publish({ event: "workspace.closed", data: { workspaceId: result.closedWorkspaceId } });
+    } else {
+      // workspace 自体は生き残った＝`model.closeTab` が `tabIds`/`activeTabId` を更新している
+      // （`SessionModel.closeTabInternal`）。その変化を知らせる（D88。上の createTab と対）。
+      const updatedWs = this.model.getWorkspace(workspaceId);
+      if (updatedWs) this.bus.publish({ event: "workspace.updated", data: { workspace: updatedWs } });
+    }
+    this.persist.touch();
+    await this.recreateIfEmpty(); // D24
+  }
+
+  // --- pane -------------------------------------------------------------------
+
+  async splitPane(paneId: PaneId, direction: SplitDirection, ratio: number | undefined): Promise<{ pane: Pane }> {
+    const source = this.requirePane(paneId);
+    const newPaneId = this.model.reserveNextPaneId();
+    const spawn = await this.spawnForPane(newPaneId, source.cwd);
+    if (!spawn.ok) throw new RpcError("spawn_failed", `failed to start a shell for a new pane split from ${paneId}`);
+    let pane: Pane;
+    try {
+      // 猶予中（await の間）に分割元の pane/tab が別の RPC で閉じられていたら、ここで NotFoundError
+      // （`requirePane`/`requireTab`）。その場合は孤児化した PTY を破棄してから伝える
+      // （`createTab` の `commitTab` 失敗時と同じ理由・同じ形。レビュー指摘・round2）。
+      ({ pane } = this.model.splitPane(paneId, direction, ratio, newPaneId, { cwd: source.cwd, shell: this.shell ?? "", cols: source.cols, rows: source.rows }));
+    } catch (err) {
+      this.terminals.dispose(newPaneId);
+      throw err;
+    }
+    this.bus.publish({ event: "pane.created", data: { pane } });
+    this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(source.tabId) } });
+    this.persist.touch();
+    if (spawn.alreadyExited) await this.closePaneAfterExit(pane.id, 0);
+    return { pane };
+  }
+
+  async closePane(paneId: PaneId): Promise<void> {
+    const pane = this.model.getPane(paneId);
+    const tabId = pane?.tabId;
+    const workspaceId = tabId ? this.model.getTab(tabId)?.workspaceId : undefined; // tab が消える前に控える（D88）
+    const result = this.model.closePane(paneId);
+    for (const pid of result.removedPaneIds) this.terminals.dispose(pid);
+    for (const pid of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId: pid } });
+    for (const tid of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId: tid } });
+    if (result.closedWorkspaceId) {
+      this.bus.publish({ event: "workspace.closed", data: { workspaceId: result.closedWorkspaceId } });
+    } else if (result.removedTabIds.length > 0 && workspaceId) {
+      // pane を閉じた結果、tab ごと連鎖して閉じたが workspace は生き残った（D18 の連鎖・closeTab と同じ形。D88）。
+      const updatedWs = this.model.getWorkspace(workspaceId);
+      if (updatedWs) this.bus.publish({ event: "workspace.updated", data: { workspace: updatedWs } });
+    }
+    if (result.removedTabIds.length === 0 && tabId) {
+      // tab は生きているので、レイアウトが変わったことを知らせる。
+      const stillThere = this.model.getTab(tabId);
+      if (stillThere) this.bus.publish({ event: "layout.updated", data: { tab: stillThere } });
+    }
+    this.persist.touch();
+    await this.recreateIfEmpty(); // D24
+  }
+
+  focusPane(paneId: PaneId): void {
+    this.model.focusPane(paneId);
+    this.bus.publish({ event: "session.focus_changed", data: { focus: this.model.getFocus() } });
+    this.persist.touch();
+  }
+
+  renamePane(id: PaneId, label: string | null): void {
+    const pane = this.model.renamePane(id, label);
+    this.bus.publish({ event: "pane.updated", data: { pane } });
+    this.persist.touch();
+  }
+
+  setPaneRightClick(id: PaneId, target: RightClickTarget): void {
+    this.model.setRightClick(id, target);
+    this.bus.publish({ event: "pane.updated", data: { pane: this.requirePane(id) } });
+  }
+
+  focusPaneDirection(paneId: PaneId, direction: Dir): PaneId {
+    const target = this.model.focusDirection(paneId, direction);
+    this.bus.publish({ event: "session.focus_changed", data: { focus: this.model.getFocus() } });
+    this.persist.touch();
+    return target;
+  }
+
+  swapPane(paneId: PaneId, direction: Dir): PaneId {
+    const other = this.model.swapPane(paneId, direction);
+    if (other !== paneId) {
+      const pane = this.requirePane(paneId);
+      this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
+      this.persist.touch();
+    }
+    return other;
+  }
+
+  zoomPane(paneId: PaneId, mode: "toggle" | "on" | "off"): void {
+    const pane = this.requirePane(paneId);
+    this.model.zoomPane(paneId, mode);
+    this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
+    this.persist.touch();
+  }
+
+  resizePaneByDirection(paneId: PaneId, direction: Dir, amount: number): void {
+    const pane = this.requirePane(paneId);
+    this.model.resizeByDirection(paneId, direction, amount);
+    this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
+    this.persist.touch();
+  }
+
+  setSplitRatio(tabId: TabId, splitId: SplitId, ratio: number): void {
+    this.model.setSplitRatio(tabId, splitId, ratio);
+    this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(tabId) } });
+    this.persist.touch();
+  }
+
+  /** サイズ権限（`SizeAuthority`。T18）が決めたサイズを、PTY・ミラー・モデルへ反映する。 */
+  resizePane(paneId: PaneId, cols: number, rows: number): void {
+    const pane = this.model.getPane(paneId);
+    if (!pane) return;
+    if (pane.cols === cols && pane.rows === rows) return;
+    this.model.setPaneSize(paneId, cols, rows);
+    this.terminals.resize(paneId, cols, rows);
+    this.bus.publish({ event: "pane.size_changed", data: { paneId, cols, rows } });
+  }
+
+  updatePaneRuntime(paneId: PaneId, patch: PaneRuntimePatch): void {
+    const pane = this.model.getPane(paneId);
+    if (!pane) return;
+    // 値が実際に変わったときだけ発行する（レビュー指摘：以前は busy/title が「渡されただけ」で毎回
+    // 発行していたため、AgentMonitor の周期呼び出し（500ms〜1s毎）のたびに変化が無くても全クライアントへ
+    // ブロードキャストしていた）。
+    const busyChanged = patch.busy !== undefined && patch.busy !== pane.busy;
+    const titleChanged = patch.title !== undefined && patch.title !== pane.title;
+    const cwdChanged = patch.cwd !== undefined && patch.cwd !== pane.cwd;
+    // agent も同様に、公開している AgentInfo の中身が実際に変わったときだけ発行する（review 指摘。should）。
+    // `AgentTracker.update()` は herdr 由来のヒステリシス（D46・D50）の都合で、visibleIdle/visibleBlocker/
+    // visibleWorking だけが変わって state 等は同じ、という新しい `AgentInfo` オブジェクトを返すことがある
+    // （その3フラグは `AgentInfo`（`@wtm/protocol`）には含まれない、判定内部だけの情報）。busy/title と
+    // 同じ「実際に変わったときだけ発行する」規約に揃える。
+    const agentChanged = patch.agent !== undefined && !sameAgent(pane.agent, patch.agent);
+    const updated = this.model.updatePaneRuntime(paneId, patch);
+    if (agentChanged) {
+      this.bus.publish({ event: "pane.agent_status_changed", data: { paneId, agent: updated.agent } });
+    }
+    if (busyChanged || titleChanged || cwdChanged) {
+      this.bus.publish({ event: "pane.updated", data: { pane: updated } });
+    }
+    if (cwdChanged) this.persist.touch();
+  }
+
+  updateWorkspaceGit(workspaceId: WorkspaceId, git: GitInfo | null): void {
+    const ws = this.model.getWorkspace(workspaceId);
+    if (!ws) return;
+    if (sameGit(ws.git, git)) return;
+    const updated = this.model.updateWorkspaceGit(workspaceId, git);
+    this.bus.publish({ event: "workspace.updated", data: { workspace: updated } });
+  }
+
+  // --- lifecycle: シェルの終了（D18） ----------------------------------------
+
+  /** `pane.exited` を出し、モデルにまだ pane があれば D18 の連鎖（closePane）を起こす。
+   *  通常の（猶予後の）終了と、D37 の猶予中に code 0 で即終了した場合の両方から呼ぶ共通処理。
+   *  呼び出し側が `await` できる場所（create 系）では待ってから RPC を返し、`wireExit` のような
+   *  イベント駆動の呼び出し元は fire-and-forget で `.catch` する。 */
+  private async closePaneAfterExit(paneId: PaneId, exitCode: number): Promise<void> {
+    this.bus.publish({ event: "pane.exited", data: { paneId, exitCode } });
+    const pane = this.model.getPane(paneId);
+    if (!pane) return; // 既にモデルから消えている（closePane 等で先に処理済み、またはまだコミット前）
+    await this.closePane(paneId);
+  }
+
+  private wireExit(paneId: PaneId): void {
+    const host = this.terminals.get(paneId);
+    // 起動直後の失敗（D37）は spawnForPane 側が別途処理するので、ここでは通常の終了だけを扱う。
+    host?.onExit((exitCode) => {
+      this.closePaneAfterExit(paneId, exitCode).catch((err: unknown) => {
+        // D24 の自動作成が失敗した等、ここで例外を投げても受け取る相手がいない。
+        this.logger.error("closePane after exit failed", { paneId, error: String(err) });
+      });
+    });
+  }
+
+  /**
+   * pane 用の PTY を起動し、短い猶予（D37）の間に失敗しなかったかを確かめる。
+   * 成功のときだけ `onExit` の配線（D18 の連鎖）も済ませる——ただし `alreadyExited` が true
+   * （猶予中に code 0 で即終了していた）ときは配線しない。`TerminalHost.onExit` は一度きり・同期発火で
+   * リプレイしないため、既に一度発火した終了イベントに対して後から登録した listener は永久に呼ばれず、
+   * pane が閉じられないまま残ってしまう（レビュー指摘）。この場合は呼び出し側が、pane をモデルへ
+   * コミットした直後に `closePaneAfterExit` を自分で呼ぶ。
+   */
+  private async spawnForPane(paneId: PaneId, cwd: string): Promise<{ ok: boolean; alreadyExited: boolean }> {
+    const host = this.terminals.create(paneId, { cwd, cols: HEADLESS_COLS, rows: HEADLESS_ROWS, ...(this.shell ? { shell: this.shell } : {}) });
+    const result = await raceSpawn(host, this.spawnGraceMs);
+    if (!result.ok) {
+      this.terminals.dispose(paneId);
+      return { ok: false, alreadyExited: false };
+    }
+    if (!result.alreadyExited) this.wireExit(paneId);
+    return { ok: true, alreadyExited: result.alreadyExited };
+  }
+
+  // --- 起動と再起動後の復元 ----------------------------------------------------
+
+  /** 起動時に呼ぶ：workspace が無ければ 1 つ作る（design「起動と再起動後の復元」）。 */
+  async ensureNotEmpty(): Promise<void> {
+    if (!this.model.isEmpty()) return;
+    await this.createWorkspace(this.defaultCwd, "1");
+  }
+
+  /** D24：workspace が 0 個になったら自動で 1 つ作り直す（herdr と異なる意図的な挙動。decisions.md
+   *  D24・D36）。PTY の起動を伴うので、この層（SessionService）で実物の workspace を作る。
+   *  `closeWorkspace`/`closeTab`/`closePane` の3箇所から同じ形で呼ぶ（レビュー指摘：重複していた）。 */
+  private async recreateIfEmpty(): Promise<void> {
+    if (this.model.isEmpty()) await this.createWorkspace(this.defaultCwd, "1");
+  }
+
+  /** `session.json` から復元する。失敗した pane は閉じずに `status: 'failed'` にする。 */
+  async restore(data: SessionFileData): Promise<void> {
+    this.model.setNextIdCounters(data.nextId);
+    for (const wsData of data.workspaces) {
+      this.restoreWorkspace(wsData);
+    }
+    for (const wsData of data.workspaces) {
+      for (const tabData of wsData.tabs) {
+        for (const paneData of tabData.panes) {
+          await this.restorePaneProcess(paneData.id, paneData.cwd);
+        }
+      }
+    }
+    if (data.focus) {
+      try {
+        this.model.focusPane(data.focus.paneId);
+      } catch {
+        // 保存されていた focus の pane が読めなかった（未対応）。既定のフォーカスのままにする。
+      }
+    }
+  }
+
+  private restoreWorkspace(wsData: SessionFileWorkspace): void {
+    // SessionModel には「既存の id を使って作る」専用口が無いので、内部の Map へ直接組み立てる代わりに
+    // 通常の作成 API は使わず、復元専用の経路で入れる（実装は SessionModel.restoreFrom に委譲）。
+    this.model.restoreWorkspace(wsData);
+  }
+
+  private async restorePaneProcess(paneId: PaneId, cwd: string): Promise<void> {
+    const spawn = await this.spawnForPane(paneId, cwd);
+    if (!spawn.ok) {
+      this.model.markPaneFailed(paneId, "シェルの起動に失敗しました");
+      return;
+    }
+    // 復元対象の pane は restoreWorkspace で既にモデルに入っているので、すぐ連鎖してよい。
+    if (spawn.alreadyExited) await this.closePaneAfterExit(paneId, 0);
+  }
+
+  // --- helpers ------------------------------------------------------------
+
+  private requireWorkspace(id: WorkspaceId): Workspace {
+    const ws = this.model.getWorkspace(id);
+    if (!ws) throw new RpcError("not_found", `workspace not found: ${id}`);
+    return ws;
+  }
+  private requireTab(id: TabId): Tab {
+    const tab = this.model.getTab(id);
+    if (!tab) throw new RpcError("not_found", `tab not found: ${id}`);
+    return tab;
+  }
+  private requirePane(id: PaneId): Pane {
+    const pane = this.model.getPane(id);
+    if (!pane) throw new RpcError("not_found", `pane not found: ${id}`);
+    return pane;
+  }
+}
+
+async function raceSpawn(
+  host: { onExit(cb: (code: number) => void): { dispose(): void } },
+  graceMs: number,
+): Promise<{ ok: boolean; alreadyExited: boolean }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      disposable.dispose();
+      resolve({ ok: true, alreadyExited: false });
+    }, graceMs);
+    const disposable = host.onExit((code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // 0 での即終了は「起動には成功した」とみなす（D37）。ただし既にプロセスは終了しているので、
+      // 呼び出し側は `alreadyExited` を見て D18 の連鎖を自分で起こす必要がある（レビュー指摘）。
+      resolve({ ok: code === 0, alreadyExited: true });
+    });
+  });
+}
+
+function sameGit(a: GitInfo | null, b: GitInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.branch === b.branch && a.ahead === b.ahead && a.behind === b.behind;
+}
+
+/** `AgentInfo`（公開している側の全フィールド）が実際に変わったかを見る（`updatePaneRuntime` のレビュー指摘）。 */
+function sameAgent(a: AgentInfo | null, b: AgentInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.instanceId === b.instanceId &&
+    a.kind === b.kind &&
+    a.label === b.label &&
+    a.state === b.state &&
+    a.completionSeq === b.completionSeq &&
+    a.serverSeenSeq === b.serverSeenSeq &&
+    a.verified === b.verified &&
+    a.since === b.since
+  );
+}
+
+export { NotFoundError };
+export type { SessionFileData, SessionFilePane, SessionFileTab, SessionFileWorkspace };

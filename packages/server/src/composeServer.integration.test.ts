@@ -1,0 +1,485 @@
+import { existsSync } from "node:fs";
+import { chmod, readFile, rm, stat, writeFile } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
+import { createServer } from "node:net";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import WebSocket from "ws";
+import { encodeInputFrame } from "@wtm/protocol";
+import type { PaneAgentStatusChangedEvent } from "@wtm/protocol";
+import { makeTempDir } from "./persist/atomicFile.js";
+import { composeServer } from "./composeServer.js";
+import { ConfigError } from "./config.js";
+import { STATE_DIR_LOCK_FILE, StateDirLock } from "./persist/StateDirLock.js";
+import { DefaultAuthService } from "./auth/AuthService.js";
+import { FsAuthFile } from "./persist/AuthFile.js";
+
+async function getFreePort(): Promise<number> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const probe = createServer();
+    probe.listen(0, "127.0.0.1", () => {
+      const port = (probe.address() as AddressInfo).port;
+      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
+    });
+    probe.on("error", rejectPromise);
+  });
+}
+
+describe("composeServer (integration)", () => {
+  const cleanups: (() => Promise<void>)[] = [];
+  afterEach(async () => {
+    // 登録順に**逐次**実行する（`Promise.all` で並行させない）。`server.close()` が `persist.flush()`
+    // でステートディレクトリへ書き込む一方、`rm(stateDir, …)` はそれを丸ごと消すので、並行させると
+    // 書き込みの途中でディレクトリが消えて `ENOENT` になることがある（各テストは close→rm の順で
+    // push しているので、逐次実行にすればこの順序がそのまま守られる）。
+    for (const fn of cleanups.splice(0)) {
+      await fn();
+    }
+  });
+
+  it("refuses to compose for a non-loopback host without a certificate (D12/D37 の前提)", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await expect(composeServer({ host: "0.0.0.0", stateDir, origin: [] })).rejects.toThrow(ConfigError);
+  });
+
+  it("generates a token on first run and listens on the requested port", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+
+    // token は待ち受けに成功してから作る（D102）。listen() の前は常に undefined。
+    expect(server.freshToken).toBeUndefined();
+    await server.listen();
+    expect(server.freshToken).toBeTruthy();
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/session`);
+    expect(res.status).toBe(401); // 未ログインなら拒否される（AC10）
+  });
+
+  it("待ち受けに失敗したら listen() が reject する（ポートが使用中。未処理の 'error' で落ちない。D101）", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    const blocker = createServer();
+    await new Promise<void>((res) => blocker.listen(0, "127.0.0.1", res));
+    const port = (blocker.address() as AddressInfo).port;
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.push(() => server.close().catch(() => undefined));
+    cleanups.push(() => new Promise<void>((res) => blocker.close(() => res())));
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await expect(server.listen()).rejects.toThrow(/EADDRINUSE/);
+  });
+
+  it("初回の起動で待ち受けに失敗しても token を作らず、次に成功した起動で token 付きの URL を出せる（D102）", async () => {
+    // 以前は組み立て（composeServer）の時点で token を作って保存していたため、待ち受けに失敗した初回の起動が token を
+    // 作ったまま一度も表示せずに終わり、次の起動では「作り済み」として表示されなかった。
+    const stateDir = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const blocker = createServer();
+    await new Promise<void>((res) => blocker.listen(0, "127.0.0.1", res));
+    const port = (blocker.address() as AddressInfo).port;
+
+    const failed = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    await expect(failed.listen()).rejects.toThrow(/EADDRINUSE/);
+    expect(failed.freshToken).toBeUndefined();
+    expect(existsSync(join(stateDir, "auth.json"))).toBe(false);
+    await failed.close();
+    await new Promise<void>((res) => blocker.close(() => res()));
+
+    const next = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.unshift(() => next.close()); // rm より先に閉じる
+    await next.listen();
+    expect(next.freshToken).toBeTruthy();
+  });
+
+  it("保存された状態があり待ち受けに失敗したら、シェルを起動せず session.json も書き換えない（D102。同じ state-dir の wtm が動いている場合は、ポートが同じでもその前に wtm.lock で断る——D103）", async () => {
+    // 以前は復元（全 pane のシェルを猶予つきで起動）と poller の開始の後に bind していたため、失敗する起動でも全シェルを起動し、
+    // その間の保存の予約（persist.touch）や close() の flush で、動いている側の session.json を上書きしえた。
+    const stateDir = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const first = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
+    await first.listen();
+    await first.session.createWorkspace(process.cwd(), "saved");
+    await first.close(); // flush で session.json に 2 つの workspace を保存する
+
+    const sessionPath = join(stateDir, "session.json");
+    const before = { content: await readFile(sessionPath, "utf8"), mtimeMs: (await stat(sessionPath)).mtimeMs };
+    expect(before.content).toContain("saved");
+
+    const blocker = createServer();
+    await new Promise<void>((res) => blocker.listen(0, "127.0.0.1", res));
+    const port = (blocker.address() as AddressInfo).port;
+    const second = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    await expect(second.listen()).rejects.toThrow(/EADDRINUSE/);
+    // 復元していない（pane が 1 つも無い＝シェルを 1 つも起動していない）。
+    expect(second.session.snapshot().panes.length).toBe(0);
+    expect(second.session.snapshot().workspaces.length).toBe(0);
+    // 保存の予約（500ms）が走る余地を与えてから、session.json が変わっていないことを確かめる。
+    await new Promise((res) => setTimeout(res, 800));
+    expect(await readFile(sessionPath, "utf8")).toBe(before.content);
+    expect((await stat(sessionPath)).mtimeMs).toBe(before.mtimeMs);
+    // 失敗した起動を閉じても、空の状態で session.json を上書きしない。
+    await second.close();
+    await new Promise<void>((res) => blocker.close(() => res()));
+    expect(await readFile(sessionPath, "utf8")).toBe(before.content);
+    expect((await stat(sessionPath)).mtimeMs).toBe(before.mtimeMs);
+  }, 15000);
+
+  it("同じ state-dir の 2 つ目はポートが違っても listen() が ConfigError で断り、シェルを起動せず session.json・auth.json に触れない（D103）", async () => {
+    // docs は手元用 7780・LAN 用 8443 で起動させるので、ポート違いの二重起動が起きやすい。以前は bind が両方成功し、
+    // 2 つ目が全シェルを二重に起動し、session.json・auth.json を互いに上書きし合っていた。
+    const stateDir = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const first = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
+    cleanups.unshift(() => first.close()); // rm より先に閉じる
+    await first.listen();
+    await first.session.createWorkspace(process.cwd(), "saved-by-first");
+    await first.persist.flush();
+    await new Promise((res) => setTimeout(res, 300)); // 1 つ目の起動直後の書き込みが落ち着くのを待つ
+    const lockPath = join(stateDir, STATE_DIR_LOCK_FILE);
+    const snap = async (name: string) => {
+      const path = join(stateDir, name);
+      return { content: await readFile(path, "utf8"), mtimeMs: (await stat(path)).mtimeMs };
+    };
+    const before = { session: await snap("session.json"), auth: await snap("auth.json") };
+    expect(before.session.content).toContain("saved-by-first");
+
+    const port2 = await getFreePort();
+    const second = await composeServer({ host: "127.0.0.1", port: String(port2), stateDir, origin: [] });
+    const err = await second.listen().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).message).toContain(`pid ${process.pid}`);
+    expect((err as ConfigError).hint).toContain("--state-dir");
+    // 復元していない（シェルを 1 つも起動していない）・token も作らない・待ち受けてもいない。
+    expect(second.session.snapshot().panes.length).toBe(0);
+    expect(second.freshToken).toBeUndefined();
+    expect(second.httpServer.server.listening).toBe(false);
+    // 保存の予約（500ms）が走る余地を与えてから、どちらのファイルも変わっていないことを確かめる。
+    await new Promise((res) => setTimeout(res, 800));
+    expect(await snap("session.json")).toEqual(before.session);
+    expect(await snap("auth.json")).toEqual(before.auth);
+    // 断られた起動を閉じても、ファイルにも 1 つ目のロックにも触れない。
+    await second.close();
+    expect(await snap("session.json")).toEqual(before.session);
+    expect(await snap("auth.json")).toEqual(before.auth);
+    expect((await readFile(lockPath, "utf8")).split("\n")[0]).toBe(String(process.pid));
+    expect(first.session.snapshot().workspaces.some((w) => w.label === "saved-by-first")).toBe(true);
+
+    // 1 つ目を閉じればロックを放し、同じ state-dir で起動し直せる。
+    await first.close();
+    expect(existsSync(lockPath)).toBe(false);
+    const third = await composeServer({ host: "127.0.0.1", port: String(port2), stateDir, origin: [] });
+    cleanups.unshift(() => third.close());
+    await third.listen();
+    expect(third.session.snapshot().workspaces.some((w) => w.label === "saved-by-first")).toBe(true);
+  }, 15000);
+
+  it("組み立て（composeServer）と listen() の間に token reset が走っても、listen() はロックの後に auth.json を読むので新しい token で動く（D103 の独立点検 #1）", async () => {
+    // 以前は組み立ての時点で auth.json を読んでいたため、その後・ロックの前に `wtm token reset`（ロックを取って作り直す）が
+    // 走ると、古い token をメモリに持ったまま起動し、新しい token を 401 で拒み、古い token を受け付け、次のログインで
+    // auth.json を古い token に書き戻していた。
+    const stateDir = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const { token: oldToken } = await new DefaultAuthService(new FsAuthFile(stateDir)).ensureToken();
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.unshift(() => server.close());
+    // `wtm token reset` と同じ手順（ロックを取り、auth.json を読んで作り直し、放す）。serve はまだロックを取っていない。
+    const resetLock = new StateDirLock(stateDir);
+    await resetLock.acquire();
+    const resetter = new DefaultAuthService(new FsAuthFile(stateDir));
+    await resetter.initialize();
+    const newToken = await resetter.resetToken();
+    await resetLock.release();
+
+    await server.listen();
+    expect(server.freshToken).toBeUndefined(); // token は作り直し済み（新しく作らない）
+    const origin = `http://127.0.0.1:${port}`;
+    const login = (token: string | undefined): Promise<number> =>
+      fetch(`${origin}/api/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin, host: `127.0.0.1:${port}` },
+        body: JSON.stringify({ token }),
+      }).then((r) => r.status);
+    expect(await login(newToken)).toBe(204);
+    expect(await login(oldToken)).toBe(401);
+    // serve 自身の書き込み（ログインで auth.json を保存する）の後も、auth.json は新しい token のまま。
+    const reread = new DefaultAuthService(new FsAuthFile(stateDir));
+    expect((await reread.login(newToken)).ok).toBe(true);
+    expect((await reread.login(oldToken!)).ok).toBe(false);
+  });
+
+  it("listen() が失敗したら（待ち受けの失敗）close() を待たずにロックを放す（main は close() を呼ばずに終わる。D103）", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const blocker = createServer();
+    await new Promise<void>((res) => blocker.listen(0, "127.0.0.1", res));
+    cleanups.unshift(() => new Promise<void>((res) => blocker.close(() => res())));
+    const server = await composeServer({ host: "127.0.0.1", port: String((blocker.address() as AddressInfo).port), stateDir, origin: [] });
+    cleanups.unshift(() => server.close());
+    await expect(server.listen()).rejects.toThrow(/EADDRINUSE/);
+    expect(existsSync(join(stateDir, STATE_DIR_LOCK_FILE))).toBe(false);
+  });
+
+  // 既定のシェル（`$SHELL`）が無い環境で、最初の workspace の作成（ensureNotEmpty）が spawn_failed で失敗する。
+  it.skipIf(process.platform === "win32")(
+    "token を作った後に起動が失敗しても freshToken を読める（呼び出し側が失わずに表示できる。D102）",
+    async () => {
+      const stateDir = await makeTempDir("wtm-compose-");
+      cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+      const originalShell = process.env["SHELL"];
+      process.env["SHELL"] = join(stateDir, "no-such-shell");
+      cleanups.unshift(async () => {
+        if (originalShell === undefined) delete process.env["SHELL"];
+        else process.env["SHELL"] = originalShell;
+      });
+      const server = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
+      cleanups.unshift(() => server.close()); // rm より先に閉じる
+      await expect(server.listen()).rejects.toThrow(/failed to start a shell/);
+      expect(server.freshToken).toBeTruthy(); // auth.json に保存済みの token を、呼び出し側（main）が表示できる
+      expect(existsSync(join(stateDir, "auth.json"))).toBe(true);
+    },
+    10000,
+  );
+
+  it("証明書のファイルを読めなければ設定の誤り（ConfigError）にし、token も作らない（D102）", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const missing = join(stateDir, "no-such-cert.pem");
+    await expect(composeServer({ host: "0.0.0.0", cert: missing, key: missing, stateDir, origin: [] })).rejects.toThrow(ConfigError);
+    expect(existsSync(join(stateDir, "auth.json"))).toBe(false);
+  });
+
+  it("起動の途中（復元が終わるまで）は /ws を 503 で断り、listen() の後は受け付ける（D102）", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const origin = `http://127.0.0.1:${port}`;
+    const upgradeStatus = (cookie?: string): Promise<number> =>
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin, host: `127.0.0.1:${port}`, ...(cookie ? { cookie } : {}) } });
+        ws.once("open", () => {
+          ws.close();
+          resolve(101);
+        });
+        ws.once("unexpected-response", (_req, res) => {
+          ws.terminate();
+          resolve(res.statusCode ?? 0);
+        });
+        ws.once("error", reject);
+      });
+
+    // bind が済み復元の途中の状態を模す：listen() を始め、bind した直後（token の作成・復元の await 中）に upgrade を試す。
+    const listening = server.listen();
+    await new Promise<void>((res) => server.httpServer.server.once("listening", () => res()));
+    expect(await upgradeStatus()).toBe(503);
+    await listening;
+
+    const loginRes = await fetch(`${origin}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ token: server.freshToken }),
+    });
+    const cookie = loginRes.headers.get("set-cookie")!.split(";")[0]!;
+    expect(await upgradeStatus(cookie)).toBe(101);
+  }, 10000);
+
+  it("creates one workspace on first startup when there is no saved session (AC1/AC8 の起点)", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await server.listen();
+    expect(server.session.snapshot().workspaces.length).toBe(1);
+  });
+
+  it("persists and restores the session across two composeServer instances (AC18)", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    const port1 = await getFreePort();
+    const first = await composeServer({ host: "127.0.0.1", port: String(port1), stateDir, origin: [] });
+    await first.listen();
+    const { workspace } = await first.session.createWorkspace(process.cwd(), "persisted");
+    await first.persist.flush();
+    await first.close();
+
+    const port2 = await getFreePort();
+    const second = await composeServer({ host: "127.0.0.1", port: String(port2), stateDir, origin: [] });
+    cleanups.push(() => second.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await second.listen();
+
+    const restored = second.session.snapshot().workspaces.find((w) => w.id === workspace.id);
+    expect(restored).toBeDefined();
+    expect(restored?.label).toBe("persisted");
+  }, 10000);
+
+  it("full round trip: login, hello, create, subscribe, echo (same flow as smoke.ts)", async () => {
+    const stateDir = await makeTempDir("wtm-compose-e2e-");
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await server.listen();
+
+    const origin = `http://127.0.0.1:${port}`;
+    const loginRes = await fetch(`${origin}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ token: server.freshToken }),
+    });
+    expect(loginRes.status).toBe(204);
+    const cookie = loginRes.headers.get("set-cookie")!.split(";")[0]!;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie, origin, host: `127.0.0.1:${port}` } });
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    cleanups.push(async () => {
+      ws.close();
+    });
+
+    const helloReply = await requestUntilMatchingId(ws, "h1", "client.hello", { protocol: 1, kind: "desktop" });
+    expect((helloReply as { clientId: string }).clientId).toBeTruthy();
+  }, 10000);
+
+  it("close() resolves promptly even while a browser WebSocket is still connected (レビュー指摘の回帰テスト)", async () => {
+    // 以前は composeServer().close() が WebSocket を一切閉じなかったため、ブラウザが1つでも繋がった
+    // ままだと httpServer.server.close() のコールバックが永久に発火しなかった（`wsServer`/`WsGateway` が
+    // 返り値にすら保持されていなかった）。ここでは「繋いだまま close() を呼んで、有限時間で終わる」ことを直接確かめる。
+    const stateDir = await makeTempDir("wtm-compose-shutdown-");
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    await server.listen();
+
+    const origin = `http://127.0.0.1:${port}`;
+    const loginRes = await fetch(`${origin}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ token: server.freshToken }),
+    });
+    const cookie = loginRes.headers.get("set-cookie")!.split(";")[0]!;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie, origin, host: `127.0.0.1:${port}` } });
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+
+    // ws をこちらから閉じない（=「ブラウザを開いたまま」を模す）まま close() する。
+    await Promise.race([
+      server.close(),
+      new Promise<never>((_r, reject) => setTimeout(() => reject(new Error("server.close() did not resolve within 5s")), 5000)),
+    ]);
+  }, 10000);
+
+  // PATH 越しに偽の実行ファイルを解決させるので（`:` 区切り）、POSIX シェルの環境でだけ確かめる（02-agent-detection T10）。
+  it.skipIf(process.platform === "win32")(
+    "実物の PTY で偽の 'claude' を起動すると、pane.agent_status_changed が kind='claude' で届く（02-agent-detection T10・AC6）",
+    async () => {
+      const stateDir = await makeTempDir("wtm-compose-agent-");
+      const binDir = await makeTempDir("wtm-compose-agent-bin-");
+      // claude.toml の `live_turn_working`（bottom_non_empty_lines(12)・working）に当たる画面を出し、
+      // pane が判定される間ずっと前面プロセスとして居座る（herdr の「対話の途中で待っている」を模す）。
+      const claudePath = join(binDir, "claude");
+      await writeFile(claudePath, "#!/usr/bin/env bash\nprintf '\\xe2\\x9c\\xbb Thinking\\xe2\\x80\\xa6\\n'\nsleep 30\n");
+      await chmod(claudePath, 0o755);
+
+      const originalPath = process.env["PATH"];
+      process.env["PATH"] = `${binDir}:${originalPath ?? ""}`;
+      cleanups.push(async () => {
+        process.env["PATH"] = originalPath;
+      });
+      cleanups.push(() => rm(binDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+
+      const port = await getFreePort();
+      const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+      cleanups.push(() => server.close());
+      cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+      await server.listen();
+
+      const origin = `http://127.0.0.1:${port}`;
+      const loginRes = await fetch(`${origin}/api/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin, host: `127.0.0.1:${port}` },
+        body: JSON.stringify({ token: server.freshToken }),
+      });
+      const cookie = loginRes.headers.get("set-cookie")!.split(";")[0]!;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie, origin, host: `127.0.0.1:${port}` } });
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("error", reject);
+      });
+      cleanups.push(async () => {
+        ws.close();
+      });
+
+      await requestUntilMatchingId(ws, "h1", "client.hello", { protocol: 1, kind: "desktop" });
+      const created = (await requestUntilMatchingId(ws, "c1", "workspace.create", { cwd: process.cwd(), label: "agent-test" })) as {
+        pane: { id: string };
+      };
+      await requestUntilMatchingId(ws, "s1", "pane.subscribe", { paneId: created.pane.id, scrollbackLines: 200 });
+
+      ws.send(encodeInputFrame(created.pane.id, new TextEncoder().encode("claude\n")));
+
+      const event = await waitForEvent(
+        ws,
+        "pane.agent_status_changed",
+        (data) => data.paneId === created.pane.id && data.agent?.kind === "claude",
+        8000,
+      );
+      expect(event.agent?.kind).toBe("claude");
+    },
+    15000,
+  );
+});
+
+function requestUntilMatchingId(ws: WebSocket, id: string, method: string, params: unknown): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (data: Buffer, isBinary: boolean): void => {
+      if (isBinary) return;
+      const msg = JSON.parse(data.toString("utf8")) as { id?: string; result?: unknown; error?: unknown };
+      if (msg.id !== id) return;
+      ws.off("message", onMessage);
+      if (msg.error) reject(new Error(JSON.stringify(msg.error)));
+      else resolve(msg.result);
+    };
+    ws.on("message", onMessage);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+}
+
+/** 特定のイベント（design.md「WebSocket の通信」）が届くまで待つ。JSON メッセージの `event`/`data` を見る（RPC の応答とは `id` の有無で区別できる）。 */
+function waitForEvent(
+  ws: WebSocket,
+  eventName: PaneAgentStatusChangedEvent["event"],
+  predicate: (data: PaneAgentStatusChangedEvent["data"]) => boolean,
+  timeoutMs: number,
+): Promise<PaneAgentStatusChangedEvent["data"]> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.off("message", onMessage);
+      reject(new Error(`timed out waiting for event ${eventName}`));
+    }, timeoutMs);
+    const onMessage = (data: Buffer, isBinary: boolean): void => {
+      if (isBinary) return;
+      let msg: { event?: string; data?: unknown };
+      try {
+        msg = JSON.parse(data.toString("utf8")) as { event?: string; data?: unknown };
+      } catch {
+        return;
+      }
+      if (msg.event !== eventName) return;
+      const eventData = msg.data as PaneAgentStatusChangedEvent["data"];
+      if (!predicate(eventData)) return;
+      clearTimeout(timer);
+      ws.off("message", onMessage);
+      resolve(eventData);
+    };
+    ws.on("message", onMessage);
+  });
+}
