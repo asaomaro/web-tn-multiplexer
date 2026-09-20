@@ -1,7 +1,7 @@
 schema: 11
 slug: web-terminal-multiplexer
-current: deliver
-approved: [requirements, research, design, architecture, tasks, test, review, deliver]
+current: retro
+approved: [requirements, research, design, architecture, tasks, test, review, deliver, retro]
 mode: interactive
 profile: full
 humanGates: []
@@ -9,5 +9,5 @@ maxSendBacks: 3
 dependsOn: []
 harnessRev: unknown
 subtasks: [01-server-core, 02-agent-detection, 03-web-desktop, 04-mobile, 05-e2e-docs]
-activeSubtask: done
+activeSubtask: 05-e2e-docs
 harnessRevDelivered: unknown
