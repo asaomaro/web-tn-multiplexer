@@ -249,3 +249,46 @@ test("窓の大きさ・サイドバーの折りたたみを変えると、PTY �
   await page.waitForTimeout(1000);
   expect(views.count()).toBe(count);
 });
+
+/**
+ * AC11・AC14（20260920-sidebar-tabbar-controls）：足したボタンが端末の大きさを変えていないこと。
+ * `cols` / `rows` の固定値は使わない——xterm のフォントをこの製品では指定しておらず、環境でセルの寸法が
+ * 変わるため再現しない。**同じ実行の中での相対比較**で見る（このファイルの他のテストと同じ流儀）。
+ */
+test("tab バーの ＋ は帯を高くしない。サイドバーは折りたたんでも横に溢れない（AC11・AC14）", async ({ page, appServer }) => {
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  // ＋ が帯を高くすると pane の行が減る。**＋ を消したときと比べる**のが唯一の確かめ方——
+  // タブも ＋ も同じ行の高さへ引き伸ばされるので、「帯 = タブ + 下線」は ＋ が何 px でも成り立ってしまう
+  // （最初そう書いて、負の対照で何も確かめていないことが分かった）。
+  const barHeight = (): Promise<number> => page.locator(".tab-bar").evaluate((el) => el.getBoundingClientRect().height);
+  const withPlus = await barHeight();
+  await page.locator(".tab-bar-new").evaluate((el) => ((el as HTMLElement).style.display = "none"));
+  const withoutPlus = await barHeight();
+  await page.locator(".tab-bar-new").evaluate((el) => ((el as HTMLElement).style.display = ""));
+  expect(withPlus, `＋ の有無で帯の高さが変わらない（あり ${withPlus} / なし ${withoutPlus}）`).toBe(withoutPlus);
+
+  // 折りたたんでも、足した帯が横へ溢れない（先行 work の AC3 と同じ判定の仕方）。
+  await focusTerminal(page);
+  await prefixKey(page, "b");
+  await expect(page.locator(".sidebar-collapsed")).toHaveCount(1);
+  const widths = await page.evaluate(() => {
+    const el = document.querySelector(".sidebar") as HTMLElement;
+    return { scroll: el.scrollWidth, client: el.clientWidth };
+  });
+  expect(widths.scroll, `折りたたみ時（実測 ${JSON.stringify(widths)}）`).toBeLessThanOrEqual(widths.client);
+  await expect(page.locator(".sidebar-footer .sidebar-collapse-btn")).toBeVisible(); // 畳んでも戻せる
+
+  // 折りたたむと帯が 2 つ消えるので、Tab で最初に来るサイドバーのボタンは折りたたみだけになる
+  // （展開時は 新規 → メニュー → ソート → 折りたたみ の 4 つ。`keys-mouse-dialogs.spec.ts` で確認）。
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const reached: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press("Tab");
+    reached.push(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.className ?? ""));
+  }
+  const btns = reached.filter((c) => c.includes("sidebar-btn") || c.includes("tab-bar-item"));
+  expect(btns[0], `到達順: ${reached.join(" → ")}`).toContain("sidebar-collapse-btn");
+  expect(btns[1], `到達順: ${reached.join(" → ")}`).toContain("tab-bar-item");
+});

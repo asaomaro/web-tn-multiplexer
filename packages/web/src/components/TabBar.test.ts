@@ -12,6 +12,9 @@ import TabBar from "./TabBar.vue";
 let pinia: Pinia;
 
 beforeEach(() => {
+  // view ストアは初期化時に `wtm.prefs.v1`（localStorage）を読む。消さないと
+  // 同じワーカーで先に走ったファイルの選択が持ち越される（20260920-sidebar-tabbar-controls）。
+  localStorage.clear();
   pinia = createPinia();
 });
 
@@ -36,13 +39,16 @@ function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] 
   };
 }
 
-function mountTabBar(conn: ConnectionPort, actions?: { openContextMenu: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> }) {
+function mountTabBar(
+  conn: ConnectionPort,
+  actions?: { openContextMenu: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn>; newTabInWorkspace?: ReturnType<typeof vi.fn> },
+) {
   return mount(TabBar, {
     global: {
       plugins: [pinia],
       provide: {
         [ConnectionKey as symbol]: conn,
-        [ActionDispatcherKey as symbol]: actions ?? { openContextMenu: vi.fn(), run: vi.fn() },
+        [ActionDispatcherKey as symbol]: actions ?? { openContextMenu: vi.fn(), run: vi.fn(), newTabInWorkspace: vi.fn() },
       },
     },
   });
@@ -132,5 +138,52 @@ describe("TabBar", () => {
     expect(run).toHaveBeenCalledWith({ type: "tabDelta", delta: 1 } satisfies Action);
     await wrapper.get(".tab-bar").trigger("wheel", { deltaY: -100 });
     expect(run).toHaveBeenCalledWith({ type: "tabDelta", delta: -1 } satisfies Action);
+  });
+});
+
+// 20260920-sidebar-tabbar-controls の AC6：これまで新しいタブを作る導線は prefix+c と
+// 「タブの右クリック → 新規」だけで、後者はタブが 1 つも無いと対象ごと消えていた。
+describe("TabBar — 新しいタブのボタン", () => {
+  it("押すと、表示中の workspace を宛先に newTabInWorkspace を呼ぶ（名前入力を開くのは dispatcher の責務）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const newTabInWorkspace = vi.fn();
+    const wrapper = mountTabBar(makeConnection(), { openContextMenu: vi.fn(), run: vi.fn(), newTabInWorkspace });
+    await wrapper.get(".tab-bar-new").trigger("click");
+    expect(newTabInWorkspace).toHaveBeenCalledWith("w1");
+  });
+
+  it("タブが 1 つも無くても押せる（右クリックの導線が消える場面こそ要る）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", []));
+    view.setView("w1", "");
+    const newTabInWorkspace = vi.fn();
+    const wrapper = mountTabBar(makeConnection(), { openContextMenu: vi.fn(), run: vi.fn(), newTabInWorkspace });
+    expect(wrapper.findAll(".tab-bar-item").length).toBe(0);
+    const btn = wrapper.get(".tab-bar-new");
+    expect(btn.attributes("disabled")).toBeUndefined();
+    await btn.trigger("click");
+    expect(newTabInWorkspace).toHaveBeenCalledWith("w1");
+  });
+
+  it("表示中の workspace が無いときは押せない", () => {
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-new").attributes("disabled")).toBeDefined();
+  });
+
+  it("role=tablist が持つのは tab だけ（＋ はその外）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    const list = wrapper.get('[role="tablist"]');
+    expect(list.findAll(".tab-bar-new").length).toBe(0);
+    expect(list.findAll('[role="tab"]').length).toBe(1);
   });
 });

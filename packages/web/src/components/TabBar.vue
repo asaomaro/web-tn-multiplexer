@@ -32,6 +32,16 @@ function onContextMenu(ev: MouseEvent, tabId: string): void {
   actions?.openContextMenu({ kind: "tab", tabId }, { x: ev.clientX, y: ev.clientY });
 }
 
+/**
+ * 新しいタブ。`view.workspaceId` は `string | null` で `newTabInWorkspace` は `string` を要るので、
+ * **テンプレートではなくここで null を外す**（`:disabled` を付けてもテンプレート式の型は狭まらない）。
+ * タブが 0 個でも押せる——タブが無い workspace こそ導線が要る（右クリックの対象が消えるため）。
+ */
+function onNewTab(): void {
+  const id = view.workspaceId;
+  if (id) actions?.newTabInWorkspace(id);
+}
+
 function onWheel(ev: WheelEvent): void {
   ev.preventDefault();
   actions?.run({ type: "tabDelta", delta: ev.deltaY > 0 ? 1 : -1 });
@@ -39,21 +49,25 @@ function onWheel(ev: WheelEvent): void {
 </script>
 
 <template>
-  <div class="tab-bar" role="tablist" @wheel="onWheel">
-    <button
-      v-for="tab in tabs"
-      :key="tab.id"
-      type="button"
-      role="tab"
-      class="tab-bar-item"
-      :class="{ 'tab-bar-item-active': tab.id === view.tabId }"
-      :aria-selected="tab.id === view.tabId"
-      @click="selectTab(tab.id)"
-      @contextmenu="onContextMenu($event, tab.id)"
-    >
-      <span class="tab-bar-label">{{ tab.label }}</span>
-      <span v-if="tab.zoomedPaneId" class="tab-bar-zoomed">Z</span>
-    </button>
+  <div class="tab-bar" @wheel="onWheel">
+    <!-- `role="tablist"` が持てるのは `tab` だけなので、＋ はこの入れ子の外に置く。 -->
+    <div class="tab-bar-tabs" role="tablist">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        type="button"
+        role="tab"
+        class="tab-bar-item"
+        :class="{ 'tab-bar-item-active': tab.id === view.tabId }"
+        :aria-selected="tab.id === view.tabId"
+        @click="selectTab(tab.id)"
+        @contextmenu="onContextMenu($event, tab.id)"
+      >
+        <span class="tab-bar-label">{{ tab.label }}</span>
+        <span v-if="tab.zoomedPaneId" class="tab-bar-zoomed">Z</span>
+      </button>
+    </div>
+    <button type="button" class="tab-bar-new" :disabled="!view.workspaceId" aria-label="新しいタブ" @click="onNewTab" @keydown.stop>＋</button>
   </div>
 </template>
 
@@ -64,9 +78,33 @@ function onWheel(ev: WheelEvent): void {
 .tab-bar {
   flex: none;
   display: flex;
-  overflow-x: auto;
   background: var(--wtm-menu-bg, #282a36);
   border-bottom: 1px solid var(--wtm-menu-border, #44475a);
+}
+/* 横スクロールはタブの列だけ。＋ は右端に残す（スクロールの向こうへ消えない）。 */
+.tab-bar-tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+}
+/* 高さをタブと揃える。`font: inherit` を落とすと既定のボタンフォントで行の高さが変わり、
+ * 帯が高くなって PTY の行が減る（AC14）。 */
+.tab-bar-new {
+  flex: none;
+  padding: 0.5em 0.8em;
+  font: inherit;
+  color: var(--wtm-fg, #f8f8f2);
+  background: none;
+  /* 最後のタブが既に `border-right` を持つので、ここで左にも引くと境目だけ 2px になる（border は重ならない）。 */
+  border: none;
+  cursor: pointer;
+}
+.tab-bar-new:hover:not(:disabled) {
+  background: var(--wtm-menu-hover-bg, #343746);
+}
+.tab-bar-new:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .tab-bar-item {
   flex: none;

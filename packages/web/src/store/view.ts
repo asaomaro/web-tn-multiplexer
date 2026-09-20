@@ -32,6 +32,35 @@ function saveStoredView(v: StoredView): void {
   }
 }
 
+/** agents の並び順（20260920-sidebar-tabbar-controls）。`grouped` は並べ替えない（既定）。 */
+export type AgentSort = "grouped" | "priority";
+
+/**
+ * 表示位置（`STORAGE_KEY`）と違い、**タブの寿命を越えて残す好み**なので `localStorage` に置く。
+ * 同じ流儀の先例：`store/seen.ts`（`wtm.seen.v1`）・`components/Toast.vue`（`wtm.hint.prefixHelp.v1`）。
+ */
+const PREFS_KEY = "wtm.prefs.v1";
+
+function loadAgentSort(): AgentSort {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return "grouped";
+    const parsed: unknown = JSON.parse(raw);
+    const v = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "agentSort" in parsed ? (parsed as { agentSort: unknown }).agentSort : null;
+    return v === "priority" || v === "grouped" ? v : "grouped"; // 壊れた値は既定へ落とす
+  } catch {
+    return "grouped"; // プライベートウィンドウ等で読めなくても動く（保存が効かないだけ）
+  }
+}
+
+function saveAgentSort(v: AgentSort): void {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ agentSort: v }));
+  } catch {
+    // 保存できなくても致命的ではない（この画面の間だけ効く）。
+  }
+}
+
 let nextToastId = 1;
 export interface Toast {
   id: number;
@@ -82,6 +111,7 @@ export const useViewStore = defineStore("view", () => {
    */
   const originRejectSuspected = ref(false);
   const sidebarCollapsed = ref(false);
+  const agentSort = ref(loadAgentSort());
   const toasts = ref<Toast[]>([]);
 
   /**
@@ -177,6 +207,12 @@ export const useViewStore = defineStore("view", () => {
     authRequiredCount.value++;
   }
 
+  /** agents の並び順を 2 値で行き来する（herdr と同じく順序名そのものがボタン）。切り替えるたびに保存する。 */
+  function toggleAgentSort(): void {
+    agentSort.value = agentSort.value === "grouped" ? "priority" : "grouped";
+    saveAgentSort(agentSort.value);
+  }
+
   function toggleSidebar(): void {
     sidebarCollapsed.value = !sidebarCollapsed.value;
   }
@@ -208,6 +244,8 @@ export const useViewStore = defineStore("view", () => {
     authRequiredCount,
     originRejectSuspected,
     sidebarCollapsed,
+    agentSort,
+    toggleAgentSort,
     toasts,
     isPrefixWaiting,
     restoreView,

@@ -11,6 +11,8 @@ import Sidebar from "./Sidebar.vue";
 let pinia: Pinia;
 
 beforeEach(() => {
+  // 並び順は localStorage に残る（20260920-sidebar-tabbar-controls）。消さないと前のテストの選択が持ち越される。
+  localStorage.clear();
   pinia = createPinia();
 });
 
@@ -41,13 +43,17 @@ function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] 
   };
 }
 
-function mountSidebar(conn: ConnectionPort, actions?: { openContextMenu: ReturnType<typeof vi.fn> }) {
+function makeActions() {
+  return { openContextMenu: vi.fn(), run: vi.fn() };
+}
+
+function mountSidebar(conn: ConnectionPort, actions?: { openContextMenu: ReturnType<typeof vi.fn>; run?: ReturnType<typeof vi.fn> }) {
   return mount(Sidebar, {
     global: {
       plugins: [pinia],
       provide: {
         [ConnectionKey as symbol]: conn,
-        [ActionDispatcherKey as symbol]: actions ?? { openContextMenu: vi.fn() },
+        [ActionDispatcherKey as symbol]: actions ?? makeActions(),
       },
     },
   });
@@ -153,6 +159,137 @@ describe("Sidebar — spaces", () => {
     session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 2, behind: 1 } }));
     const wrapper = mountSidebar(makeConnection());
     expect(wrapper.find(".sidebar-row-line2 .sidebar-git-counts").text()).toBe("↑2 ↓1");
+  });
+});
+
+// 20260920-sidebar-tabbar-controls：マウスで触れる導線を足す（キー操作は変えず、同じ `run` を通す）。
+describe("Sidebar — ボタン", () => {
+  it("折りたたみのボタンは畳んでも出し、aria-expanded で状態を伝える（AC1・AC2）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountSidebar(makeConnection(), actions);
+    const btn = wrapper.get(".sidebar-collapse-btn");
+    expect(btn.attributes("aria-expanded")).toBe("true");
+    await btn.trigger("click");
+    expect(actions.run).toHaveBeenCalledWith({ type: "toggleSidebar" });
+
+    view.toggleSidebar(); // 畳んだ状態でも押せないと戻れなくなる
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".sidebar-collapse-btn").exists()).toBe(true);
+    expect(wrapper.get(".sidebar-collapse-btn").attributes("aria-expanded")).toBe("false");
+  });
+
+  it("「新規」はキーの prefix+shift+N と同じ action を送る（AC3）", async () => {
+    const actions = makeActions();
+    const wrapper = mountSidebar(makeConnection(), actions);
+    await wrapper.findAll(".sidebar-section-footer .sidebar-btn")[0]!.trigger("click");
+    expect(actions.run).toHaveBeenCalledWith({ type: "newWorkspace" });
+  });
+
+  it("「メニュー」は global のメニューを開き、開いている間は aria-expanded が true（AC4）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountSidebar(makeConnection(), actions);
+    const btn = wrapper.get(".sidebar-section-footer .sidebar-btn-right");
+    expect(btn.attributes("aria-expanded")).toBe("false");
+    await btn.trigger("click");
+    expect(actions.openContextMenu).toHaveBeenCalledWith({ kind: "global" }, expect.anything());
+    // 実際に開くのは `ActionDispatcher` なので、ここではストアを直接動かして表示を確かめる。
+    view.openContextMenu({ kind: "global" }, { x: 0, y: 0 });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".sidebar-section-footer .sidebar-btn-right").attributes("aria-expanded")).toBe("true");
+  });
+
+  // 帯ごとに分けて確かめる。1 つの it にまとめると、片方の `v-if` を外しても
+  // もう片方の失敗に隠れて素通りする（独立点検で実際にそうなっていた）。
+  it("折りたたむと spaces のフッタが消える（AC11）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountSidebar(makeConnection());
+    expect(wrapper.find(".sidebar-section-footer").exists()).toBe(true);
+    view.toggleSidebar();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".sidebar-section-footer").exists()).toBe(false);
+  });
+
+  it("折りたたむと agents の見出しが消える（AC11）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountSidebar(makeConnection());
+    expect(wrapper.find(".sidebar-section-header").exists()).toBe(true);
+    view.toggleSidebar();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".sidebar-section-header").exists()).toBe(false);
+  });
+
+  it("折りたたんでも、折りたたみの帯は残り押せる（AC1・AC11）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountSidebar(makeConnection(), actions);
+    view.toggleSidebar();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".sidebar-footer").exists()).toBe(true);
+    await wrapper.get(".sidebar-collapse-btn").trigger("click"); // 畳んだ状態からも戻せる
+    expect(actions.run).toHaveBeenCalledWith({ type: "toggleSidebar" });
+  });
+
+  // AC7：herdr と同じく「順序名そのものがボタン」。表示が現在値で、押すと切り替わる。
+  it("ソートのボタンは現在の並び順を表示し、押すと切り替わる（AC7）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountSidebar(makeConnection());
+    const btn = wrapper.get(".sidebar-sort-btn");
+    expect(btn.text()).toBe("グループ順"); // 内部の値（grouped / priority）はそのまま出さない
+    await btn.trigger("click");
+    expect(view.agentSort).toBe("priority");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".sidebar-sort-btn").text()).toBe("優先度順");
+    await wrapper.get(".sidebar-sort-btn").trigger("click");
+    expect(view.agentSort).toBe("grouped");
+  });
+});
+
+// AC7〜AC9：並び順。`grouped` は並べ替えない（サーバが返す順がそのままグループになる）。
+describe("Sidebar — agents の並び順", () => {
+  function seedThreeAgents(): void {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.tabUpserted(makeTab("t1", "w1"));
+    // 挿入順は idle → blocked → working。since は idle が最新。
+    session.paneUpserted(makePane("p-idle", "t1", makeAgent({ instanceId: "a1", state: "idle", since: 300 })));
+    session.paneUpserted(makePane("p-blocked", "t1", makeAgent({ instanceId: "a2", state: "blocked", since: 100 })));
+    session.paneUpserted(makePane("p-working", "t1", makeAgent({ instanceId: "a3", state: "working", since: 200 })));
+  }
+
+  it("grouped（既定）では並べ替えない（AC9）", () => {
+    seedThreeAgents();
+    const wrapper = mountSidebar(makeConnection());
+    const states = wrapper.findAll(".sidebar-agents .sidebar-row .sidebar-state-icon").map((el) => el.attributes("data-state"));
+    expect(states).toEqual(["idle", "blocked", "working"]);
+  });
+
+  it("priority では状態の優先度の降順に並ぶ（AC8）", async () => {
+    seedThreeAgents();
+    const view = useViewStore(pinia);
+    view.toggleAgentSort();
+    const wrapper = mountSidebar(makeConnection());
+    await wrapper.vm.$nextTick();
+    const states = wrapper.findAll(".sidebar-agents .sidebar-row .sidebar-state-icon").map((el) => el.attributes("data-state"));
+    expect(states).toEqual(["blocked", "working", "idle"]);
+  });
+
+  it("priority で優先度が同じなら、状態が最近変わったものが上（AC8）", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.tabUpserted(makeTab("t1", "w1"));
+    // 並びが見分けられるよう、エージェント名を別にする（2 行目に出る）。
+    session.paneUpserted(makePane("p-old", "t1", makeAgent({ instanceId: "a1", label: "古いほう", state: "working", since: 100 })));
+    session.paneUpserted(makePane("p-new", "t1", makeAgent({ instanceId: "a2", label: "新しいほう", state: "working", since: 900 })));
+    const view = useViewStore(pinia);
+    view.toggleAgentSort();
+    const wrapper = mountSidebar(makeConnection());
+    await wrapper.vm.$nextTick();
+    const rows = wrapper.findAll(".sidebar-agents .sidebar-row");
+    expect(rows.length).toBe(2);
+    expect(rows[0]!.text()).toContain("新しいほう"); // 挿入順では「古いほう」が先
+    expect(rows[1]!.text()).toContain("古いほう");
   });
 });
 
