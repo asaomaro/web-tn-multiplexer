@@ -5,6 +5,7 @@ import type { InputHold } from "../net/InputGate.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
 import { useViewStore } from "../store/view.js";
+import { clientErrorMessage, errorCodeOf } from "../net/clientError.js";
 import { depthFirstPaneIds, neighborPaneId } from "../term/layoutOrder.js";
 import type { MenuTarget, UiPort } from "../term/MouseBridge.js";
 import { readClipboard, writeClipboard } from "../term/clipboard.js";
@@ -113,6 +114,13 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
       case "toggleSidebar":
         this.view.toggleSidebar();
         return;
+      case "newWorktree": {
+        // メニューは `workspace.git`（5 秒周期）を見るが、キーは見ない——作った直後でも始められるように。
+        // git でなければサーバが `not_a_git_repository` を返し、下の toast に理由が出る（decisions.md D3）。
+        const workspaceId = this.view.workspaceId;
+        if (workspaceId) this.newWorktree(workspaceId);
+        return;
+      }
       case "detach":
         void this.conn.request("client.detach", {}).catch(() => undefined); // 後始末は Connection 自身が行う（D58）
         return;
@@ -157,6 +165,87 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
       .catch(() => {
         hold?.cancel();
         this.view.toast("tab を作成できませんでした");
+      });
+  }
+
+  // --- worktree（20260920-git-worktree-actions）-------------------------------
+
+  /** 作成のダイアログを開く。**先にサーバへ聞く**——パスのプレビューに根とリポジトリ名が要るため。 */
+  newWorktree(workspaceId: string): void {
+    this.conn
+      .request("worktree.list", { workspaceId })
+      .then((info) => this.view.openDialogWithContext({ kind: "worktreeCreate", workspaceId, info }))
+      .catch((err: unknown) => this.view.toast(worktreeErrorMessage(err)));
+  }
+
+  /** 一覧のダイアログを開く。**空なら開かずに知らせる**（選ぶものが無いダイアログを見せない）。 */
+  openWorktree(workspaceId: string): void {
+    this.conn
+      .request("worktree.list", { workspaceId })
+      .then((info) => {
+        if (info.entries.length === 0) {
+          this.view.toast("この repo にはまだ worktree がありません。");
+          return;
+        }
+        this.view.openDialogWithContext({ kind: "worktreeOpen", workspaceId, entries: info.entries });
+      })
+      .catch((err: unknown) => this.view.toast(worktreeErrorMessage(err)));
+  }
+
+  /** 作って、その場所を cwd に workspace を開く（`confirmNewTab` と同じ形）。 */
+  confirmWorktreeCreate(branch: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "worktreeCreate") return;
+    const trimmed = branch.trim();
+    if (!trimmed) return; // 空では確定しない（ボタンも disabled）
+    this.view.closeDialog();
+    const hold = this.input?.holdInput(this.view.focusedPaneId); // D99
+    this.conn
+      .request("worktree.create", { workspaceId: ctx.workspaceId, branch: trimmed })
+      .then((created) => this.openWorkspaceAt(created.path, trimmed, hold))
+      .catch((err: unknown) => {
+        hold?.cancel();
+        this.view.toast(worktreeErrorMessage(err));
+      });
+  }
+
+  /** 選んだ worktree を開く。**既に開いていればそこへ移るだけ**（同じ場所の workspace を 2 つ作らない）。 */
+  confirmWorktreeOpen(path: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "worktreeOpen") return;
+    this.view.closeDialog();
+    const existing = [...this.session.workspaces.values()].find((w) => w.cwd === path);
+    if (existing) {
+      this.view.setView(existing.id, existing.activeTabId);
+      // `setView` は焦点の pane を触らないので、対で移す（Sidebar・GotoPicker・goto・PanePicker と同じ形）。
+      const tab = this.session.tabs.get(existing.activeTabId);
+      if (tab) this.view.focusPane(tab.focusedPaneId);
+      void this.conn.request("workspace.focus", { workspaceId: existing.id }).catch(() => undefined);
+      return;
+    }
+    // 一覧で選んだ項目のブランチ名（detached なら git が返すとおり branch は null なので、パスの末尾で代える）。
+    const label = ctx.entries.find((e) => e.path === path)?.branch ?? path.split("/").pop() ?? path;
+    this.openWorkspaceAt(path, label, this.input?.holdInput(this.view.focusedPaneId));
+  }
+
+  /**
+   * その場所を cwd に workspace を作って表示を移す（作成と一覧の共通の後半）。
+   * **label にブランチ名を渡す**（review ラウンド1）。渡さないとサーバの既定が `"1"` になり
+   * （`SessionService.createWorkspace`）、サイドバーは `workspace.label` しか出さないので
+   * **worktree を 2 つ作ると `1` が並んでどれがどれか分からなくなる**。2 行目のブランチ表示は
+   * `ahead > 0 || behind > 0` のときだけなので、**上流の無い新しい worktree は構造上そこに出ない**。
+   */
+  private openWorkspaceAt(cwd: string, label: string, hold: InputHold | undefined): void {
+    this.conn
+      .request("workspace.create", { cwd, label })
+      .then((result) => {
+        this.view.setView(result.workspace.id, result.tab.id);
+        this.view.focusPane(result.pane.id);
+        this.releaseHold(hold, result.pane.id);
+      })
+      .catch((err: unknown) => {
+        hold?.cancel();
+        this.view.toast(worktreeErrorMessage(err));
       });
   }
 
@@ -489,4 +578,13 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   setRightClickTarget(paneId: string, target: "herdr" | "pane"): void {
     void this.conn.request("pane.input.set", { paneId, rightClick: target }).catch(() => undefined);
   }
+}
+
+/**
+ * worktree の失敗を利用者の言葉にする。**サーバの生の message は使わない**（D107・decisions.md D2）——
+ * `code` を取り出して日本語の表から引く。取り出せなければ汎用の文言に落ちる。
+ */
+function worktreeErrorMessage(err: unknown): string {
+  const code = errorCodeOf(err);
+  return code ? clientErrorMessage(code) : "worktree の操作に失敗しました。";
 }

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyInputController } from "../keys/KeyInputController.js";
 import { KeyRouter, type KeyRouterClock } from "../keys/KeyRouter.js";
 import { DEFAULT_KEYMAP } from "../keys/keymap.js";
+import { clientErrorMessage } from "../net/clientError.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { RendererPool, type WebglAddonLike } from "../term/RendererPool.js";
 import { TerminalRegistry } from "../term/TerminalRegistry.js";
@@ -21,12 +22,20 @@ beforeEach(() => {
   pinia = createPinia();
 });
 
-function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][]; resolveWith: Partial<Record<MethodName, unknown>> } {
+function makeConnection(): ConnectionPort & {
+  requests: [MethodName, unknown][];
+  resolveWith: Partial<Record<MethodName, unknown>>;
+  /** その方式を失敗させる。`Connection` と同じ `<code>: <message>` の形の Error を投げる（clientError.ts の `errorCodeOf`）。 */
+  rejectWith: Partial<Record<MethodName, string>>;
+} {
   return {
     requests: [],
     resolveWith: {},
+    rejectWith: {},
     request<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
       this.requests.push([method, params]);
+      const code = this.rejectWith[method];
+      if (code !== undefined) return Promise.reject(new Error(`${code}: from server`));
       return Promise.resolve((this.resolveWith[method] ?? {}) as ResultOf<M>);
     },
     sendInput: vi.fn(),
@@ -66,8 +75,8 @@ function makeDispatcher(conn: ConnectionPort): { dispatcher: ActionDispatcher; r
   return { dispatcher, registry, keys };
 }
 
-function makeWorkspace(id: string, tabIds: string[] = []): Workspace {
-  return { id, label: id, cwd: "/", tabIds, activeTabId: tabIds[0] ?? "", groupId: null, git: null };
+function makeWorkspace(id: string, tabIds: string[] = [], overrides: Partial<Workspace> = {}): Workspace {
+  return { id, label: id, cwd: "/", tabIds, activeTabId: tabIds[0] ?? "", groupId: null, git: null, ...overrides };
 }
 function makeTab(id: string, workspaceId: string, focusedPaneId = "p1"): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId: focusedPaneId }, focusedPaneId, zoomedPaneId: null, sizeOwnerClientId: null };
@@ -741,5 +750,145 @@ describe("ActionDispatcher — T22 向けの「任意の対象」メソッド（
 
     dispatcher.closeWorkspaceById("w9");
     expect(view.dialogContext).toEqual({ kind: "confirmClose", targets: [{ type: "workspace", id: "w9" }] });
+  });
+});
+
+// 20260920-git-worktree-actions。**サーバに聞いてからダイアログを開く**ので、開くまでに 1 往復ある。
+describe("ActionDispatcher — worktree", () => {
+  const LIST = { worktreeRoot: "/root", repoName: "wtm", suggestedBranch: "worktree/brave-river-0000", entries: [{ path: "/w/a", branch: "a" }] };
+
+  it("newWorktree：一覧を取ってから作成のダイアログを開く（AC1）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["worktree.list"] = LIST;
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    dispatcher.newWorktree("w1");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(conn.requests[0]).toEqual(["worktree.list", { workspaceId: "w1" }]);
+    expect(view.dialogContext).toMatchObject({ kind: "worktreeCreate", workspaceId: "w1" });
+  });
+
+  it("openWorktree：一覧が空ならダイアログを開かず知らせる（AC5）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["worktree.list"] = { ...LIST, entries: [] };
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    dispatcher.openWorktree("w1");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(view.dialogContext).toBeNull();
+    expect(view.toasts.length).toBe(1);
+  });
+
+  it("confirmWorktreeCreate：作ってから、その場所を cwd に workspace を開く（AC3）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["worktree.create"] = { path: "/root/wtm/feature-x" };
+    conn.resolveWith["workspace.create"] = { workspace: makeWorkspace("w2", ["t2"]), tab: makeTab("t2", "w2", "p2"), pane: makePane("p2", "t2") };
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "worktreeCreate", workspaceId: "w1", info: LIST });
+    dispatcher.confirmWorktreeCreate("feature/x");
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(conn.requests.map(([m]) => m)).toEqual(["worktree.create", "workspace.create"]);
+    expect(conn.requests[0]![1]).toEqual({ workspaceId: "w1", branch: "feature/x" });
+    // **label にブランチ名を渡す**（review ラウンド1）。渡さないとサーバの既定 `"1"` になり、
+    // サイドバーに `1` が並んでどの worktree か分からなくなる（ブランチの 2 行目は上流が無いと出ない）。
+    expect(conn.requests[1]![1]).toEqual({ cwd: "/root/wtm/feature-x", label: "feature/x" });
+  });
+
+  it("confirmWorktreeCreate：空では何も送らない（AC3）", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "worktreeCreate", workspaceId: "w1", info: LIST });
+    dispatcher.confirmWorktreeCreate("   ");
+    expect(conn.requests).toEqual([]);
+  });
+
+  // AC6：同じ場所の workspace が 2 つできると、どちらで作業していたか分からなくなる。
+  it("confirmWorktreeOpen：既に開いている場所ならそこへ移るだけで、workspace.create を呼ばない（AC6）", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w9", ["t9"], { cwd: "/w/a" }));
+    session.tabUpserted(makeTab("t9", "w9", "p9"));
+    view.focusPane("p-elsewhere"); // 別の workspace の pane を見ている状態から移る
+    view.openDialogWithContext({ kind: "worktreeOpen", workspaceId: "w1", entries: LIST.entries });
+    dispatcher.confirmWorktreeOpen("/w/a");
+    expect(conn.requests.map(([m]) => m)).not.toContain("workspace.create");
+    expect(view.workspaceId).toBe("w9");
+    // `setView` は焦点の pane を触らないので、対で移さないと**打鍵が見えていない端末へ流れる**
+    // （Sidebar・GotoPicker・goto・PanePicker はどれも対で呼んでいる）。
+    expect(view.focusedPaneId, "その tab で最後に見ていた pane へ焦点が移る").toBe("p9");
+  });
+
+  it("confirmWorktreeOpen：まだ開いていない場所なら workspace.create を送る（AC5）", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "worktreeOpen", workspaceId: "w1", entries: LIST.entries });
+    dispatcher.confirmWorktreeOpen("/w/a"); // 一覧にある項目（branch: "a"）
+    expect(conn.requests[0]).toEqual(["workspace.create", { cwd: "/w/a", label: "a" }]);
+  });
+
+  it("confirmWorktreeOpen：branch が null（detached）ならパスの末尾を label にする", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "worktreeOpen", workspaceId: "w1", entries: [{ path: "/w/detached-here", branch: null }] });
+    dispatcher.confirmWorktreeOpen("/w/detached-here");
+    expect(conn.requests[0]).toEqual(["workspace.create", { cwd: "/w/detached-here", label: "detached-here" }]);
+  });
+
+  // AC7：**この describe が繋がりを見る唯一の場所**。コード→日本語の対応表そのものは clientError.test.ts が
+  // 固定しているが、`ActionDispatcher` がその表へ橋渡ししているかは、失敗させてみないと分からない
+  // （固定の文言を返す実装に差し替えても、それ以外のテストは全て通ってしまう）。
+  async function toastAfterFailure(method: MethodName, code: string, run: (d: ActionDispatcher, v: ReturnType<typeof useViewStore>) => void): Promise<string> {
+    const conn = makeConnection();
+    conn.resolveWith["worktree.list"] = LIST;
+    conn.rejectWith[method] = code;
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    const before = view.toasts.length; // 同じ it の中で 2 回呼ぶので、増えた 1 件だけを見る
+    run(dispatcher, view);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(view.toasts.length).toBe(before + 1);
+    return view.toasts[before]!.message;
+  }
+
+  it("worktree.create の失敗は、コードごとに違う日本語で知らせる（AC7）", async () => {
+    const inUse = await toastAfterFailure("worktree.create", "worktree_branch_in_use", (d, v) => {
+      v.openDialogWithContext({ kind: "worktreeCreate", workspaceId: "w1", info: LIST });
+      d.confirmWorktreeCreate("feature/x");
+    });
+    const exists = await toastAfterFailure("worktree.create", "worktree_path_exists", (d, v) => {
+      v.openDialogWithContext({ kind: "worktreeCreate", workspaceId: "w1", info: LIST });
+      d.confirmWorktreeCreate("feature/x");
+    });
+    expect(inUse).toBe(clientErrorMessage("worktree_branch_in_use"));
+    expect(exists).toBe(clientErrorMessage("worktree_path_exists"));
+    expect(inUse).not.toBe(exists);
+  });
+
+  it("worktree.list と workspace.create の失敗も、同じ経路で日本語にする（AC7）", async () => {
+    const listFailed = await toastAfterFailure("worktree.list", "not_a_git_repository", (d) => d.newWorktree("w1"));
+    expect(listFailed).toBe(clientErrorMessage("not_a_git_repository"));
+
+    const openFailed = await toastAfterFailure("workspace.create", "not_found", (d, v) => {
+      v.openDialogWithContext({ kind: "worktreeOpen", workspaceId: "w1", entries: LIST.entries });
+      d.confirmWorktreeOpen("/w/new");
+    });
+    expect(openFailed).toBe(clientErrorMessage("not_found"));
+  });
+
+  it("コードを読み取れない失敗は、汎用の文言に落とす（AC7）", async () => {
+    const message = await toastAfterFailure("worktree.list", "", (d) => d.openWorktree("w1"));
+    expect(message).toBe("worktree の操作に失敗しました。");
   });
 });

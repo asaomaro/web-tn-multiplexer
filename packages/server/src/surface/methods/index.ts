@@ -6,10 +6,11 @@ import { registerWorkspaceMethods } from "./workspace.js";
 import { registerTabMethods } from "./tab.js";
 import { registerPaneMethods } from "./pane.js";
 import { registerLayoutMethods } from "./layout.js";
+import { registerWorktreeMethods } from "./worktree.js";
 
 export type { MethodDeps } from "./deps.js";
 
-/** design「方式」の表＋architecture「方式の追加と変更」の全 23 方式を登録する。 */
+/** design「方式」の表＋architecture「方式の追加と変更」の全 25 方式を登録する（worktree の 2 つを含む）。 */
 export function registerAllMethods(surface: ControlSurface, deps: MethodDeps): void {
   registerClientMethods(surface, deps);
   registerSubscribeMethods(surface, deps);
@@ -17,4 +18,5 @@ export function registerAllMethods(surface: ControlSurface, deps: MethodDeps): v
   registerTabMethods(surface, deps);
   registerPaneMethods(surface, deps);
   registerLayoutMethods(surface, deps);
+  registerWorktreeMethods(surface, deps);
 }

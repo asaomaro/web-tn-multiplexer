@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import type { Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures.js";
@@ -453,4 +453,144 @@ test("サイドバーとタブバーのボタンが、キー操作と同じ結�
   await expect(page.locator(".name-dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator(".name-dialog")).toBeHidden();
+});
+
+/**
+ * この spec が作った使い捨てリポジトリ。**worktree の作成先は開発機の `~/.wtm/worktrees` 配下**
+ * （サーバの既定。E2E からは差し替えられない）なので、後片付けをしないと**実機に残骸が溜まる**
+ * ——実際に 4 つ残っているのを cross 点検が見つけた。テストが途中で落ちても消えるよう `afterEach` で消す。
+ */
+const madeRepos = new Set<string>();
+
+test.afterEach(async () => {
+  for (const repo of madeRepos) {
+    // 作成先は `<root>/<repo 名>/<ブランチの slug>`（`defaultCheckoutPath`）。repo 名ごと消す。
+    await rm(join(homedir(), ".wtm", "worktrees", basename(repo)), { recursive: true, force: true });
+    await rm(repo, { recursive: true, force: true });
+  }
+  madeRepos.clear();
+});
+
+/** 使い捨ての git リポジトリ（**この実リポジトリに worktree を作らないため**。20260920-git-worktree-actions）。 */
+async function makePlainRepo(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "wtm-e2e-wt-"));
+  madeRepos.add(dir);
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  const git = (args: string[]): Promise<unknown> => promisify(execFile)("git", args, { cwd: dir, env });
+  await git(["init", "-q", "-b", "main"]);
+  await git(["config", "user.email", "e2e@example.com"]);
+  await git(["config", "user.name", "wtm e2e"]);
+  await git(["commit", "-q", "--allow-empty", "-m", "init"]);
+  return dir;
+}
+
+/**
+ * AC3・AC5・AC9・AC-I3（20260920-git-worktree-actions）。
+ * **キーだけで**（`prefix+G`）worktree を作り、その場所の workspace が開くこと。
+ * 作ったものは**閉じてもディスクに残る**（この work では `git worktree remove` を呼ばない）。
+ */
+test("worktree：prefix+G で作ると、その場所の workspace が開く。閉じてもディスクには残る（AC3・AC9・AC-I3）", async ({ page, appServer }) => {
+  const client = await appServer.openClient();
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  // git リポジトリの workspace を作って、そこへ表示を移す（既定の workspace はこのリポジトリを指しうる）。
+  const repo = await makePlainRepo();
+  const created = client.waitForEvent("workspace.created");
+  await client.request("workspace.create", { cwd: repo, label: "wt-repo" }); // 既定の workspace も "1" なのでラベルで区別する
+  const repoWs = (await created).data.workspace;
+  await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(2);
+  await page.locator(".sidebar-spaces .sidebar-row").filter({ hasText: "wt-repo" }).click();
+  expect(repoWs.cwd).toBe(repo);
+
+  // prefix+G（herdr の new_worktree と同じ位置）。メニューを開かずに始められる。
+  await focusTerminal(page);
+  await prefixKey(page, "G");
+  const dialog = page.locator(".worktree-dialog");
+  await expect(dialog).toBeVisible();
+  // 候補が入っていて、作成先が見えている（AC1・AC2）。
+  const branch = await dialog.locator(".worktree-dialog-input").inputValue();
+  expect(branch).toMatch(/^worktree\//);
+  await expect(dialog.locator(".worktree-dialog-preview-path")).toContainText("/.wtm/worktrees/");
+  const previewPath = await dialog.locator(".worktree-dialog-preview-path").textContent();
+
+  // 条件を付けないと、**先に届いている repo の作成イベント**を拾ってしまう。
+  const wsCreated = client.waitForEvent("workspace.created", (e) => e.data.workspace.id !== repoWs.id);
+  await page.keyboard.press("Enter"); // 候補のまま確定（キーだけで完結）
+  const newWs = (await wsCreated).data.workspace;
+  expect(newWs.cwd).toBe(previewPath);
+  await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(3);
+
+  // 閉じてもディスクには残る（削除はこの work の対象外。AC9）。
+  await client.request("workspace.close", { workspaceId: newWs.id });
+  await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(2);
+  const { stdout } = await promisify(execFile)("git", ["worktree", "list", "--porcelain"], { cwd: repo });
+  expect(stdout, "閉じても worktree は残っている").toContain(newWs.cwd);
+});
+
+/** AC5・AC6：一覧から開く。既に開いている場所を選んだら、新しく作らずそこへ移る。 */
+test("worktree：一覧から開ける。既に開いている worktree を選んでも増えない（AC5・AC6）", async ({ page, appServer }) => {
+  const client = await appServer.openClient();
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  const repo = await makePlainRepo();
+  const created = client.waitForEvent("workspace.created");
+  await client.request("workspace.create", { cwd: repo, label: "wt-repo" });
+  const repoWs = (await created).data.workspace;
+  expect(repoWs.cwd).toBe(repo);
+  await page.locator(".sidebar-spaces .sidebar-row").filter({ hasText: "wt-repo" }).click();
+
+  // 先に 1 つ作っておく。
+  await focusTerminal(page);
+  await prefixKey(page, "G");
+  await expect(page.locator(".worktree-dialog")).toBeVisible();
+  const madeWs = client.waitForEvent("workspace.created", (e) => e.data.workspace.id !== repoWs.id);
+  await page.keyboard.press("Enter");
+  const made = (await madeWs).data.workspace;
+  await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(3);
+
+  // メニューから一覧を開く（`workspace.git` が埋まるのを待つ——5 秒周期）。
+  const row = page.locator(".sidebar-spaces .sidebar-row").filter({ hasText: "wt-repo" });
+  const openList = async (): Promise<void> => {
+    await row.click({ button: "right" });
+    await expect(page.locator(".context-menu")).toBeVisible();
+  };
+  await expect
+    .poll(
+      async () => {
+        await openList();
+        const has = (await page.locator(".context-menu").getByRole("menuitem", { name: "worktree を開く…" }).count()) > 0;
+        if (!has) await page.keyboard.press("Escape");
+        return has;
+      },
+      { timeout: 15_000, message: "git の情報が届くとメニューに worktree の項目が出る" },
+    )
+    .toBe(true);
+  await page.locator(".context-menu").getByRole("menuitem", { name: "worktree を開く…" }).click();
+
+  const list = page.locator(".worktree-open-dialog");
+  await expect(list).toBeVisible();
+
+  // 選択中の行に**ポインタが乗っても選択色が消えない**（review ラウンド1）。
+  // `:hover` と `-selected` の詳細度がそろっていないと、↑↓ で選んで Enter という主操作で
+  // どれが確定されるか読めなくなる。実物の CSS でしか確かめられないのでここで見る。
+  const selectedItem = list.locator(".worktree-open-dialog-item-selected");
+  const selectedBg = await selectedItem.evaluate((el) => getComputedStyle(el).backgroundColor);
+  await selectedItem.hover();
+  expect(await selectedItem.evaluate((el) => getComputedStyle(el).backgroundColor), "hover しても選択色のまま").toBe(selectedBg);
+  const otherBg = await list
+    .locator(".worktree-open-dialog-item:not(.worktree-open-dialog-item-selected)")
+    .first()
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(selectedBg, "選択色は非選択の行と違う").not.toBe(otherBg);
+
+  // 既に開いている worktree を選ぶ（AC6）。workspace は増えず、**その workspace へ表示が移る**。
+  await list.locator(".worktree-open-dialog-item").filter({ hasText: made.cwd }).click();
+  await expect(list).toBeHidden();
+  await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(3);
+  // 「移る」側もブラウザで観測する（条項 e2e-observe-browser）。表示中の行は 1 つだけで、それが選んだ worktree。
+  const current = page.locator(".sidebar-spaces .sidebar-row[aria-current='true']");
+  await expect(current).toHaveCount(1);
+  await expect(current).toHaveText(new RegExp(made.label));
 });

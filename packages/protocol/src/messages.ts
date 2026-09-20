@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Pane, SessionSnapshot, Tab, Workspace } from "./model.js";
+import type { Pane, SessionSnapshot, Tab, Workspace, WorktreeEntry } from "./model.js";
 
 /**
  * 方式（method）の定義。design.md「WebSocket の通信」の表と、architecture.md「方式の追加と変更」
@@ -152,6 +152,32 @@ export type LayoutSetSplitRatioParams = z.infer<typeof LayoutSetSplitRatioParams
 
 // --- registry (params の型から result の型を引くための対応表) ---------------
 
+// --- worktree（20260920-git-worktree-actions）---------------------------
+
+/**
+ * `worktree.list` は**「開く」と「作る」の両方の入口**（herdr と同じ）。
+ * 作るときも先に呼ぶのは、パスのプレビューに `worktreeRoot` と `repoName` が要るため。
+ */
+export const WorktreeListParams = z.object({ workspaceId });
+export type WorktreeListParams = z.infer<typeof WorktreeListParams>;
+export interface WorktreeListResult {
+  /** 作成先の根（`/` 区切りに正規化済み）。 */
+  worktreeRoot: string;
+  /** 作成先の 2 段目に使うリポジトリの名前。 */
+  repoName: string;
+  /** 自動生成したブランチ名の候補（入力欄の初期値）。 */
+  suggestedBranch: string;
+  entries: WorktreeEntry[];
+}
+
+/** 作るだけで workspace は開かない（開くのは `workspace.create` の仕事）。 */
+export const WorktreeCreateParams = z.object({ workspaceId, branch: z.string().min(1) });
+export type WorktreeCreateParams = z.infer<typeof WorktreeCreateParams>;
+export interface WorktreeCreateResult {
+  /** 作られた作業ツリーのパス。呼び出し側はここを cwd に `workspace.create` する。 */
+  path: string;
+}
+
 export const METHOD_SCHEMAS = {
   "client.hello": ClientHelloParams,
   "client.view": ClientViewParams,
@@ -177,6 +203,8 @@ export const METHOD_SCHEMAS = {
   "pane.resize": PaneResizeParams,
   "pane.input.set": PaneInputSetParams,
   "layout.set_split_ratio": LayoutSetSplitRatioParams,
+  "worktree.list": WorktreeListParams,
+  "worktree.create": WorktreeCreateParams,
 } as const;
 
 export type MethodName = keyof typeof METHOD_SCHEMAS;
@@ -206,6 +234,8 @@ export interface MethodResultMap {
   "pane.resize": Record<string, never>;
   "pane.input.set": Record<string, never>;
   "layout.set_split_ratio": Record<string, never>;
+  "worktree.list": WorktreeListResult;
+  "worktree.create": WorktreeCreateResult;
 }
 
 export type ParamsOf<M extends MethodName> = z.infer<(typeof METHOD_SCHEMAS)[M]>;

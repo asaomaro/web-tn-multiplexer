@@ -12,6 +12,9 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 - **後続:◯◯** = `.aidev/backlog/product-roadmap.md` の同名の項目へ回した（この work の対象外）
 - **非対応** = 本製品では扱わない（理由つき）
 - **読み替え** = herdr と前提が違う（Web ブラウザ・複数クライアント等）ため、同じ目的を別の形で満たす
+- **work の slug**（`20260920-…` 等）= MVP の後に、その work で作った。
+  **「対応 AC」欄はその work の `requirements.md` の ID を指す**——MVP 行の AC（20260918 の体系）とは別物なので、
+  どの work の AC かを欄に併記する
 
 ## 対応表
 
@@ -53,7 +56,8 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 | H34 | 複数クライアントの同時接続とサイズの決め方 | MVP | AC9 |
 | H35 | モバイル向けの1列表示と移動用メニュー | MVP | AC12 |
 | H36 | 新規 pane の既定シェル・起動モード・cwd の方針 | MVP（既定の挙動だけ） | AC3（分割時の cwd 引き継ぎ） |
-| H37 | Git worktree の作成・一覧・削除とグループ化 | 後続:workspace のグルーピング | — |
+| H37 | Git worktree の作成と一覧（workspace のメニュー・`prefix+G`） | 20260920-git-worktree-actions | AC1〜AC6（同 work） |
+| H37b | Git worktree の削除とグループ化 | 後続:workspace のグルーピング | — |
 | H38 | CLI / socket API（workspace・tab・pane・agent の操作） | 後続:外部操作 API / CLI | — |
 | H39 | エージェント自動化（`agent start`／`prompt --wait` 等） | 後続:外部操作 API / CLI | — |
 | H40 | pane 単体接続・閲覧専用購読・制御ストリーム | 後続:外部操作 API / CLI | — |

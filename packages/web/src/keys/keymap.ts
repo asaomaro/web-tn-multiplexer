@@ -14,7 +14,6 @@ const NOT_YET: [string, Action][] = [
   ["s", { type: "notYet", work: "外観と設定" }],
   ["R", { type: "notYet", work: "外観と設定" }],
   ["o", { type: "notYet", work: "通知" }],
-  ["G", { type: "notYet", work: "グルーピング" }],
   ["e", { type: "notYet", work: "端末機能の拡張" }],
 ];
 
@@ -53,6 +52,8 @@ export const DEFAULT_KEYMAP: Keymap = new Map<string, Action>([
   ["N", { type: "newWorkspace" }],
   ["W", { type: "renameWorkspace" }],
   ["D", { type: "closeWorkspace" }],
+  // worktree（20260920-git-worktree-actions）。herdr の `new_worktree` の既定も prefix+shift+g。
+  ["G", { type: "newWorktree" }],
   ["w", { type: "enterMode", mode: "navigate" }],
   // 共通
   ["?", { type: "help" }],

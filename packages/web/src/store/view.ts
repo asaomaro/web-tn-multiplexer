@@ -1,4 +1,4 @@
-import type { SessionFocus } from "@wtm/protocol";
+import type { SessionFocus, WorktreeEntry, WorktreeListResult } from "@wtm/protocol";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { Mode } from "../keys/actions.js";
@@ -78,7 +78,10 @@ export type DialogContext =
   | { kind: "renameWorkspace"; workspaceId: string; currentLabel: string }
   | { kind: "confirmClose"; targets: { type: "pane" | "tab" | "workspace"; id: string }[] }
   | { kind: "help" }
-  | { kind: "goto" };
+  | { kind: "goto" }
+  // worktree（20260920-git-worktree-actions）。**サーバへ聞いてから開く**ので、開く時点で中身が揃っている。
+  | { kind: "worktreeCreate"; workspaceId: string; info: WorktreeListResult }
+  | { kind: "worktreeOpen"; workspaceId: string; entries: WorktreeEntry[] };
 
 /**
  * このクライアントの表示・モード・接続状態（architecture.md「store/view」）。

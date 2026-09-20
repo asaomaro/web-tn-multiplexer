@@ -31,6 +31,8 @@ function makeActions() {
     renameWorkspaceById: vi.fn(),
     closeWorkspaceById: vi.fn(),
     run: vi.fn(),
+    newWorktree: vi.fn(),
+    openWorktree: vi.fn(),
   };
 }
 
@@ -40,8 +42,8 @@ function makePane(id: string, overrides: Partial<Pane> = {}): Pane {
 function makeTab(id: string, workspaceId: string): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId: "p1" }, focusedPaneId: "p1", zoomedPaneId: null, sizeOwnerClientId: null };
 }
-function makeWorkspace(id: string): Workspace {
-  return { id, label: id, cwd: "/", tabIds: [], activeTabId: "", groupId: null, git: null };
+function makeWorkspace(id: string, overrides: Partial<Workspace> = {}): Workspace {
+  return { id, label: id, cwd: "/", tabIds: [], activeTabId: "", groupId: null, git: null, ...overrides };
 }
 
 function mountMenu(actions: ReturnType<typeof makeActions>, registry?: { focus: (paneId: string) => void }) {
@@ -135,13 +137,39 @@ describe("ContextMenu — tab", () => {
 });
 
 describe("ContextMenu — workspace", () => {
-  it("名前の変更・閉じるの 2 項目のみ（herdr の worktree 対応は本製品では扱わない。D56 の訂正 10）", () => {
+  // 20260920-git-worktree-actions：git かどうかで 2 パターンになった（以前は常に 2 項目固定）。
+  it("git リポジトリでなければ、名前の変更・閉じるの 2 項目だけ（AC8）", () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1"));
+    session.workspaceUpserted(makeWorkspace("w1")); // git: null
     view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
     const wrapper = mountMenu(makeActions());
     expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる"]);
+  });
+
+  it("git リポジトリなら worktree の 2 項目が増える（AC1・AC8）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0 } }));
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(makeActions());
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる", "新しい worktree", "worktree を開く…"]);
+  });
+
+  it("worktree の項目は、それぞれの入口を呼ぶ", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0 } }));
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(actions);
+    await wrapper.findAll("li")[2]!.trigger("click");
+    expect(actions.newWorktree).toHaveBeenCalledWith("w1");
+
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const reopened = mountMenu(actions);
+    await reopened.findAll("li")[3]!.trigger("click");
+    expect(actions.openWorktree).toHaveBeenCalledWith("w1");
   });
 });
 

@@ -13,6 +13,7 @@ import { DefaultClientRegistry } from "../../clients/ClientRegistry.js";
 import { DefaultSizeAuthority } from "../../clients/SizeAuthority.js";
 import { ControlSurface } from "../ControlSurface.js";
 import { registerAllMethods } from "./index.js";
+import type { WorktreeService } from "../../git/WorktreeService.js";
 
 class FakeFanout implements OutputFanout {
   readonly subscribed: string[] = [];
@@ -106,7 +107,7 @@ function makeContext() {
   const clients = new DefaultClientRegistry();
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(new MemoryLogger());
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals });
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees() });
   return { terminals, session, clients, surface };
 }
 
@@ -231,3 +232,11 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
     expect(ctx.session.snapshot().workspaces[0]!.id).not.toBe(workspace.id);
   });
 });
+
+/** worktree の方式は別のテストで確かめるので、ここでは呼ばれない代役を置く（20260920-git-worktree-actions）。 */
+function stubWorktrees(): WorktreeService {
+  return {
+    list: () => Promise.reject(new Error("not used in this test")),
+    create: () => Promise.reject(new Error("not used in this test")),
+  };
+}
