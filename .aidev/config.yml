@@ -1,0 +1,6 @@
+# aidev 設定（キー一覧: ~/.claude/skills/aidev-docs/bin/README.md の設定表）
+# 起動確認（smoke）: design（20260918-web-terminal-multiplexer の D15・D3）で決めた。
+# ビルドしたサーバを空きポートで起動し、正規のログイン → workspace 作成 → echo の往復を確かめて終了する。
+smokeCommand: pnpm -s build && pnpm -s smoke
+smokeTimeoutSec: 180
+tracker: none

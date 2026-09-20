@@ -1,0 +1,11 @@
+schema: 11
+slug: 04-mobile
+parent: 20260918-web-terminal-multiplexer
+current: review
+approved: [tasks, coding, test, review]
+mode: interactive
+profile: full
+humanGates: []
+maxSendBacks: 3
+dependsOn: [03-web-desktop]
+harnessRev: unknown
