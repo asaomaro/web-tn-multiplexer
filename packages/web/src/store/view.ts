@@ -1,0 +1,231 @@
+import type { SessionFocus } from "@wtm/protocol";
+import { defineStore } from "pinia";
+import { computed, ref } from "vue";
+import type { Mode } from "../keys/actions.js";
+import type { ConnectionState } from "../net/ports.js";
+import type { MenuTarget } from "../term/MouseBridge.js";
+
+const STORAGE_KEY = "wtm.view.v1";
+
+export interface StoredView {
+  workspaceId: string;
+  tabId: string;
+}
+
+function loadStoredView(): StoredView | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && "workspaceId" in parsed && "tabId" in parsed) return parsed as StoredView;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredView(v: StoredView): void {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+  } catch {
+    // 保存できなくても致命的ではない（次回は再度 focus から決める）。
+  }
+}
+
+let nextToastId = 1;
+export interface Toast {
+  id: number;
+  message: string;
+}
+
+/**
+ * 開いているダイアログの種類ごとの文脈（T17・T18・T23〜T25 が使う）。`openDialog` は
+ * `KeyRouter`/`KeyInputController` へ渡すモード名（"dialog"）との対応用の軽い印。
+ */
+export type DialogContext =
+  | { kind: "newTab"; workspaceId: string }
+  | { kind: "renamePane"; paneId: string; currentLabel: string }
+  | { kind: "renameTab"; tabId: string; currentLabel: string }
+  | { kind: "renameWorkspace"; workspaceId: string; currentLabel: string }
+  | { kind: "confirmClose"; targets: { type: "pane" | "tab" | "workspace"; id: string }[] }
+  | { kind: "help" }
+  | { kind: "goto" };
+
+/**
+ * このクライアントの表示・モード・接続状態（architecture.md「store/view」）。
+ * workspace/tab/pane の**構造**は `store/session` の担当——ここは「このブラウザが今どこを見ているか」だけ。
+ */
+export const useViewStore = defineStore("view", () => {
+  const workspaceId = ref<string | null>(null);
+  const tabId = ref<string | null>(null);
+  const focusedPaneId = ref<string | null>(null);
+
+  const mode = ref<Mode>("terminal");
+  const openDialog = ref<string | null>(null);
+  const dialogContext = ref<DialogContext | null>(null);
+  /** ダイアログを開く前にフォーカスしていた pane（AC-I4「閉じたら開く前の pane に戻す」）。 */
+  const preDialogFocusPaneId = ref<string | null>(null);
+  /** navigate モード中に選択中の workspace（`↑/↓` で動かす。Enter で確定）。 */
+  const navigateSelection = ref<string | null>(null);
+  const contextMenu = ref<{ target: MenuTarget; at: { x: number; y: number } } | null>(null);
+  const connectionState = ref<ConnectionState>("connecting");
+  const authRequired = ref(false);
+  /**
+   * `onAuthRequired` が呼ばれた回数（D105）。`authRequired` が既に true のまま呼ばれても（ログインの直後の `/api/session`
+   * が 401・`/ws` が 4401 等）変わるので、ログイン画面が「ログインできた、接続中…」の待ちから戻る合図にする。
+   * `authRequired` の意味（`open` になるまで下ろさない）は変えない。
+   */
+  const authRequiredCount = ref(0);
+  /**
+   * 繋ぎ直しで、`/api/session` は通るのに WebSocket だけが開く前に閉じる試みが続いている（D107。`StorePort.onOriginRejectSuspected`）。
+   * `ReconnectOverlay` が「再接続中…」に、サーバがこのページの Origin を拒否しているかもしれないという手がかりを添える。
+   */
+  const originRejectSuspected = ref(false);
+  const sidebarCollapsed = ref(false);
+  const toasts = ref<Toast[]>([]);
+
+  /**
+   * `client.hello` 直後の表示（design「フォーカスと表示」）。前回の tab がまだあればそれ、無ければサーバの
+   * focus。`findTabFocusedPaneId` は「その tab がまだ存在するか」と「その tab の（サーバ全体で最後に
+   * フォーカスされた）pane」を同時に返す——前回の tab を復元したときも、その tab の pane へ
+   * フォーカスを合わせる必要があるため（AC-I3。ページの再読み込み（F5）のたびに一度クリックし直さないと
+   * キーボード操作を再開できない、という不具合を review で発見。修正）。
+   */
+  function restoreView(findTabFocusedPaneId: (workspaceId: string, tabId: string) => string | null, serverFocus: SessionFocus | null): void {
+    const stored = loadStoredView();
+    if (stored) {
+      const paneId = findTabFocusedPaneId(stored.workspaceId, stored.tabId);
+      if (paneId !== null) {
+        setView(stored.workspaceId, stored.tabId);
+        focusedPaneId.value = paneId;
+        return;
+      }
+    }
+    if (serverFocus) {
+      setView(serverFocus.workspaceId, serverFocus.tabId);
+      focusedPaneId.value = serverFocus.paneId;
+    }
+  }
+
+  function setView(newWorkspaceId: string, newTabId: string): void {
+    workspaceId.value = newWorkspaceId;
+    tabId.value = newTabId;
+    saveStoredView({ workspaceId: newWorkspaceId, tabId: newTabId });
+  }
+
+  function focusPane(paneId: string | null): void {
+    focusedPaneId.value = paneId;
+  }
+
+  function onModeChange(m: Mode): void {
+    mode.value = m;
+  }
+
+  function setOpenDialog(name: string | null): void {
+    openDialog.value = name;
+  }
+
+  /** ダイアログを開く（現在の focus を覚えておく。T18/T23〜T25 が使う）。 */
+  function openDialogWithContext(ctx: DialogContext): void {
+    preDialogFocusPaneId.value = focusedPaneId.value;
+    dialogContext.value = ctx;
+    openDialog.value = ctx.kind;
+  }
+
+  /**
+   * ダイアログを開いている間の焦点の移し直し（D97）。開いている間に「開く前の pane」が閉じられたら、閉じたときに
+   * 戻す先だけを差し替える——`focusedPaneId` を直接変えると、その pane の `TerminalPane` が `term.focus()` して
+   * ダイアログの入力欄からフォーカスを奪ってしまう。
+   */
+  function retargetPreDialogFocus(paneId: string | null): void {
+    preDialogFocusPaneId.value = paneId;
+  }
+
+  /** ダイアログを閉じる（確定・取り消しのどちらでも呼ぶ）。開く前の pane へフォーカスを戻す（AC-I4）。 */
+  function closeDialog(): void {
+    dialogContext.value = null;
+    openDialog.value = null;
+    if (preDialogFocusPaneId.value) focusedPaneId.value = preDialogFocusPaneId.value;
+    preDialogFocusPaneId.value = null;
+  }
+
+  function setNavigateSelection(workspaceId2: string | null): void {
+    navigateSelection.value = workspaceId2;
+  }
+
+  function openContextMenu(target: MenuTarget, at: { x: number; y: number }): void {
+    contextMenu.value = { target, at };
+  }
+
+  function closeContextMenu(): void {
+    contextMenu.value = null;
+  }
+
+  function onConnectionState(s: ConnectionState): void {
+    connectionState.value = s;
+    // `rejected`（`/api/session` が 403 で `/ws` も開く前に閉じた）も下ろす：サーバは Cookie を先に確かめ、無効なら Host を問わず
+    // 401 を返すので、403 は Cookie が有効な証拠（サーバの D106）。ログイン画面の「接続中…」のまま止めず、本体の重ね表示で理由を示す（D107）。
+    if (s === "open" || s === "rejected") authRequired.value = false;
+  }
+
+  function setOriginRejectSuspected(suspected: boolean): void {
+    originRejectSuspected.value = suspected;
+  }
+
+  function onAuthRequired(): void {
+    authRequired.value = true;
+    authRequiredCount.value++;
+  }
+
+  function toggleSidebar(): void {
+    sidebarCollapsed.value = !sidebarCollapsed.value;
+  }
+
+  function toast(message: string): number {
+    const id = nextToastId++;
+    toasts.value = [...toasts.value, { id, message }];
+    return id;
+  }
+
+  function dismissToast(id: number): void {
+    toasts.value = toasts.value.filter((t) => t.id !== id);
+  }
+
+  const isPrefixWaiting = computed(() => mode.value === "prefix");
+
+  return {
+    workspaceId,
+    tabId,
+    focusedPaneId,
+    preDialogFocusPaneId,
+    mode,
+    openDialog,
+    dialogContext,
+    navigateSelection,
+    contextMenu,
+    connectionState,
+    authRequired,
+    authRequiredCount,
+    originRejectSuspected,
+    sidebarCollapsed,
+    toasts,
+    isPrefixWaiting,
+    restoreView,
+    setView,
+    focusPane,
+    onModeChange,
+    setOpenDialog,
+    openDialogWithContext,
+    closeDialog,
+    retargetPreDialogFocus,
+    setNavigateSelection,
+    openContextMenu,
+    closeContextMenu,
+    onConnectionState,
+    onAuthRequired,
+    setOriginRejectSuspected,
+    toggleSidebar,
+    toast,
+    dismissToast,
+  };
+});

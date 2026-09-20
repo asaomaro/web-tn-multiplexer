@@ -1,0 +1,282 @@
+import type { MethodName, ParamsOf, ResultOf, Tab, Workspace } from "@wtm/protocol";
+import { mount } from "@vue/test-utils";
+import { createPinia, type Pinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import App from "./App.vue";
+import { ActionDispatcher } from "./actions/ActionDispatcher.js";
+import { ActionDispatcherKey, ConnectionKey, KeyInputControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
+import { KeyInputController } from "./keys/KeyInputController.js";
+import { KeyRouter, type KeyRouterClock } from "./keys/KeyRouter.js";
+import { DEFAULT_KEYMAP } from "./keys/keymap.js";
+import type { ConnectionPort } from "./net/ports.js";
+import { useSessionStore } from "./store/session.js";
+import { useViewStore } from "./store/view.js";
+import { MouseBridge } from "./term/MouseBridge.js";
+import { RendererPool, type WebglAddonLike } from "./term/RendererPool.js";
+import { TerminalRegistry } from "./term/TerminalRegistry.js";
+import { ViewSync } from "./term/ViewSync.js";
+
+/**
+ * App.vue の切り替え（T26）。main.ts の配線を模して、実物の KeyRouter・TerminalRegistry・ActionDispatcher を
+ * 組み立てる（ActionDispatcher.test.ts の `makeDispatcher` と同じ手法）。
+ */
+let pinia: Pinia;
+
+beforeEach(() => {
+  sessionStorage.clear();
+  pinia = createPinia();
+});
+afterEach(() => {
+  document.body.innerHTML = "";
+});
+
+function makeConnection(): ConnectionPort {
+  return {
+    request<M extends MethodName>(_method: M, _params: ParamsOf<M>): Promise<ResultOf<M>> {
+      return Promise.resolve({} as ResultOf<M>);
+    },
+    sendInput: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
+    connect: vi.fn(),
+  };
+}
+
+function realClock(): KeyRouterClock {
+  return { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) };
+}
+
+class FakeWebglAddon implements WebglAddonLike {
+  activate(): void {}
+  dispose(): void {}
+  onContextLoss(): { dispose(): void } {
+    return { dispose: () => undefined };
+  }
+}
+
+function makeProvide(conn: ConnectionPort) {
+  const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
+  const keys = new KeyInputController(router, conn);
+  const renderers = new RendererPool({ capacity: 100, createWebglAddon: () => new FakeWebglAddon() });
+  const registry = new TerminalRegistry({
+    capacity: 100,
+    conn,
+    renderers,
+    keys,
+    createMouseBridge: (term, paneId) => new MouseBridge({ term, paneId, ui: { toast: () => undefined, openContextMenu: () => undefined }, getRightClickTarget: () => "herdr" }),
+  });
+  const actionDispatcher = new ActionDispatcher({ conn, pinia, registry, keys });
+  const view = useViewStore(pinia);
+  keys.bind({ action: actionDispatcher, focus: actionDispatcher, mode: { onModeChange: (m) => view.onModeChange(m) } });
+  const viewSync = new ViewSync({ conn, registry, getScrollbackLines: () => 5000 });
+  return {
+    viewSync,
+    global: {
+      plugins: [pinia],
+      provide: {
+        [ConnectionKey as symbol]: conn,
+        [ActionDispatcherKey as symbol]: actionDispatcher,
+        [TerminalRegistryKey as symbol]: registry,
+        [ViewSyncKey as symbol]: viewSync,
+        [KeyInputControllerKey as symbol]: keys,
+      },
+    },
+  };
+}
+
+function makeWorkspace(id: string, tabIds: string[]): Workspace {
+  return { id, label: id, cwd: "/", tabIds, activeTabId: tabIds[0] ?? "", groupId: null, git: null };
+}
+function makeTab(id: string, workspaceId: string, paneId: string): Tab {
+  return { id, workspaceId, label: id, layout: { type: "pane", paneId }, focusedPaneId: paneId, zoomedPaneId: null, sizeOwnerClientId: null };
+}
+
+describe("App — 接続の状態での切り替え", () => {
+  it("authRequired なら LoginView", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    view.onAuthRequired();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".login-view").exists()).toBe(true);
+    expect(wrapper.find(".app-shell").exists()).toBe(false);
+  });
+
+  it("connectionState が detached なら DetachedView", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    view.onConnectionState("detached");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".detached-view").exists()).toBe(true);
+    expect(wrapper.find(".app-shell").exists()).toBe(false);
+  });
+
+  it("ログイン画面の「接続中…」の間に接続の確認が 403（rejected）になったら、本体へ替えて理由を重ねて出す（D107：止めたままにしない）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    view.onAuthRequired();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".login-view").exists()).toBe(true);
+    view.onConnectionState("connecting"); // ログインできて connect() した
+    view.onConnectionState("rejected"); // /api/session が 403
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".login-view").exists()).toBe(false);
+    expect(wrapper.find(".app-shell").exists()).toBe(true);
+    expect(wrapper.find(".reconnect-overlay-command").text()).toBe(`--origin ${window.location.origin}`);
+  });
+
+  it("それ以外は本体（Sidebar・TabBar 等）を出す", () => {
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    expect(wrapper.find(".app-shell").exists()).toBe(true);
+    expect(wrapper.find(".sidebar").exists()).toBe(true);
+    expect(wrapper.find(".tab-bar").exists()).toBe(true);
+  });
+
+  it("画面幅が 768px 未満なら MobileShell を出す（04-mobile T8。isMobileViewport）", () => {
+    const spy = vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    expect(wrapper.find(".mobile-shell").exists()).toBe(true);
+    expect(wrapper.find(".sidebar").exists()).toBe(false);
+    spy.mockRestore();
+  });
+});
+
+describe("App — pane の描画", () => {
+  it("現在の tab があれば PaneLayout 経由で TerminalPane を描く", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+    view.setView("w1", "t1");
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".xterm").exists()).toBe(true);
+  });
+
+  /** D110（design M7 の後半）：デスクトップは pane ごとに枠を描き、枠の右クリックは `rightClick: 'pane'` の pane でもメニューを開く。 */
+  it("デスクトップは pane の枠を描き、枠の右クリックで（「pane に送る」にした pane でも）pane のメニューが開く", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "pane", agent: null });
+    view.setView("w1", "t1");
+    const wrapper = mount(App, { ...makeProvide(makeConnection()), attachTo: document.body });
+    await wrapper.vm.$nextTick();
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.element.parentElement!.contains(wrapper.get(".xterm").element)).toBe(true); // その pane の枠
+    edge.element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 3, clientY: 4 }));
+    await wrapper.vm.$nextTick();
+    expect(view.contextMenu).toEqual({ target: { kind: "pane", paneId: "p1" }, at: { x: 3, y: 4 } });
+    expect(wrapper.get(".context-menu").text()).toContain("herdr のメニューを使う"); // 「pane に送る」を戻す項目
+    wrapper.unmount();
+  });
+
+  it("モバイル（MobileShell）は pane の枠を描かない", async () => {
+    // xterm.js も matchMedia（古い addListener）を使うので、それも持たせる。
+    const spy = vi
+      .spyOn(window, "matchMedia")
+      .mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn() } as unknown as MediaQueryList);
+    try {
+      const session = useSessionStore(pinia);
+      const view = useViewStore(pinia);
+      session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+      session.tabUpserted(makeTab("t1", "w1", "p1"));
+      session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+      view.setView("w1", "t1");
+      view.focusPane("p1"); // MobileShell はフォーカス中の pane を描く
+      const wrapper = mount(App, makeProvide(makeConnection()));
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find(".mobile-shell").exists()).toBe(true);
+      expect(wrapper.find(".xterm").exists()).toBe(true);
+      expect(wrapper.find(".pane-frame-edge").exists()).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+/**
+ * D107（統合 review ラウンド1 で発見）：再接続の後に表示と購読を張り直す。main.ts の配線（`Connection.onOpened` →
+ * `ViewSync.onConnectionOpened`）を模して、実物の ViewSync・TerminalRegistry・PaneLayout（root が付ける commit の関数）で確かめる。
+ */
+describe("App — 再接続の後の表示と購読の張り直し（D107）", () => {
+  function makeRecordingConnection(): ConnectionPort & { requests: [MethodName, unknown][] } {
+    const requests: [MethodName, unknown][] = [];
+    return {
+      requests,
+      request<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+        requests.push([method, params]);
+        return Promise.resolve({} as ResultOf<M>);
+      },
+      sendInput: vi.fn(),
+      login: vi.fn(),
+      logout: vi.fn(),
+      connect: vi.fn(),
+    };
+  }
+
+  it("新しい接続の hello が通ったら、同じ表示でも client.view を送り直し、表示中の pane を購読し直す（xterm.js は作り直さない）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+    view.setView("w1", "t1");
+    view.onConnectionState("open");
+    const conn = makeRecordingConnection();
+    const provide = makeProvide(conn);
+    provide.viewSync.onConnectionOpened(); // 最初の接続の hello（main.ts が Connection.onOpened につなぐ）
+    const wrapper = mount(App, provide);
+    await wrapper.vm.$nextTick();
+    expect(conn.requests.map(([m]) => m)).toEqual(["client.view", "pane.subscribe"]);
+    const xtermBefore = wrapper.find(".xterm").element;
+
+    // 切断 → 再接続（本体は出たまま）。hello の snapshot は同じ構成。
+    conn.requests.length = 0;
+    provide.viewSync.onConnectionClosed(); // main.ts が Connection.onClosed につなぐ
+    view.onConnectionState("reconnecting");
+    await wrapper.vm.$nextTick();
+    view.onConnectionState("open");
+    provide.viewSync.onConnectionOpened(); // main.ts が Connection.onOpened につないでいる
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(conn.requests).toEqual([
+      ["client.view", { workspaceId: "w1", tabId: "t1", visible: [expect.objectContaining({ paneId: "p1" })] }],
+      ["pane.subscribe", { paneId: "p1", scrollbackLines: 5000 }],
+    ]);
+    expect(wrapper.find(".xterm").element).toBe(xtermBefore);
+  });
+
+  it("切り離し画面の「再接続」：本体が hello より前に描かれて送れなかった分があっても、hello の後に送り直す", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+    view.setView("w1", "t1");
+    view.onConnectionState("open");
+    const conn = makeRecordingConnection();
+    const provide = makeProvide(conn);
+    provide.viewSync.onConnectionOpened(); // 最初の接続の hello（main.ts が Connection.onOpened につなぐ）
+    const wrapper = mount(App, provide);
+    await wrapper.vm.$nextTick();
+
+    provide.viewSync.onConnectionClosed();
+    view.onConnectionState("detached"); // prefix+q
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".detached-view").exists()).toBe(true);
+    conn.requests.length = 0;
+    view.onConnectionState("connecting"); // 「再接続」：本体が描き直されるが、hello はまだ（何も送らない。D107）
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".xterm").exists()).toBe(true);
+    expect(conn.requests).toEqual([]);
+
+    conn.requests.length = 0;
+    view.onConnectionState("open");
+    provide.viewSync.onConnectionOpened();
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(conn.requests.map(([m]) => m)).toEqual(["client.view", "pane.subscribe"]);
+  });
+});
