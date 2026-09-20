@@ -94,6 +94,20 @@ export class TerminalRegistry implements TerminalSinkPort {
     this.visible.delete(paneId);
   }
 
+  /**
+   * その pane が**いま画面に出ているか**（20260920-agent-notifications の AC3）。
+   * `visible` は `TerminalPane.vue` の `onMounted`／`onBeforeUnmount` だけが出し入れするので、
+   * 「`TerminalPane` が DOM にマウントされている」と同義。zoom 中は 1 つ、モバイルは常に 1 つ、
+   * 切り離し・ログイン待ちでは `app-shell` ごと unmount されるので空になる——**どれも正しく出る**。
+   *
+   * **`visible` は Vue の reactive ではない**ので `watch` できない。知らせる直前に pull で読むこと。
+   * 読む側は **`await nextTick()` の後**に呼ぶ（mount/unmount のフックは Vue のパッチ後に走るので、
+   * 途中で読むと tab の切り替え中に空を拾う）。
+   */
+  isVisible(paneId: string): boolean {
+    return this.visible.has(paneId);
+  }
+
   evictIfNeeded(): void {
     if (this.entries.size <= this.opts.capacity) return;
     const evictable = [...this.entries.values()]

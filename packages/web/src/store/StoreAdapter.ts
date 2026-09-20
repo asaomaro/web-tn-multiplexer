@@ -1,4 +1,4 @@
-import type { ServerEvent, SessionSnapshot } from "@wtm/protocol";
+import type { AgentInfo, ServerEvent, SessionSnapshot } from "@wtm/protocol";
 import type { Pinia } from "pinia";
 import type { ConnectionState, StorePort } from "../net/ports.js";
 import { useSessionStore } from "./session.js";
@@ -15,6 +15,20 @@ export interface StoreAdapterOptions {
   onClientError?: (code: string, message: string) => void;
   /** `StorePort.onOriginRejectSuspected`（D107）。省略可（省けば手がかりを出さない）。 */
   onOriginRejectSuspected?: (suspected: boolean) => void;
+  /**
+   * エージェントの状態が変わった（20260920-agent-notifications）。**`prev` は本物の前の値**——
+   * `session` は前の値を持たないので、ここで更新の直前に読んで渡す。
+   * `next` は `null` を取りうる（`PaneAgentStatusChangedEvent.data.agent`）。省略可。
+   */
+  onAgentChanged?: (paneId: string, prev: AgentInfo | null, next: AgentInfo | null) => void;
+  /**
+   * スナップショットを適用した（初回・再接続のたび）。**`first` は初回かどうか**——
+   * 初回は基準線にし、再接続では「まだ知らせていないもの」だけを知らせる（AC14）。
+   * `session.clientId` の有無では判定できない（再接続でも埋まる）ので、`StoreAdapter` 自身が持つ。省略可。
+   */
+  onSnapshotApplied?: (panes: { paneId: string; agent: AgentInfo | null }[], first: boolean) => void;
+  /** pane が閉じた。**`pane.exited` とは別のイベント**（待ち行列と判定済みの掃除に要る）。省略可。 */
+  onPaneClosed?: (paneId: string) => void;
 }
 
 /**
@@ -24,11 +38,20 @@ export interface StoreAdapterOptions {
  * （T26 で `store/view` の該当メソッドを bind する）。
  */
 export class StoreAdapter implements StorePort {
+  /** 最初のスナップショットを適用したか（`onSnapshotApplied` の `first`）。 */
+  #appliedSnapshot = false;
+
   constructor(private readonly opts: StoreAdapterOptions) {}
 
   applySnapshot(s: SessionSnapshot, clientId: string): void {
     const session = useSessionStore(this.opts.pinia);
     session.applySnapshot(s, clientId);
+    const first = !this.#appliedSnapshot;
+    this.#appliedSnapshot = true;
+    this.opts.onSnapshotApplied?.(
+      s.panes.map((p) => ({ paneId: p.id, agent: p.agent })),
+      first,
+    );
     // `client.hello` のたび（初回・再接続のたび）に表示を復元する（design「フォーカスと表示」）。
     // `view.restoreView`（T16）はここまで呼び出し元が無かった——T26 で結線した。
     useViewStore(this.opts.pinia).restoreView((workspaceId, tabId) => {
@@ -87,10 +110,17 @@ export class StoreAdapter implements StorePort {
         return;
       case "pane.closed":
         session.paneClosed(e.data.paneId);
+        this.opts.onPaneClosed?.(e.data.paneId);
         return;
-      case "pane.agent_status_changed":
+      case "pane.agent_status_changed": {
+        // **前の値はここでしか取れない**（`session` は履歴を持たない）。更新する前に読む。
+        // サーバは `pane.agent_status_changed` を `pane.updated` より**先に** publish するので
+        // （`packages/server/src/session/SessionService.ts:361-366`）、この時点の値は「変わる前」。
+        const prev = session.panes.get(e.data.paneId)?.agent ?? null;
         session.paneAgentStatusChanged(e.data.paneId, e.data.agent);
+        this.opts.onAgentChanged?.(e.data.paneId, prev, e.data.agent);
         return;
+      }
       case "pane.size_changed":
         session.paneSizeChanged(e.data.paneId, e.data.cols, e.data.rows);
         return;

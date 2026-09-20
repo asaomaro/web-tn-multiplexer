@@ -20,7 +20,18 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] エージェント対応の拡充: 主要数種以外の検出、herdr の integrations / plugins 相当 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] 複数ホストの集約: herdr の remote / several machines 相当。複数ホストのセッションを 1 画面に (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] ノードによるオーケストレーション: セッションをノード表示し、マウスで繋いで状態トリガ・出力受け渡し・監督関係を設定（外部操作 API の後） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
-- [ ] 通知: 完了・入力待ちのアプリ内トースト / OS 通知（HTTPS・PWA 前提）/ 音、通知の対象への移動（herdr prefix+o）〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
+- [x] 通知: 完了・入力待ちのアプリ内トースト / OS 通知 / 音、通知の対象への移動（herdr prefix+o）:
+      20260920-agent-notifications で対応。エージェントが**入力待ち**になった／**完了**したとき、
+      利用者の状態に応じて 3 経路を使い分ける（フォーカス無し→OS 通知・音・トースト／
+      フォーカス有りで pane 非表示→トーストだけ／見ている pane→何も出さない。
+      `packages/web/src/notify/policy.ts` の `routesFor`）。待ち行列は最大 8 件で
+      `prefix+o`・トーストの［移動］・OS 通知のクリックから対象へ移れる。
+      設定はサイドバーのメニュー・モバイルの上部バー・`prefix+s` の 3 入口。
+      実測: 実装 30 ファイル・単体 1359 件 / E2E 76 件 pass。
+      **PWA 化（ページを閉じている間の通知）・通知音の差し替え・エージェントごとの音は下の行に残っている**
+- [ ] 通知の残り: **PWA 化**（Service Worker ＋ Push。ページを閉じている間の通知）／
+      通知音の差し替え（herdr の `ui.sound.path` 等）／エージェントごとの音の入切
+      （herdr の `ui.sound.agents.<agent>`）／通知の履歴の一覧（出典: .aidev/works/20260920-agent-notifications/requirements.md の対象外）
 - [ ] 外観と設定: テーマと明暗の切替、サイドバー行のカスタマイズ、tab バーの状態表示、pane の枠の設定、設定画面・再読み込み〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）、エージェントの会話の再開、名前付き session、更新時の引き継ぎ〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
@@ -46,3 +57,9 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] workspace のメニューをキーボードから開く: Sidebar.vue の行に tabindex も keydown も無く、右クリック（マウス）でしか開けない。pane の枠だけ PaneFrame.vue で対応済み。「worktree を開く…」がキーだけで到達できない原因（AC-I3 の制限）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] Connection がエラーコードをプロパティで持つ: いまは new Error(`<code>: <message>`) の文字列で、web は書式を正規表現で読む（errorCodeOf）。書式が変わると黙って汎用の文言に落ちる（D4）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] Workspace.git の即時化: GitInfoPoller が 5 秒周期なので、workspace を作った直後は最大 5 秒 git が null で、メニューに worktree の項目が出ない（D3）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+- [ ] 既読（wtm.seen.v1）の意味論を直す: markVisibleAgentsSeen はウィンドウにフォーカスがあれば pane の表示を見ずに全 pane を既読にする（main.ts の「意図的な簡略化」）。結果、フォーカス中は displayStateFor が done を返せず、通知は「完了しました」と言うのにサイドバーに印が無い。正しい規則 shouldMarkSeen(paneVisible, windowFocused) は本番から一度も呼ばれていない。20260920-agent-notifications が TerminalRegistry.isVisible を足したので、結線できる前提が揃った（出典: .aidev/works/20260920-agent-notifications/decisions.md）
+- [ ] E2E 一式の安定性: 4 回走らせて 2 回、別々の spec が負荷で落ちた（workspace-tab-pane の時間切れ・mobile の D105）。どちらも単独では通る。先行 work から続く課題で、通知の 7 本が加わって所要が延びている。workers や timeout の見直し、または重い spec の分離（出典: .aidev/works/20260920-agent-notifications/decisions.md）
+- [ ] サイドバー幅・折りたたみ状態を保存する: UI は既にある（ドラッグで変えられる・prefix+b で畳める）のに ref() に置いているだけで、再読み込みのたびに 240px・展開に戻る。herdr は preferences に保存している。既存の wtm.prefs.v1 に 2 フィールド足すだけで済む（herdr 設定調査で投資対効果が最も高いと判断）（出典: .aidev/works/20260920-agent-notifications/research.md）
+- [ ] ブラウザから別のリポジトリの workspace を作れるようにする: 全 workspace がサーバの process.cwd() 固定で、web は workspace.create に cwd を送っていない。herdr の terminal.new_cwd 相当。設定というより機能の穴で、複数リポジトリを並行して見る使い方を塞いでいる（出典: .aidev/works/20260920-agent-notifications/research.md）
+- [ ] エージェントの状態表示を記号でも区別できるようにする: いまは色の点だけなので、色覚特性のある利用者に状態が読めない。herdr の ui.status_indicators = symbols 相当（blocked/working/done/idle/unknown に別々の字形）（出典: .aidev/works/20260920-agent-notifications/research.md）
+- [ ] scrollback をクライアント側から設定できるようにする: いまは --scrollback でサーバ起動時にしか決められず、モバイルは 1000 行にハードコード。「このブラウザだけ長く持ちたい／スマートフォンでは軽くしたい」に応えられない（出典: .aidev/works/20260920-agent-notifications/research.md）

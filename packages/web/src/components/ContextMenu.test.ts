@@ -175,11 +175,22 @@ describe("ContextMenu — workspace", () => {
 
 // 20260920-sidebar-tabbar-controls の AC4：サイドバーの「メニュー」から開く、どこにも属さない全体の操作。
 describe("ContextMenu — global", () => {
-  it("キー割り当て・移動・切り離しの 3 項目を、この順で出す", () => {
+  // 「通知の設定」は 20260920-agent-notifications で足した。**切り離しは最後のまま**
+  // （押し間違えると接続が切れるので、`ContextMenu.vue` のコメントがそう定めている）。
+  it("キー割り当て・移動・通知の設定・切り離しを、この順で出す", () => {
     const view = useViewStore(pinia);
     view.openContextMenu({ kind: "global" }, { x: 0, y: 0 });
     const wrapper = mountMenu(makeActions());
-    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["キー割り当て", "移動", "切り離し"]);
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["キー割り当て", "移動", "通知の設定", "切り離し"]);
+  });
+
+  it("「通知の設定」を選ぶと、キー操作と同じ action が渡る", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    view.openContextMenu({ kind: "global" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(actions);
+    await wrapper.findAll("li")[2]!.trigger("click");
+    expect(actions.run).toHaveBeenCalledWith({ type: "notifySettings" });
   });
 
   it("選ぶと、キー操作と同じ action が `run` に渡る", async () => {

@@ -6,7 +6,7 @@ import { createPinia } from "pinia";
 import { createApp, watch } from "vue";
 import App from "./App.vue";
 import { ActionDispatcher } from "./actions/ActionDispatcher.js";
-import { ActionDispatcherKey, ConnectionKey, KeyInputControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
+import { ActionDispatcherKey, ConnectionKey, KeyInputControllerKey, NotificationControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
 import { KeyInputController } from "./keys/KeyInputController.js";
 import { KeyRouter } from "./keys/KeyRouter.js";
 import { CopyMode } from "./keys/CopyMode.js";
@@ -15,6 +15,9 @@ import { ResizeMode } from "./keys/ResizeMode.js";
 import { DEFAULT_KEYMAP } from "./keys/keymap.js";
 import { isCoarsePointer } from "./mobile/detect.js";
 import { clientErrorMessage } from "./net/clientError.js";
+import { DesktopNotifier } from "./notify/DesktopNotifier.js";
+import { NotificationController } from "./notify/NotificationController.js";
+import { ToneSound } from "./notify/ToneSound.js";
 import { Connection } from "./net/Connection.js";
 import { InputGate } from "./net/InputGate.js";
 import type { ConnectionPort, TerminalSinkPort } from "./net/ports.js";
@@ -59,6 +62,8 @@ const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${wind
 // 本物の `TerminalRegistry` へ委譲する（箱自体は作った時点で確定するので `registry` を素の `let` にせず
 // 済む——呼び出しは実際に pane を購読した後＝配線が終わった後にしか起きない）。
 const registryBox: { current?: TerminalRegistry } = {};
+/** 通知（20260920-agent-notifications）。`StoreAdapter` より後に作るので、既存の箱と同じ流儀で繋ぐ。 */
+const notificationsBox: { current?: NotificationController } = {};
 const sinkProxy: TerminalSinkPort = {
   onOutput: (paneId, chunk) => registryBox.current?.onOutput(paneId, chunk),
   onSnapshot: (paneId, cols, rows, text) => registryBox.current?.onSnapshot(paneId, cols, rows, text),
@@ -73,6 +78,10 @@ const storeAdapter = new StoreAdapter({
   // サーバの英語の固定文（`message`）は出さず、code から日本語の文言を引く（D107）。
   onClientError: (code) => view.toast(clientErrorMessage(code)),
   onOriginRejectSuspected: (suspected) => view.setOriginRejectSuspected(suspected),
+  // 通知（20260920-agent-notifications）。**`notifications` はこの後で作る**ので、遅延で参照する。
+  onAgentChanged: (paneId, prev, next) => notificationsBox.current?.onAgentChanged(paneId, prev, next),
+  onSnapshotApplied: (panes, first) => notificationsBox.current?.onSnapshotApplied(panes, first),
+  onPaneClosed: (paneId) => notificationsBox.current?.onPaneClosed(paneId),
 });
 
 const connection = new Connection({ kind, httpOrigin, wsUrl, store: storeAdapter, sink: sinkProxy });
@@ -134,7 +143,26 @@ connection.onOpened(() => viewSync.onConnectionOpened());
 // 閉じてから次の hello が通るまでは、`client.view`・`pane.subscribe` を送らない（D107）。
 connection.onClosed(() => viewSync.onConnectionClosed());
 
-const actionDispatcher = new ActionDispatcher({ conn, pinia, registry, keys, input: inputGate });
+// 通知（20260920-agent-notifications）。`registry`（表示中の pane を引く）より後、
+// `ActionDispatcher`（`prefix+o` の行き先に使う）より前にしか置けない。
+const notifications = new NotificationController({
+  pinia,
+  desktop: new DesktopNotifier(),
+  sound: new ToneSound(),
+  isPaneVisible: (paneId) => registry.isVisible(paneId),
+  onFocusPane: (paneId) => void conn.request("pane.focus", { paneId }).catch(() => undefined),
+});
+// 利用者がトーストを消したのを拾う唯一の観測点（`sticky` は自動消去に掛からない）。
+watch(
+  () => view.toasts.map((t) => t.id),
+  () => notifications.syncToasts(),
+);
+// 案内は「見ていないタブに出して消費される」のを避けるため、フォーカスが戻ってから出す。
+window.addEventListener("focus", () => notifications.showHintIfDue());
+
+notificationsBox.current = notifications;
+
+const actionDispatcher = new ActionDispatcher({ conn, pinia, registry, keys, input: inputGate, notifications });
 actionDispatcherBox.current = actionDispatcher;
 keys.bind({ action: actionDispatcher, focus: actionDispatcher, mode: { onModeChange: (m) => view.onModeChange(m) } });
 
@@ -205,6 +233,7 @@ app.provide(ActionDispatcherKey, actionDispatcher);
 app.provide(TerminalRegistryKey, registry);
 app.provide(ViewSyncKey, viewSync);
 app.provide(KeyInputControllerKey, keys);
+app.provide(NotificationControllerKey, notifications);
 app.mount("#app");
 
 conn.connect();

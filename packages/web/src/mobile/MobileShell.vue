@@ -81,6 +81,9 @@ onBeforeUnmount(() => touchScroll?.dispose());
       <button type="button" class="mobile-shell-title" @click="showPicker = true">{{ workspaceLabel }} / {{ tabLabel }}</button>
       <button type="button" class="mobile-shell-fit-btn" :aria-pressed="fitEnabled" @click="toggleFit">この端末に合わせる</button>
       <button type="button" class="mobile-shell-keyboard-btn" :aria-pressed="showKeyboard" aria-label="キーボード" @click="showKeyboard = !showKeyboard">⌨</button>
+      <!-- 通知の設定（20260920-agent-notifications の AC16）。モバイルはサイドバーを描かないので、
+           ここが唯一の入口になる（キーボードも常には出ていない）。 -->
+      <button type="button" class="mobile-shell-notify-btn" aria-label="通知の設定" @click="view.openDialogWithContext({ kind: 'notifySettings' })">🔔</button>
     </header>
     <main ref="paneContainer" class="mobile-shell-pane">
       <div
@@ -145,6 +148,7 @@ onBeforeUnmount(() => touchScroll?.dispose());
 .mobile-shell-fit-btn[aria-pressed="true"] {
   background: var(--wtm-accent, #6272a4);
 }
+.mobile-shell-notify-btn,
 .mobile-shell-keyboard-btn {
   flex: none;
   font-size: 1.2em;

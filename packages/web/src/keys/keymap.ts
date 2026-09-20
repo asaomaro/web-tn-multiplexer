@@ -11,9 +11,7 @@ import type { Action } from "./actions.js";
 export type Keymap = ReadonlyMap<string, Action>;
 
 const NOT_YET: [string, Action][] = [
-  ["s", { type: "notYet", work: "外観と設定" }],
   ["R", { type: "notYet", work: "外観と設定" }],
-  ["o", { type: "notYet", work: "通知" }],
   ["e", { type: "notYet", work: "端末機能の拡張" }],
 ];
 
@@ -54,6 +52,10 @@ export const DEFAULT_KEYMAP: Keymap = new Map<string, Action>([
   ["D", { type: "closeWorkspace" }],
   // worktree（20260920-git-worktree-actions）。herdr の `new_worktree` の既定も prefix+shift+g。
   ["G", { type: "newWorktree" }],
+  // 通知（20260920-agent-notifications）。`s` は herdr の `settings` と同じ位置——
+  // 後で「外観と設定」が来たら、このダイアログを育てればよい（別のキーを作らない）。
+  ["s", { type: "notifySettings" }],
+  ["o", { type: "nextNotification" }],
   ["w", { type: "enterMode", mode: "navigate" }],
   // 共通
   ["?", { type: "help" }],

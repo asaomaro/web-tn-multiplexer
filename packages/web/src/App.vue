@@ -7,6 +7,7 @@ import GotoPicker from "./components/GotoPicker.vue";
 import HelpDialog from "./components/HelpDialog.vue";
 import LoginView from "./components/LoginView.vue";
 import NameDialog from "./components/NameDialog.vue";
+import NotificationSettingsDialog from "./components/NotificationSettingsDialog.vue";
 import PaneLayout from "./components/PaneLayout.vue";
 import PrefixIndicator from "./components/PrefixIndicator.vue";
 import ReconnectOverlay from "./components/ReconnectOverlay.vue";
@@ -69,6 +70,7 @@ const isMobile = isMobileViewport();
     <WorktreeCreateDialog />
     <WorktreeOpenDialog />
     <ConfirmDialog />
+    <NotificationSettingsDialog />
     <HelpDialog />
     <GotoPicker />
     <PrefixIndicator />

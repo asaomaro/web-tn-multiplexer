@@ -1,4 +1,4 @@
-import type { Pane, Tab, Workspace } from "@wtm/protocol";
+import type { AgentInfo, Pane, Tab, Workspace } from "@wtm/protocol";
 import { createPinia, type Pinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionState } from "../net/ports.js";
@@ -23,7 +23,7 @@ function makePane(id: string, tabId: string): Pane {
   return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null };
 }
 
-function makeAdapter(overrides: Partial<{ onPaneExited: (p: string, c: number) => void; onClientError: (c: string, m: string) => void }> = {}) {
+function makeAdapter(overrides: Partial<ConstructorParameters<typeof StoreAdapter>[0]> = {}) {
   const onAuthRequired = vi.fn();
   const onConnectionState = vi.fn();
   const adapter = new StoreAdapter({ pinia, onAuthRequired, onConnectionState, ...overrides });
@@ -250,5 +250,90 @@ describe("StoreAdapter", () => {
     const state: ConnectionState = "reconnecting";
     adapter.onConnectionState(state);
     expect(onConnectionState).toHaveBeenCalledWith("reconnecting");
+  });
+});
+
+// 20260920-agent-notifications：通知が「変化」を知るための 3 つの注入口。
+describe("StoreAdapter — 通知への注入口", () => {
+  // キャストを使わない（既存の `store/seen.test.ts` 等と同じ流儀）——`as` で押し込むと、
+  // protocol に必須項目が増えてもテストが型で気づけない。
+  function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
+    return { instanceId: "a1", kind: "claude", label: "Claude Code", verified: true, state: "idle", since: 1, completionSeq: 0, serverSeenSeq: 0, ...overrides };
+  }
+  function snapshot(panes: Pane[]) {
+    return {
+      protocol: 1 as const,
+      serverVersion: "test",
+      host: { os: "linux" as const, windowsBuild: null, hostname: "h" },
+      workspaces: [makeWorkspace("w1")],
+      tabs: [makeTab("t1", "w1")],
+      panes,
+      focus: null,
+      limits: { scrollbackLines: 5000 },
+    };
+  }
+
+  // **前の値はここでしか取れない**（session は履歴を持たない）。ここが壊れると「変わった」が判定できない。
+  it("onAgentChanged には、更新前の本物の値が prev として渡る", () => {
+    const onAgentChanged = vi.fn();
+    const { adapter } = makeAdapter({ onAgentChanged });
+    const session = useSessionStore(pinia);
+    session.paneUpserted({ ...makePane("p1", "t1"), agent: makeAgent({ state: "working", since: 1 }) });
+
+    adapter.applyEvent({ event: "pane.agent_status_changed", data: { paneId: "p1", agent: makeAgent({ state: "blocked", since: 2 }) } });
+
+    expect(onAgentChanged).toHaveBeenCalledOnce();
+    const [paneId, prev, next] = onAgentChanged.mock.calls[0]!;
+    expect(paneId).toBe("p1");
+    expect(prev).toMatchObject({ state: "working", since: 1 });
+    expect(next).toMatchObject({ state: "blocked", since: 2 });
+    // 渡した後のストアは新しい値になっている（読む順番が逆だと prev が next と同じになる）。
+    expect(session.panes.get("p1")?.agent).toMatchObject({ state: "blocked" });
+  });
+
+  it("初めて見る pane では prev が null", () => {
+    const onAgentChanged = vi.fn();
+    const { adapter } = makeAdapter({ onAgentChanged });
+    adapter.applyEvent({ event: "pane.agent_status_changed", data: { paneId: "unknown", agent: makeAgent() } });
+    expect(onAgentChanged.mock.calls[0]![1]).toBeNull();
+  });
+
+  it("エージェントが消えたときは next が null", () => {
+    const onAgentChanged = vi.fn();
+    const { adapter } = makeAdapter({ onAgentChanged });
+    const session = useSessionStore(pinia);
+    session.paneUpserted({ ...makePane("p1", "t1"), agent: makeAgent() });
+    adapter.applyEvent({ event: "pane.agent_status_changed", data: { paneId: "p1", agent: null } });
+    expect(onAgentChanged.mock.calls[0]![2]).toBeNull();
+  });
+
+  // **AC14**：初回は基準線、再接続は「まだ知らせていないもの」だけ。ここが常に true/false だと一斉に出る。
+  it("onSnapshotApplied の first は、初回だけ true", () => {
+    const onSnapshotApplied = vi.fn();
+    const { adapter } = makeAdapter({ onSnapshotApplied });
+    const pane = { ...makePane("p1", "t1"), agent: makeAgent({ state: "blocked" }) };
+
+    adapter.applySnapshot(snapshot([pane]), "c1");
+    expect(onSnapshotApplied.mock.calls[0]![1], "初回は基準線").toBe(true);
+    expect(onSnapshotApplied.mock.calls[0]![0]).toEqual([{ paneId: "p1", agent: pane.agent }]);
+
+    adapter.applySnapshot(snapshot([pane]), "c1"); // 再接続
+    expect(onSnapshotApplied.mock.calls[1]![1], "2 回目からは false").toBe(false);
+  });
+
+  it("onPaneClosed は pane.closed で呼ばれる（pane.exited とは別）", () => {
+    const onPaneClosed = vi.fn();
+    const onPaneExited = vi.fn();
+    const { adapter } = makeAdapter({ onPaneClosed, onPaneExited });
+    adapter.applyEvent({ event: "pane.exited", data: { paneId: "p1", exitCode: 0 } });
+    expect(onPaneClosed).not.toHaveBeenCalled();
+    adapter.applyEvent({ event: "pane.closed", data: { paneId: "p1" } });
+    expect(onPaneClosed).toHaveBeenCalledWith("p1");
+  });
+
+  it("注入口を省いても動く（既存の呼び出し元を壊さない）", () => {
+    const { adapter } = makeAdapter();
+    expect(() => adapter.applySnapshot(snapshot([]), "c1")).not.toThrow();
+    expect(() => adapter.applyEvent({ event: "pane.closed", data: { paneId: "p1" } })).not.toThrow();
   });
 });

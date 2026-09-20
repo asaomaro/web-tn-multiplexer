@@ -4,7 +4,10 @@ import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.vue";
 import { ActionDispatcher } from "./actions/ActionDispatcher.js";
-import { ActionDispatcherKey, ConnectionKey, KeyInputControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
+import { ActionDispatcherKey, ConnectionKey, KeyInputControllerKey, NotificationControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
+import { DesktopNotifier } from "./notify/DesktopNotifier.js";
+import { NotificationController } from "./notify/NotificationController.js";
+import { ToneSound } from "./notify/ToneSound.js";
 import { KeyInputController } from "./keys/KeyInputController.js";
 import { KeyRouter, type KeyRouterClock } from "./keys/KeyRouter.js";
 import { DEFAULT_KEYMAP } from "./keys/keymap.js";
@@ -68,7 +71,7 @@ function makeProvide(conn: ConnectionPort) {
     keys,
     createMouseBridge: (term, paneId) => new MouseBridge({ term, paneId, ui: { toast: () => undefined, openContextMenu: () => undefined }, getRightClickTarget: () => "herdr" }),
   });
-  const actionDispatcher = new ActionDispatcher({ conn, pinia, registry, keys });
+  const actionDispatcher = new ActionDispatcher({ conn, pinia, registry, keys, notifications: { focusNext: () => undefined } });
   const view = useViewStore(pinia);
   keys.bind({ action: actionDispatcher, focus: actionDispatcher, mode: { onModeChange: (m) => view.onModeChange(m) } });
   const viewSync = new ViewSync({ conn, registry, getScrollbackLines: () => 5000 });
@@ -82,6 +85,14 @@ function makeProvide(conn: ConnectionPort) {
         [TerminalRegistryKey as symbol]: registry,
         [ViewSyncKey as symbol]: viewSync,
         [KeyInputControllerKey as symbol]: keys,
+        // 20260920-agent-notifications。`NotificationSettingsDialog` が inject を必須にしているので、
+        // `main.ts` と同じものをここでも渡す（落とすとダイアログが throw して App が描けない）。
+        [NotificationControllerKey as symbol]: new NotificationController({
+          pinia,
+          desktop: new DesktopNotifier(),
+          sound: new ToneSound(),
+          isPaneVisible: (paneId) => registry.isVisible(paneId),
+        }),
       },
     },
   };
