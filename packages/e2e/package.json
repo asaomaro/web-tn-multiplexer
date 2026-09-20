@@ -1,0 +1,20 @@
+{
+  "name": "@wtm/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "test": "playwright test"
+  },
+  "dependencies": {
+    "@wtm/protocol": "workspace:*",
+    "@wtm/server": "workspace:*",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.3"
+  }
+}
