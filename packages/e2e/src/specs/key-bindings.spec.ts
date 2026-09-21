@@ -1,0 +1,553 @@
+import { devices, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import type { AppServer } from "../support/appServer.js";
+import { expect, test } from "../support/fixtures.js";
+import { watchSentInput, type SentInput } from "../support/frames.js";
+import { focusTerminal, prefixKey } from "../support/keys.js";
+import { focusedPaneIndex } from "../support/panes.js";
+
+/**
+ * キー割り当てのカスタマイズ（20260921-keybinding-customization。herdr の `[keys]`）の E2E。
+ *
+ * **判定はブラウザの側で行う**（条項 `.aidev/conventions/e2e-observe-browser.md`）:
+ * - 端末へ届いたキーは、**ブラウザが実際に送った INPUT フレーム**（`watchSentInput`。CDP の `Network.webSocketFrameSent`）で見る——
+ *   prefix の 2 度押し・素通しの ctrl+b が端末へ送られたか、直接のキーが**端末へ届いていないか**を、アプリの見え方とは別に送る側で確かめる。
+ * - 操作の結果は DOM（分割で増える `.pane-frame`・新しい tab の `.tab-bar-item`・prefix 中の `.prefix-indicator`・焦点の pane の位置・設定画面の状態と `role="status"` の文）。
+ * - キー入力は Playwright の実物のキー（`page.keyboard.press`）。shift 付きの文字は**大文字で送る**（小文字＋shift は合成の形で、実物のキーボードとは `event.key` が違う。research F24）。
+ * - 保存は `localStorage` の `wtm.prefs.v1` と、開き直した後の振る舞い。
+ */
+
+const dialog = (page: Page) => page.locator("dialog.settings-dialog");
+const keysSection = (page: Page) =>
+  dialog(page).locator('section[aria-labelledby="settings-keys"]');
+const actionRow = (page: Page, id: string) => keysSection(page).locator(`[data-action="${id}"]`);
+const capture = (page: Page) => keysSection(page).locator(".keys-capture");
+const status = (page: Page) => keysSection(page).locator('[role="status"]');
+const prefixChangeButton = (page: Page) => keysSection(page).locator("[data-prefix-change]");
+const prefixIndicator = (page: Page) => page.locator(".prefix-indicator");
+const paneCount = (page: Page) => page.locator(".pane-frame").count();
+
+async function openApp(page: Page, appServer: AppServer): Promise<() => SentInput[]> {
+  const sent = await watchSentInput(page); // `goto` の前に張る（CDP の Network.enable より前の WebSocket は見えない）
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+  return sent;
+}
+
+/** `wtm.prefs.v1` を持たせた新しいブラウザで開く（保存された割り当てから始める）。 */
+async function openWithPrefs(
+  browser: Browser,
+  appServer: AppServer,
+  prefs: Record<string, unknown>,
+): Promise<{ context: BrowserContext; page: Page; sent: () => SentInput[] }> {
+  const context = await browser.newContext({
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: appServer.origin,
+          localStorage: [{ name: "wtm.prefs.v1", value: JSON.stringify(prefs) }],
+        },
+      ],
+    },
+  });
+  const page = await context.newPage();
+  const sent = await openApp(page, appServer);
+  return { context, page, sent };
+}
+
+/** 設定画面を、いまの prefix の `s` で開く（既定は Ctrl+B）。 */
+async function openSettings(page: Page, prefix = "Control+b"): Promise<void> {
+  await focusTerminal(page);
+  await page.keyboard.press(prefix);
+  await page.keyboard.press("s");
+  await expect(dialog(page)).toHaveAttribute("open", "");
+}
+
+/** 設定画面の節「キー」の、ある操作の行を開く（`<details>`）。 */
+async function openRow(page: Page, id: string): Promise<void> {
+  const row = actionRow(page, id);
+  await row.locator("summary").click();
+  await expect(row).toHaveAttribute("open", "");
+}
+
+const storedKeys = (page: Page) =>
+  page.evaluate(() => {
+    const raw = localStorage.getItem("wtm.prefs.v1");
+    return raw ? ((JSON.parse(raw) as { keys?: unknown }).keys ?? null) : null;
+  });
+
+/** 送った INPUT のうち、`from` 番目以降をつないだ文字列。 */
+const sentSince = (sent: () => SentInput[], from: number): string =>
+  sent()
+    .slice(from)
+    .map((s) => s.text)
+    .join("");
+
+test("prefix を ctrl+a に変えると、新しい prefix で入り、旧い ctrl+b は端末へ届き、2 度押しは ctrl+a を端末へ送る。再読み込みでも残る（AC3・AC8・AC-I4）", async ({
+  page,
+  appServer,
+}) => {
+  const sent = await openApp(page, appServer);
+  await openSettings(page);
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+b");
+  await prefixChangeButton(page).click();
+  await expect(capture(page)).toBeFocused(); // AC-I4：取り込みの部品へフォーカスが移る
+  await page.keyboard.press("Control+a");
+  await expect(status(page)).toHaveText("prefix を ctrl+a にしました。");
+  await expect(capture(page)).toHaveCount(0);
+  await expect(prefixChangeButton(page), "AC-I4：確定したら押したボタンへ戻る").toBeFocused();
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+a");
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).not.toHaveAttribute("open", "");
+  expect(await storedKeys(page), "保存される（差だけ）").toEqual({ prefix: "ctrl+a" });
+
+  // 旧い prefix（ctrl+b）は端末へそのまま届き、prefix には入らない。
+  await focusTerminal(page);
+  let n = sent().length;
+  await page.keyboard.press("Control+b");
+  await expect.poll(() => sentSince(sent, n)).toContain("\x02");
+  await expect(prefixIndicator(page)).toHaveCount(0);
+
+  // 新しい prefix で入り、次のキーが操作になる（prefix+c＝新しい tab）。
+  const tabs = await page.locator(".tab-bar-item").count();
+  await page.keyboard.press("Control+a");
+  await expect(prefixIndicator(page)).toBeVisible();
+  await page.keyboard.press("c");
+  // 新しい tab は名前を尋ねる（既存の挙動）。Enter で既定の名前のまま作る。
+  await expect(page.getByRole("textbox", { name: "新しい tab の名前" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".tab-bar-item")).toHaveCount(tabs + 1);
+
+  // 2 度押しは、その prefix のキー自身（ctrl+a＝\x01）を端末へ送る。
+  await focusTerminal(page);
+  n = sent().length;
+  await page.keyboard.press("Control+a");
+  await page.keyboard.press("Control+a");
+  await expect.poll(() => sentSince(sent, n)).toContain("\x01");
+
+  // 再読み込みでも残る。
+  await page.reload();
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+  await focusTerminal(page);
+  await page.keyboard.press("Control+a");
+  await expect(prefixIndicator(page)).toBeVisible();
+  await page.keyboard.press("Escape");
+});
+
+test("直接のキー：ctrl+alt+d を右へ分割に足すと、prefix なしの 1 打で分割でき、そのキーは端末へ届かない（AC5・AC8）", async ({
+  page,
+  appServer,
+}) => {
+  const sent = await openApp(page, appServer);
+  await openSettings(page);
+  await openRow(page, "split_vertical");
+  await actionRow(page, "split_vertical").locator('[data-add="direct"]').click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("Control+Alt+d");
+  await expect(status(page)).toHaveText("「右へ分割」に ctrl+alt+d を割り当てました。");
+  await expect(actionRow(page, "split_vertical").locator(".keys-bindings")).toHaveText(
+    "prefix+v / ctrl+alt+d",
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).not.toHaveAttribute("open", "");
+
+  await focusTerminal(page);
+  expect(await paneCount(page)).toBe(1);
+  const n = sent().length;
+  await page.keyboard.press("Control+Alt+d");
+  await expect.poll(() => paneCount(page)).toBe(2);
+  // 分割の応答で焦点が新しい pane へ移る（入力の関所が開く）まで待ってから確かめる——漏れたキーは関所が応答まで溜めるので、待たないと否定が空振りで通りうる。
+  await expect.poll(() => focusedPaneIndex(page)).toBe(1);
+  // 直接のキーは端末へ届かない（ESC＋Ctrl+D＝`\x1b\x04` を送っていない）。
+  expect(sentSince(sent, n)).not.toContain("\x1b\x04");
+  // prefix の後の v も従来どおり効く（割り当ては足しただけ）。
+  await focusTerminal(page);
+  await prefixKey(page, "v");
+  await expect.poll(() => paneCount(page)).toBe(3);
+});
+
+test("端末の外（フォーカスできない要素＝サイドバーの行をクリックした後）でも、直接のキーは効く（AC5。`keydown` を止めるボタンの上は既知の制約）", async ({
+  browser,
+  appServer,
+}) => {
+  const { context, page } = await openWithPrefs(browser, appServer, {
+    keys: { bindings: { split_vertical: ["prefix+v", "ctrl+alt+d"] } },
+  });
+  await focusTerminal(page);
+  expect(await paneCount(page)).toBe(1);
+  // サイドバーの行（focus できない要素）をクリックして、端末からフォーカスを外す——この間の keydown は window の listener（`handleDomKey`）が受ける。
+  await page.locator(".sidebar-row").first().click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea")),
+    )
+    .toBe(false);
+  await page.keyboard.press("Control+Alt+d");
+  await expect.poll(() => paneCount(page)).toBe(2);
+  await context.close();
+});
+
+test("衝突は理由（持ち主の名前）を出して拒否し、元のまま終わってフォーカスは押したボタンへ戻る（AC6・AC-I2・AC-I4）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  await openRow(page, "goto");
+  const add = actionRow(page, "goto").locator('[data-add="prefix"]');
+  await add.click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("v"); // 右へ分割の既定
+  await expect(status(page)).toContainText("prefix+v");
+  await expect(status(page)).toContainText("右へ分割");
+  await expect(capture(page)).toHaveCount(0);
+  await expect(add).toBeFocused();
+  await expect(actionRow(page, "goto").locator(".keys-bindings")).toHaveText("prefix+g"); // 変わらない
+  expect(await storedKeys(page)).toBeNull();
+
+  // 直接のキーとして、修飾キーの無い文字は拒否する。
+  await actionRow(page, "goto").locator('[data-add="direct"]').click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("y");
+  await expect(status(page)).toContainText("直接のキーにできません");
+});
+
+test("下に固定した結果の文は、フォーカスした部品（一覧の下のほうの取り込みの部品）を隠さない（AC-I4・WCAG 2.4.11）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  await openRow(page, "toggle_sidebar"); // pane 群の最後＝一覧の下のほう
+  const add = actionRow(page, "toggle_sidebar").locator('[data-add="direct"]');
+  // ［追加：直接］が、下に固定した文の帯のすぐ上に見える位置までスクロールしておく。押すとその下に取り込みの部品が出るので、
+  // **スクロールの余白（`scroll-padding-bottom`）が無ければ、部品は「見えている領域の内側」のまま帯の下に入る**（ブラウザは動かさない）——
+  // 自動のスクロールに任せると、この位置にならず、余白を外しても通ってしまう。
+  await dialog(page).evaluate((d) => {
+    const a = d.querySelector('[data-action="toggle_sidebar"] [data-add="direct"]')!;
+    const band = d.querySelector(".keys-message")!;
+    d.scrollTop += a.getBoundingClientRect().bottom - (band.getBoundingClientRect().top - 2);
+  });
+  await add.click();
+  await expect(capture(page)).toBeFocused();
+  const box = await capture(page).boundingBox();
+  const message = await keysSection(page).locator(".keys-message").boundingBox();
+  const dialogBox = await dialog(page).boundingBox();
+  expect(box && message && dialogBox).toBeTruthy();
+  // 取り込みの部品はダイアログの見えている領域の中にあり、下に固定した文の帯と重ならない。
+  expect(box!.y + box!.height).toBeLessThanOrEqual(message!.y + 1);
+  expect(box!.y).toBeGreaterThanOrEqual(dialogBox!.y);
+  expect(message!.y + message!.height).toBeLessThanOrEqual(dialogBox!.y + dialogBox!.height + 1);
+  // 部品の中心を最前面で受けているのは、部品自身（帯ではない）。
+  const onTop = await capture(page).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return hit === el || el.contains(hit);
+  });
+  expect(onTop, "部品の中心が帯に覆われていない").toBe(true);
+  await page.keyboard.press("Escape");
+});
+
+test("取り込み待ちの Esc は取り込みだけを取り消し、設定画面は閉じない。押したキーは prefix にも端末にも漏れない（AC-I1・AC-I5）", async ({
+  page,
+  appServer,
+}) => {
+  const sent = await openApp(page, appServer);
+  await openSettings(page);
+  await prefixChangeButton(page).click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog(page), "Esc 1 回で設定画面は閉じない").toHaveAttribute("open", "");
+  await expect(capture(page)).toHaveCount(0);
+  await expect(prefixChangeButton(page)).toBeFocused();
+  expect(await storedKeys(page)).toBeNull();
+
+  // 取り込み待ちの間に prefix（ctrl+b）を押しても、prefix には入らず、端末へも届かない。
+  // **注意**：設定画面は `showModal()` で背後が inert・window の listener はダイアログ中は何もしない・ルーターは dialog モードなので、「prefix の帯が出ない」「送ったフレームが空」の
+  // 否定は取り込みの keydown 処理が無くても成り立つ。ここで実際に観測しているのは「同じ prefix を押しても設定は変わらず取り込みが終わる」こと。漏れの直接の守り
+  // （`stopPropagation`・`preventDefault`）は単体テスト（`KeySettings.test.ts`）が変異で確かめている。
+  const n = sent().length;
+  await prefixChangeButton(page).click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("Control+b");
+  await expect(status(page)).toHaveText("prefix を ctrl+b にしました。"); // 同じ prefix なので何も変わらない
+  await expect(prefixIndicator(page)).toHaveCount(0);
+  expect(sentSince(sent, n)).toBe("");
+
+  // Tab も取り込む（フォーカスを動かさない）。送れない形の prefix なので理由が出て、押したボタンへ戻る。
+  await prefixChangeButton(page).click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(status(page)).toContainText("prefix には");
+  await expect(prefixChangeButton(page)).toBeFocused();
+
+  // 取り込み待ちでなければ、Esc で閉じる（いつもどおり）。
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).not.toHaveAttribute("open", "");
+});
+
+test("壊れた保存値は値ごとに落として既定へ戻し、残りを生かして起動する（AC8）", async ({
+  browser,
+  appServer,
+}) => {
+  const { context, page } = await openWithPrefs(browser, appServer, {
+    keys: {
+      prefix: "cmd+b",
+      bindings: { zoom: ["prefix+y"], bogus_action: ["prefix+q"], goto: 42, help: ["nonsense"] },
+    },
+  });
+  await openSettings(page); // prefix が送れない形（cmd+b）なので、既定の ctrl+b で開ける
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+b");
+  await expect(actionRow(page, "zoom").locator(".keys-bindings")).toHaveText("prefix+y"); // 有効な上書きは生きる
+  await expect(actionRow(page, "goto").locator(".keys-bindings")).toHaveText("prefix+g"); // 配列でない値は既定へ
+  await expect(actionRow(page, "help").locator(".keys-bindings")).toHaveText("prefix+?"); // 全部無効なら既定へ
+  await context.close();
+
+  const broken = await openWithPrefs(browser, appServer, { keys: "こわれている" });
+  await openSettings(broken.page);
+  await expect(keysSection(broken.page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+b");
+  await broken.context.close();
+});
+
+test("すべて既定に戻す：確認を挟み、［やめる］で何も変えず、［戻す］で prefix も割り当ても既定へ戻る（AC9・AC-I2）", async ({
+  browser,
+  appServer,
+}) => {
+  const { context, page } = await openWithPrefs(browser, appServer, {
+    keys: { prefix: "ctrl+a", bindings: { zoom: ["prefix+y"] } },
+  });
+  await openSettings(page, "Control+a");
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+a");
+  await keysSection(page).locator("[data-reset-all]").click();
+  await expect(keysSection(page).locator("[data-confirm-no]")).toBeFocused(); // 安全側
+  await keysSection(page).locator("[data-confirm-no]").click();
+  await expect(keysSection(page).locator("[data-reset-all]")).toBeFocused();
+  expect(await storedKeys(page), "やめたので何も変わらない").toEqual({
+    prefix: "ctrl+a",
+    bindings: { zoom: ["prefix+y"] },
+  });
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+a");
+  await expect(actionRow(page, "zoom").locator(".keys-bindings")).toHaveText("prefix+y");
+
+  await keysSection(page).locator("[data-reset-all]").click();
+  await keysSection(page).locator("[data-confirm-yes]").click();
+  await expect(status(page)).toHaveText("すべての割り当てと prefix を既定へ戻しました。");
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+b");
+  await expect(actionRow(page, "zoom").locator(".keys-bindings")).toHaveText("prefix+z");
+  expect(await storedKeys(page), "keys ごと消える").toBeNull();
+  await page.keyboard.press("Escape");
+
+  // 既定の prefix（ctrl+b）でまた設定画面を開ける。
+  await openSettings(page);
+  await page.keyboard.press("Escape");
+  await context.close();
+});
+
+test("おすすめの直接のキー（ctrl+alt）を足すと、prefix なしで pane を行き来できる（AC10）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  await keysSection(page).locator("[data-recommended]").click();
+  await expect(status(page)).toContainText("直接のキーを 10 個足しました");
+  await expect(actionRow(page, "focus_pane_left").locator(".keys-bindings")).toHaveText(
+    "prefix+h / ctrl+alt+h",
+  );
+  await page.keyboard.press("Escape");
+
+  await focusTerminal(page);
+  await prefixKey(page, "v"); // 右へ分割：焦点は新しい（右の）pane
+  await expect.poll(() => paneCount(page)).toBe(2);
+  await expect.poll(() => focusedPaneIndex(page)).toBe(1);
+  await page.keyboard.press("Control+Alt+h");
+  await expect.poll(() => focusedPaneIndex(page)).toBe(0);
+  await page.keyboard.press("Control+Alt+l");
+  await expect.poll(() => focusedPaneIndex(page)).toBe(1);
+  // 拡大表示（ctrl+alt+z）も prefix なしで効く。
+  await page.keyboard.press("Control+Alt+z");
+  await expect(page.locator(".tab-bar-zoomed")).toHaveCount(1);
+});
+
+test("キー一覧とトーストは現在の割り当てを出す（AC11）", async ({ browser, appServer }) => {
+  const { context, page } = await openWithPrefs(browser, appServer, {
+    keys: { prefix: "ctrl+a", bindings: { split_vertical: ["prefix+v", "ctrl+alt+d"] } },
+  });
+  // 初めて pane にフォーカスが入ったときの案内は、現在の割り当てで出る。
+  await expect(page.locator(".toast-list")).toContainText("ctrl+a ? でキー一覧");
+  await focusTerminal(page);
+  await page.keyboard.press("Control+a");
+  await page.keyboard.press("?");
+  const help = page.locator("dialog.help-dialog");
+  await expect(help).toHaveAttribute("open", "");
+  await expect(help.locator("dt").first()).toHaveText("ctrl+a"); // 先頭は prefix 自身
+  const split = help.locator("dt", { hasText: /^prefix\+v \/ ctrl\+alt\+d$/ });
+  await expect(split).toHaveCount(1);
+  await expect(split.locator("xpath=following-sibling::dd[1]")).toHaveText("右へ分割");
+  await page.keyboard.press("Escape");
+  await context.close();
+});
+
+test("置き換え（［変更］）：キー一覧の prefix+? を prefix+y に変えると、prefix+y で開き、外した prefix+? は何も起こさない（AC4・AC-I4）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  await openRow(page, "help");
+  await actionRow(page, "help").locator('[data-change="help|prefix+?"]').click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("y");
+  await expect(status(page)).toHaveText("「キー一覧」に prefix+y を割り当てました。");
+  await expect(actionRow(page, "help").locator(".keys-bindings")).toHaveText("prefix+y");
+  await expect(
+    actionRow(page, "help").locator('[data-change="help|prefix+y"]'),
+    "AC-I4：作り直された chip の［変更］へ",
+  ).toBeFocused();
+  await page.keyboard.press("Escape"); // 取り込み待ちではないので、設定画面を閉じる
+  await expect(dialog(page)).not.toHaveAttribute("open", "");
+
+  // キー一覧はクライアントだけで開く（応答を待たない）ので、押した直後に開いていなければ「何も起こさなかった」と言える。
+  const help = page.locator("dialog.help-dialog");
+  await focusTerminal(page);
+  await prefixKey(page, "?"); // 外したキー：黙って捨てられる
+  await expect(help).not.toHaveAttribute("open", "");
+  await prefixKey(page, "y"); // 割り当てたキー：開く
+  await expect(help).toHaveAttribute("open", "");
+  await page.keyboard.press("Escape");
+});
+
+test("［既定に戻す］：操作ごと・prefix のそれぞれで、その分だけが戻り、フォーカスは同じ行の［追加：prefix の後］・prefix の［変更］へ行く（AC9・AC-I4）", async ({
+  browser,
+  appServer,
+}) => {
+  const { context, page } = await openWithPrefs(browser, appServer, {
+    keys: { prefix: "ctrl+a", bindings: { zoom: ["prefix+y"], help: ["prefix+u"] } },
+  });
+  await openSettings(page, "Control+a");
+  await openRow(page, "zoom");
+  await actionRow(page, "zoom").locator("[data-reset-action]").click();
+  await expect(status(page)).toHaveText("「拡大表示」を既定へ戻しました。");
+  await expect(actionRow(page, "zoom").locator(".keys-bindings")).toHaveText("prefix+z");
+  await expect(actionRow(page, "zoom").locator('[data-add="prefix"]')).toBeFocused();
+  // ほかは変わらない（キー一覧の上書きと prefix）。
+  await expect(actionRow(page, "help").locator(".keys-bindings")).toHaveText("prefix+u");
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+a");
+  expect(await storedKeys(page)).toEqual({ prefix: "ctrl+a", bindings: { help: ["prefix+u"] } });
+
+  await keysSection(page).locator("[data-reset-prefix]").click();
+  await expect(status(page)).toHaveText("prefix を既定（ctrl+b）へ戻しました。");
+  await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("ctrl+b");
+  await expect(prefixChangeButton(page)).toBeFocused();
+  await expect(actionRow(page, "help").locator(".keys-bindings")).toHaveText("prefix+u");
+  expect(await storedKeys(page)).toEqual({ bindings: { help: ["prefix+u"] } });
+  await context.close();
+});
+
+test("キーボードだけで通せる：行へ Tab→開く→［追加］→キーを押して確定→［削除］→もう一度足して［既定に戻す］（AC-I3・AC-I4・AC9）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  const row = actionRow(page, "goto");
+  const add = row.locator('[data-add="prefix"]');
+  // 前の行の見出しから Tab で次の行の見出しへ（数えず、着くまで）。Enter で開く（<details> の標準）。
+  await row.locator("xpath=preceding::summary[1]").focus();
+  await page.keyboard.press("Tab");
+  await expect(row.locator("summary")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(row).toHaveAttribute("open", "");
+  // Tab で［追加：prefix の後］まで進む（数えず、着くまで）。
+  for (let i = 0; i < 8; i++) {
+    if (await add.evaluate((el) => el === document.activeElement)) break;
+    await page.keyboard.press("Tab");
+  }
+  await expect(add).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("y");
+  await expect(row.locator(".keys-bindings")).toHaveText("prefix+g / prefix+y");
+  await expect(add, "AC-I4：押した［追加］へ戻る").toBeFocused();
+
+  // Shift+Tab で戻ると、いま足した割り当ての［削除］（Tab の順で辿れる）。Enter で外す。
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    row.getByRole("button", {
+      name: "「goto（workspace・tab・pane から探す）」の prefix+y を削除",
+    }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(row.locator(".keys-bindings")).toHaveText("prefix+g");
+  await expect(add, "AC-I4：最後を消したら［追加：prefix の後］へ").toBeFocused();
+  // 既定と同じ内容に戻ったので、上書きは無くなり、［既定に戻す］も消える。
+  await expect(row.locator("[data-reset-action]")).toHaveCount(0);
+  expect(await storedKeys(page)).toBeNull();
+
+  // もう一度足して、Tab 2 回（［追加：直接］の次）で［既定に戻す］へ。Enter で戻す。
+  await page.keyboard.press("Enter");
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("y");
+  await expect(row.locator(".keys-bindings")).toHaveText("prefix+g / prefix+y");
+  await page.keyboard.press("Tab"); // ［追加：直接］
+  await page.keyboard.press("Tab"); // ［既定に戻す］
+  await expect(row.locator("[data-reset-action]")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(status(page)).toHaveText(
+    "「goto（workspace・tab・pane から探す）」を既定へ戻しました。",
+  );
+  await expect(row.locator(".keys-bindings")).toHaveText("prefix+g");
+  await expect(add, "AC-I4：同じ行の［追加：prefix の後］へ").toBeFocused();
+  expect(await storedKeys(page)).toBeNull();
+});
+
+// **`defaultBrowserType` は describe の中では使えない**（`settings.spec.ts` と同じ事情）。端末の条件だけを借りる。
+const IPHONE_13 = { ...devices["iPhone 13"] };
+delete (IPHONE_13 as { defaultBrowserType?: string }).defaultBrowserType;
+
+test.describe("モバイル", () => {
+  test.use(IPHONE_13);
+
+  test("Prefix ボタンは現在の prefix を注入する（alt+x に変えていれば、2 度押しで ESC x を端末へ送る）。設定の節「キー」は出て、画面のキーボードでは取り込めないと添える（AC1・AC11）", async ({
+    browser,
+    appServer,
+  }) => {
+    const context = await browser.newContext({
+      ...IPHONE_13,
+      storageState: {
+        cookies: [],
+        origins: [
+          {
+            origin: appServer.origin,
+            localStorage: [
+              { name: "wtm.prefs.v1", value: JSON.stringify({ keys: { prefix: "alt+x" } }) },
+            ],
+          },
+        ],
+      },
+    });
+    const page = await context.newPage();
+    const sent = await openApp(page, appServer);
+    await page.locator(".mobile-shell-keyboard-btn").click();
+    const n = sent().length;
+    await page.getByRole("button", { name: "Prefix" }).click();
+    await page.getByRole("button", { name: "Prefix" }).click(); // 2 度押し：prefix のキー自身（alt+x＝ESC x）を端末へ送る
+    await expect.poll(() => sentSince(sent, n)).toContain("\x1bx");
+    expect(sentSince(sent, n), "既定の ctrl+b（\\x02）は送らない").not.toContain("\x02");
+
+    await page.locator(".mobile-shell-settings-btn").click();
+    await expect(dialog(page)).toHaveAttribute("open", "");
+    await expect(dialog(page).locator("section h3")).toHaveText([
+      "通知",
+      "テーマ",
+      "表示",
+      "端末",
+      "キー",
+    ]);
+    await expect(keysSection(page).locator(".keys-mobile-note")).toContainText(
+      "画面のキーボードでは割り当てを取り込めません",
+    );
+    await expect(keysSection(page).locator(".keys-prefix .keys-binding")).toHaveText("alt+x");
+    await context.close();
+  });
+});

@@ -4,7 +4,10 @@ import type { ConnectionPort } from "../net/ports.js";
 import type { KeyInput, Mode } from "./actions.js";
 import { KeyInputController, type ActionPort, type FocusPort, type KeyboardEventLike, type ModeSink } from "./KeyInputController.js";
 import { KeyRouter, type KeyRouterClock } from "./KeyRouter.js";
-import { DEFAULT_KEYMAP } from "./keymap.js";
+import { emptyKeyPrefs, type KeyPrefs } from "./keyPrefs.js";
+import { DEFAULT_KEYMAP, resolveKeymap } from "./keymap.js";
+import { NavigateMode } from "./NavigateMode.js";
+import { ResizeMode } from "./ResizeMode.js";
 
 function ev(partial: Partial<KeyboardEventLike> & { key: string }): KeyboardEventLike {
   return {
@@ -330,5 +333,157 @@ describe("KeyInputController — attach（実物の xterm.js）", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     const resetHandler = spy.mock.calls[0]?.[0];
     expect(resetHandler?.(ev({ key: "a" }) as unknown as KeyboardEvent)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260921-keybinding-customization：直接のキー・prefix の変更・AltGraph・繰り返し・Prefix ボタン
+// ---------------------------------------------------------------------------------------------------------------------
+
+function routerWith(partial: Partial<KeyPrefs>, subModes = {}): KeyRouter {
+  return new KeyRouter(resolveKeymap({ ...emptyKeyPrefs(), ...partial }).keymap, realClock(), subModes);
+}
+
+/** xterm.js の `attachCustomKeyEventHandler` に渡された関数を取り出す（`attach` が登録する）。 */
+function attachedHandler(controller: KeyInputController): (e: KeyboardEventLike) => boolean {
+  let handler: ((e: KeyboardEventLike) => boolean) | null = null;
+  const term = { attachCustomKeyEventHandler: (h: (e: KeyboardEventLike) => boolean) => { handler = h; } } as unknown as Terminal;
+  controller.attach(term, "p1");
+  return (e) => handler!(e);
+}
+
+describe("KeyInputController — 直接のキー（AC5）", () => {
+  const direct: Partial<KeyPrefs> = { bindings: { split_vertical: ["prefix+v", "ctrl+alt+d"], zoom: ["f5"] } };
+
+  it("xterm の入口：直接のキーは action を実行し、端末へ届かない（false＋preventDefault。何も送らない）", () => {
+    const connection = makeFakeConnection();
+    const action = makeFakeAction();
+    const controller = new KeyInputController(routerWith(direct), connection);
+    controller.bind({ action, focus: makeFakeFocus("p1"), mode: makeFakeModeSink() });
+    const handler = attachedHandler(controller);
+    const e = ev({ key: "d", ctrlKey: true, altKey: true });
+    expect(handler(e)).toBe(false);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(action.runs).toEqual([{ type: "split", dir: "right" }]);
+    expect(connection.sent).toEqual([]);
+    // 割り当てのない ctrl+alt+y は端末の入力（true）
+    const other = ev({ key: "y", ctrlKey: true, altKey: true });
+    expect(handler(other)).toBe(true);
+    expect(other.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("端末以外にフォーカスがあるとき（handleDomKey）も効く", () => {
+    const action = makeFakeAction();
+    const controller = new KeyInputController(routerWith(direct), makeFakeConnection());
+    controller.bind({ action, focus: makeFakeFocus(null), mode: makeFakeModeSink() });
+    expect(controller.handleDomKey(ev({ key: "F5" }))).toBe(false);
+    expect(action.runs).toEqual([{ type: "zoom" }]);
+  });
+
+  it("押しっぱなしの繰り返し（repeat）は、割り当てのある直接のキーなら 1 回しか実行しない（false で食う）", () => {
+    const action = makeFakeAction();
+    const controller = new KeyInputController(routerWith(direct), makeFakeConnection());
+    controller.bind({ action, focus: makeFakeFocus("p1"), mode: makeFakeModeSink() });
+    const handler = attachedHandler(controller);
+    expect(handler(ev({ key: "d", ctrlKey: true, altKey: true }))).toBe(false);
+    const repeated = ev({ key: "d", ctrlKey: true, altKey: true, repeat: true });
+    expect(handler(repeated)).toBe(false);
+    expect(repeated.preventDefault).toHaveBeenCalled();
+    expect(action.runs).toHaveLength(1);
+  });
+
+  it("ダイアログの中（dialog モード）では直接のキーを引かない", () => {
+    const action = makeFakeAction();
+    const controller = new KeyInputController(routerWith(direct), makeFakeConnection());
+    controller.bind({ action, focus: makeFakeFocus("p1"), mode: makeFakeModeSink() });
+    controller.setMode("dialog");
+    controller.handleDomKey(ev({ key: "d", ctrlKey: true, altKey: true }));
+    expect(action.runs).toEqual([]);
+  });
+});
+
+describe("KeyInputController — prefix の変更（AC3）", () => {
+  it("旧い prefix（ctrl+b）は端末へ素通し（true）・新しい prefix で prefix に入り、2 度押しでそのキー自身を送る", () => {
+    const connection = makeFakeConnection();
+    const controller = new KeyInputController(routerWith({ prefix: "ctrl+a" }), connection);
+    controller.bind({ action: makeFakeAction(), focus: makeFakeFocus("p9"), mode: makeFakeModeSink() });
+    const handler = attachedHandler(controller);
+    expect(handler(ev({ key: "b", ctrlKey: true }))).toBe(true);
+    expect(handler(ev({ key: "a", ctrlKey: true }))).toBe(false); // prefix へ
+    expect(handler(ev({ key: "a", ctrlKey: true }))).toBe(false); // 2 度押し
+    expect(connection.sent).toEqual([["p1", "\x01"]]);
+  });
+});
+
+describe("KeyInputController — IME の変換中（keyInputOf 経由）", () => {
+  it("keyCode 229 は変換中として prefix に入らない", () => {
+    const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
+    const controller = new KeyInputController(router, makeFakeConnection());
+    expect(controller.handleDomKey(ev({ key: "b", ctrlKey: true, keyCode: 229 }))).toBe(true);
+    expect(router.mode).toBe("terminal");
+  });
+});
+
+describe("KeyInputController.injectPrefix — モバイルの Prefix ボタン（AC11）", () => {
+  it("既定の prefix（ctrl+b）で prefix に入り、もう一度押すと \x02 を送る", () => {
+    const connection = makeFakeConnection();
+    const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
+    const controller = new KeyInputController(router, connection);
+    controller.bind({ action: makeFakeAction(), focus: makeFakeFocus("p1"), mode: makeFakeModeSink() });
+    controller.injectPrefix();
+    expect(router.mode).toBe("prefix");
+    controller.injectPrefix();
+    expect(connection.sent).toEqual([["p1", "\x02"]]);
+  });
+
+  it("変えた prefix（alt+x・F5）を注入する", () => {
+    for (const [prefix, bytes] of [["alt+x", "\x1bx"], ["f5", "\x1b[15~"]] as const) {
+      const connection = makeFakeConnection();
+      const router = routerWith({ prefix });
+      const controller = new KeyInputController(router, connection);
+      controller.bind({ action: makeFakeAction(), focus: makeFakeFocus("p1"), mode: makeFakeModeSink() });
+      controller.injectPrefix();
+      expect(router.mode, prefix).toBe("prefix");
+      controller.injectPrefix();
+      expect(connection.sent, prefix).toEqual([["p1", bytes]]);
+    }
+  });
+
+  it("待機中の Ctrl/Alt（ExtraKeys）は重ねない：F キーの prefix でも prefix に入れ、待機は消費しない（次の実キーに残る）", () => {
+    const router = routerWith({ prefix: "f5" });
+    const action = makeFakeAction();
+    const controller = new KeyInputController(router, makeFakeConnection());
+    controller.bind({ action, focus: makeFakeFocus("p1"), mode: makeFakeModeSink() });
+    controller.setPendingModifier({ ctrl: true, alt: false });
+    controller.injectPrefix();
+    expect(router.mode).toBe("prefix");
+    // 待機が消費されていれば `v` は prefix の後の v（右へ分割）として引かれる。残っていれば ctrl+v（割り当てなし）で、何も実行されずに prefix を抜ける。
+    controller.injectKey({ key: "v", code: "KeyV", ctrl: false, alt: false, shift: false, meta: false, type: "keydown", composing: false });
+    expect(router.mode).toBe("terminal");
+    expect(action.runs).toEqual([]);
+  });
+
+  it("navigate・resize・dialog モードでは何もしない（そのモードのキーは修飾キーを見ないので、変えた prefix が pane の移動・resize になってしまう）", () => {
+    for (const mode of ["navigate", "resize", "dialog"] as const) {
+      const connection = makeFakeConnection();
+      const action = makeFakeAction();
+      // **実物のモードの解釈を渡す**——渡さないと解釈の無いモードは何を受けても consume するので、注入したキー（`j`）が pane の移動・resize になる不具合が見えない。
+      const router = routerWith({ prefix: "alt+j" }, { navigate: new NavigateMode(), resize: new ResizeMode() });
+      const controller = new KeyInputController(router, connection);
+      controller.bind({ action, focus: makeFakeFocus("p1"), mode: makeFakeModeSink() });
+      router.setMode(mode);
+      controller.injectPrefix();
+      expect(router.mode, mode).toBe(mode);
+      expect(action.runs, mode).toEqual([]);
+      expect(connection.sent, mode).toEqual([]);
+    }
+  });
+
+  it("copy モードでも prefix に入れる（戻り先は copy）", () => {
+    const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
+    const controller = new KeyInputController(router, makeFakeConnection());
+    router.setMode("copy");
+    controller.injectPrefix();
+    expect(router.mode).toBe("prefix");
   });
 });

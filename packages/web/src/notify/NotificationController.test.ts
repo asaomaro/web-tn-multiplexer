@@ -3,6 +3,7 @@ import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import { NotificationController, type NotificationControllerOptions } from "./NotificationController.js";
 import type { NotifyKind } from "./policy.js";
@@ -670,6 +671,61 @@ describe("NotificationController — 案内（AC5）", () => {
     h.setFocused(true);
     h.c.showHintIfDue();
     expect(hints()).toHaveLength(1);
+  });
+
+  // 20260921-keybinding-customization の AC11：「後から〜でも変えられます」のキーは現在の割り当て。
+  it("設定を開くキーは現在の割り当てで案内する（既定は ctrl+b s）", async () => {
+    vi.useFakeTimers();
+    const h = makeController();
+    h.setFocused(true);
+    await fireBlocked(h);
+    expect(hints()[0]!.message).toContain("（後から ctrl+b s でも変えられます）");
+  });
+
+  it("prefix を変えると、既定の prefix+s も新しい prefix で案内する（alt+x s）", async () => {
+    vi.useFakeTimers();
+    useSettingsStore(pinia).setKeyPrefix("alt+x");
+    const h = makeController();
+    h.setFocused(true);
+    await fireBlocked(h);
+    expect(hints()[0]!.message).toContain("（後から alt+x s でも変えられます）");
+  });
+
+  it("設定の割り当てを直接のキーへ変えていれば、その割り当てで案内する", async () => {
+    vi.useFakeTimers();
+    useSettingsStore(pinia).setKeyPrefix("alt+x");
+    useSettingsStore(pinia).setKeyBindings("settings", ["ctrl+alt+,"]);
+    const h = makeController();
+    h.setFocused(true);
+    await fireBlocked(h);
+    expect(hints()[0]!.message).toContain("（後から ctrl+alt+, でも変えられます）");
+  });
+
+  it("案内が出ている間に prefix・割り当てを変えても、文が追従する（sticky で残っているため）", async () => {
+    vi.useFakeTimers();
+    const h = makeController();
+    h.setFocused(true);
+    await fireBlocked(h);
+    expect(hints()[0]!.message).toContain("（後から ctrl+b s でも変えられます）");
+
+    useSettingsStore(pinia).setKeyPrefix("alt+x");
+    await settle();
+    expect(hints(), "重ねず、同じ案内の文だけが変わる").toHaveLength(1);
+    expect(hints()[0]!.message).toContain("（後から alt+x s でも変えられます）");
+
+    useSettingsStore(pinia).setKeyBindings("settings", []);
+    await settle();
+    expect(hints()[0]!.message).toContain("（後から設定でも変えられます）");
+  });
+
+  it("設定を開く割り当てが無ければ、キーを書かずに「設定」と言う", async () => {
+    vi.useFakeTimers();
+    useSettingsStore(pinia).setKeyBindings("settings", []);
+    const h = makeController();
+    h.setFocused(true);
+    await fireBlocked(h);
+    expect(hints()[0]!.message).toContain("（後から設定でも変えられます）");
+    expect(hints()[0]!.message).not.toContain("prefix");
   });
 
   // **decisions D3**：表の (b) では `window` の `focus` がもう発火しないので、

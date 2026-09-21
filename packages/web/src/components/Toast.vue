@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { watch } from "vue";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 
 /**
  * トースト表示（T25）。`view.toasts` を並べ、クリックまたは一定時間で消す（design「短く表示する」）。
- * 「pane にフォーカスが入ったら一度だけ `Ctrl+B ?` でキー一覧」の案内（design「フォーカスの抜け道
+ * 「pane にフォーカスが入ったら一度だけ `ctrl+b ?` でキー一覧」の案内（design「フォーカスの抜け道
  * （WCAG 2.1.2）」）を、最初に pane へフォーカスが入ったときに一度だけ出す
  * （`localStorage` で「表示済み」を覚える。ブラウザをまたいでも二度と出さない）。
+ * **キーは現在の割り当て（`settings.keymap.hintFor("help")`）から作る**（20260921-keybinding-customization の AC11）。キー一覧を開く割り当てが無ければ**出さず、表示済みにもしない**
+ * （案内するキーが無いのに使い切らない。設定の節「キー」で割り当てたあと、次に別の pane へフォーカスが移ったとき〔または再読み込みのあと〕に出る）。
  */
 const HINT_STORAGE_KEY = "wtm.hint.prefixHelp.v1";
 const AUTO_DISMISS_MS = 4000;
 
 const view = useViewStore();
+const settings = useSettingsStore();
 
 function hasShownHint(): boolean {
   try {
@@ -32,8 +36,10 @@ watch(
   () => view.focusedPaneId,
   (id) => {
     if (!id || hasShownHint()) return;
+    const hint = settings.keymap.hintFor("help");
+    if (hint === null) return;
     markHintShown();
-    view.toast("Ctrl+B ? でキー一覧");
+    view.toast(`${hint} でキー一覧`);
   },
   { immediate: true },
 );

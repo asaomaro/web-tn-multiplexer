@@ -10,10 +10,11 @@ import { DISPLAY_STATES, stateGlyph, stateLabel } from "../store/stateIndicator.
 import { useViewStore } from "../store/view.js";
 import { effectiveScrollback, scrollbackChoices, type ScrollbackPref } from "../term/scrollback.js";
 import { siblingThemes, THEME_LABELS } from "../theme/themes.js";
+import KeySettings from "./KeySettings.vue";
 
 /**
- * 設定（20260921-herdr-settings-gaps の D7）。**見出しで 4 節（通知・テーマ・表示・端末）に分けた 1 枚**（テーマは 20260921-theme-settings の
- * decisions D11 で足した）。
+ * 設定（20260921-herdr-settings-gaps の D7）。**見出しで 5 節（通知・テーマ・表示・端末・キー）に分けた 1 枚**（テーマは 20260921-theme-settings の
+ * decisions D11 で、キーは 20260921-keybinding-customization の design「節「キー」の構成」で足した）。
  * 以前は通知だけのダイアログ（`NotificationSettingsDialog.vue`。20260920-agent-notifications の AC6〜AC8・AC12・AC13）で、
  * 通知の節はその実装をそのまま移した。`view.dialogContext.kind === "settings"` を扱う。形は `ConfirmDialog` と同じ
  * （ネイティブ `<dialog>` ＋ `showModal()` ＋ `@cancel` の抑止）。
@@ -232,8 +233,16 @@ function cancel(): void {
   view.closeDialog();
 }
 
+/**
+ * 節「キー」が取り込み待ちのとき（`KeySettings` の `v-model:capturing`）。**取り込み待ちの間はネイティブの `cancel`（Esc）で設定画面を閉じない**——
+ * Esc は取り込みの取り消しで、取り込みの部品が keydown の段階で止める（Chromium は Esc の keydown の `preventDefault()` で `cancel` 自体が起きない）。
+ * Firefox・Safari は未確認なので、ここでも念のため無視する（20260921-keybinding-customization の AC-I5）。
+ */
+const keysCapturing = ref(false);
+
 function onNativeCancel(ev: Event): void {
   ev.preventDefault(); // 既定の close は `view` を更新しないので、こちらで閉じる
+  if (keysCapturing.value) return;
   cancel();
 }
 </script>
@@ -396,6 +405,7 @@ function onNativeCancel(ev: Event): void {
         <p id="settings-path-note" class="settings-note">絶対パスか ~/ で始まるパス（~ だけならホーム）。使えない場所なら、代わりの場所で開いて知らせます。</p>
       </fieldset>
     </section>
+    <KeySettings v-model:capturing="keysCapturing" :kind="kind" />
     <p class="settings-hint">
       この設定はこのブラウザにだけ残ります（テーマは、このブラウザが操作している pane の色の問い合わせの答えにも使います）。Esc か「閉じる」で閉じます。
     </p>
@@ -405,7 +415,7 @@ function onNativeCancel(ev: Event): void {
 <style scoped>
 .settings-dialog {
   /* 狭い画面（幅 320〜385px の携帯）でもはみ出さない。以前の `min-width: 22em` は content-box で、枠と padding を含めて 386px になっていた。
-     背が高くなった（いまは 4 節）ので、画面の高さも越えないようにして中をスクロールさせる（`overflow` は UA の `dialog:modal` の既定が auto）。
+     背が高くなった（いまは 5 節）ので、画面の高さも越えないようにして中をスクロールさせる（`overflow` は UA の `dialog:modal` の既定が auto）。
      **`100vh` ではなく `100%`**（モーダルの `<dialog>` の包含ブロックは見えている領域）——iOS Safari の `100vh` はツールバーを畳んだときの
      高さなので、ツールバーが出ている間はダイアログが画面から切れる。 */
   box-sizing: border-box;
@@ -417,6 +427,8 @@ function onNativeCancel(ev: Event): void {
      焦点が移ったときに行が題名の行の下に隠れないよう、スクロールの止まる位置も題名の行の分だけ下げる（WCAG 2.4.11。review ラウンド2）。 */
   padding-top: 0;
   scroll-padding-top: calc(1em + 2rem + 0.8em);
+  /* 節「キー」の結果の文（下に固定）の分。フォーカスが移ったとき、その帯の下に隠れないよう、スクロールの止まる位置も上げる（WCAG 2.4.11）。 */
+  scroll-padding-bottom: calc(1.4em + 1.3em + 0.6em);
   background: var(--wtm-menu-bg, #282a36);
   color: var(--wtm-fg, #f8f8f2);
   border: 1px solid var(--wtm-menu-border, #44475a);

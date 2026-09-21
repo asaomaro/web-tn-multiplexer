@@ -1,13 +1,18 @@
 import { mount } from "@vue/test-utils";
 import { createPinia, type Pinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import HelpDialog from "./HelpDialog.vue";
 
 let pinia: Pinia;
 
 beforeEach(() => {
+  localStorage.clear(); // 割り当て（wtm.prefs.v1 の keys）を保存するテストがあるので、前のテストの値を持ち越さない
   pinia = createPinia();
+});
+afterEach(() => {
+  localStorage.clear();
 });
 
 function mountDialog() {
@@ -40,7 +45,7 @@ describe("HelpDialog — 表示", () => {
     expect(wrapper.text()).toContain("次の知らせへ移る");
     // `s` の行を特定して見る——「設定」は「未対応（後続: 外観と設定）」にも含まれるので、全文の `toContain` では
     // `s` の表記が何であっても通ってしまう（20260921-herdr-settings-gaps で「通知の設定」から「設定」に広げた）。
-    const sLabel = wrapper.findAll("dt").find((dt) => dt.text() === "s")?.element.nextElementSibling?.textContent;
+    const sLabel = wrapper.findAll("dt").find((dt) => dt.text() === "prefix+s")?.element.nextElementSibling?.textContent;
     expect(sLabel).toBe("設定");
     expect(wrapper.text(), "壊れた表示（work 名が空）を出さない").not.toContain("未対応（後続: ）");
     // `shift+g`（グルーピングの枠）は 20260920-git-worktree-actions で「新しい worktree」に置き換わった。
@@ -62,7 +67,7 @@ describe("HelpDialog — 表示", () => {
     await wrapper.get("input").setValue("拡大");
     const names = wrapper.findAll(".help-dialog-group-name").map((el) => el.text());
     expect(names).toEqual(["pane"]);
-    expect(wrapper.findAll("dt").map((el) => el.text())).toEqual(["z"]);
+    expect(wrapper.findAll("dt").map((el) => el.text())).toEqual(["prefix+z"]);
   });
 });
 
@@ -143,5 +148,110 @@ describe("HelpDialog — スクロール", () => {
 
     await wrapper.get("dialog").trigger("keydown", { key: "ArrowDown" });
     expect(list.scrollTop).toBe(82); // 効く
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260921-keybinding-customization：キー一覧は現在の割り当てから作る（AC11）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("HelpDialog — 現在の割り当て（AC11）", () => {
+  const dts = (w: ReturnType<typeof mountDialog>) => w.findAll("dt").map((el) => el.text());
+  const rowOf = (w: ReturnType<typeof mountDialog>, keys: string) => w.findAll("dt").find((dt) => dt.text() === keys);
+
+  it("何も変えていなければ、今のキー（prefix+ を付けた表記）。先頭に prefix の行。tab / shift+tab の行は pane 群の巡回へ", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    const groups = wrapper.findAll(".help-dialog-group");
+    // 全体：prefix・?・q・s・o・（後続の shift+r）
+    expect(groups[0]!.findAll("dt").map((el) => el.text())).toEqual(["ctrl+b", "prefix+?", "prefix+q", "prefix+s", "prefix+o", "prefix+shift+r"]);
+    expect(groups[0]!.findAll("dd")[0]!.text()).toContain("prefix");
+    // 移動（navigate モードの中のキー）は固定。pane の巡回の行は無い
+    expect(groups[1]!.findAll("dt").map((el) => el.text())).toEqual(["esc", "↑ / ↓", "h / j / k / l ・← / →", "enter"]);
+    // workspace / tab
+    expect(groups[2]!.findAll("dt").map((el) => el.text())).toContain("prefix+1..9");
+    expect(groups[2]!.findAll("dt").map((el) => el.text())).toContain("prefix+shift+n");
+    // pane：巡回（prefix+tab・prefix+shift+tab）は操作の行、swap は出さない、後続の e は最後
+    const pane = groups[3]!.findAll("dt").map((el) => el.text());
+    expect(pane).toContain("prefix+tab");
+    expect(pane).toContain("prefix+shift+tab");
+    expect(pane).toContain("prefix+-");
+    expect(pane.at(-1)).toBe("prefix+e");
+    expect(wrapper.text()).not.toContain("入れ替え");
+  });
+
+  it("prefix を変えると先頭の行が変わる。割り当てを変えると、その操作の行が変わる（prefix の後・直接・複数）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyPrefix("ctrl+a");
+    settings.setKeyBindings("split_vertical", ["prefix+|", "ctrl+alt+d"]);
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    expect(dts(wrapper)[0]).toBe("ctrl+a");
+    const split = rowOf(wrapper, "prefix+| / ctrl+alt+d");
+    expect(split?.element.nextElementSibling?.textContent).toBe("右へ分割");
+    expect(rowOf(wrapper, "prefix+v")).toBeUndefined();
+  });
+
+  it("開いている間に割り当てを変えても、その場で追従する", async () => {
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    expect(rowOf(wrapper, "prefix+z")).toBeDefined();
+    settings.setKeyBindings("zoom", ["ctrl+alt+z"]);
+    await wrapper.vm.$nextTick();
+    expect(rowOf(wrapper, "prefix+z")).toBeUndefined();
+    expect(rowOf(wrapper, "ctrl+alt+z")?.element.nextElementSibling?.textContent).toBe("拡大表示");
+  });
+
+  it("割り当てなしの操作は「なし」（灰色）で出す", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyBindings("detach", []);
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    const none = rowOf(wrapper, "なし");
+    expect(none?.element.nextElementSibling?.textContent).toBe("このブラウザを切り離す");
+    expect(none?.classes()).toContain("help-dialog-grayed");
+  });
+
+  it("「後続」の案内は、そのキーがまだ「後続」のときだけ出す（別の操作に割り当てたら出さない）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyBindings("goto", ["prefix+g", "prefix+e"]);
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    expect(wrapper.text()).not.toContain("未対応（後続: 端末機能の拡張）"); // e は goto の割り当て
+    expect(wrapper.text()).toContain("未対応（後続: 外観と設定）"); // shift+r はそのまま
+    expect(rowOf(wrapper, "prefix+g / prefix+e")).toBeDefined();
+    // 「後続」の行そのものが出ない（work が空の壊れた行「未対応（後続: undefined）」にもならない）
+    expect(rowOf(wrapper, "prefix+e"), "e の後続の行は無い").toBeUndefined();
+    expect(wrapper.text()).not.toContain("undefined");
+    expect(wrapper.text()).not.toContain("未対応（後続: ）");
+  });
+
+  it("shift+r を別の操作に割り当てても、その「後続」の行は出ない（全体の群）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyBindings("help", ["prefix+?", "prefix+R"]);
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    expect(rowOf(wrapper, "prefix+shift+r"), "shift+r の後続の行は無い").toBeUndefined();
+    expect(rowOf(wrapper, "prefix+? / prefix+shift+r")).toBeDefined();
+    expect(wrapper.text()).not.toContain("未対応（後続: 外観と設定）");
+    expect(wrapper.text()).toContain("未対応（後続: 端末機能の拡張）"); // e はそのまま
+  });
+
+  it("絞り込みは現在の表記でも効く（ctrl+alt）。一致 0 件の群は消える", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyBindings("split_vertical", ["prefix+v", "ctrl+alt+d"]);
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    await wrapper.get("input").setValue("ctrl+alt");
+    expect(wrapper.findAll(".help-dialog-group-name").map((el) => el.text())).toEqual(["pane"]);
+    expect(dts(wrapper)).toEqual(["prefix+v / ctrl+alt+d"]);
   });
 });

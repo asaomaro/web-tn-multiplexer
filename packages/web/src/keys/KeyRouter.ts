@@ -1,5 +1,6 @@
 import type { Action, KeyDecision, KeyInput, Mode } from "./actions.js";
-import type { Keymap } from "./keymap.js";
+import { chordOf, chordToKeyInput, isAltGrComposed, MODIFIER_ONLY_KEYS, PREFIX_CANCEL_CHORD } from "./chord.js";
+import type { ResolvedKeymap } from "./keymap.js";
 
 export type { Action, CopyCommand, Dir, KeyDecision, KeyInput, Mode } from "./actions.js";
 
@@ -26,42 +27,30 @@ export interface SubModeInterpreters {
   resize?: SubModeInterpreter;
 }
 
-/** `KeyInput` を `keymap.ts` のキー表記に正規化する（大文字はシフトを含む。Tab 等は明示的に `shift+` を足す）。 */
-const SHIFT_INSENSITIVE_KEYS = new Set(["Tab", "Enter", "Escape", " ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", "Backspace", "Delete"]);
-
 /**
- * 修飾キー単体の `KeyboardEvent.key`（D81）。`Shift+T` 等を押すと、ブラウザは本命のキーより**先に
- * `Shift` 単体の keydown を必ず発火する**（合成入力に限らず実機のキーボードでも同じ順）。これを
- * `DEFAULT_KEYMAP` に無い「割り当ての無いキー」として扱うと、prefix 中に修飾キー単体の keydown が
- * 先に届いて prefix を抜けてしまい、本命の `Shift+<文字>`（`P`/`T`/`X`/`N`/`W`/`D`/`H`/`J`/`K`/`L`/`R`）が
- * 全滅する（実機の Chromium を使う test 工程の実地の確認で発見）。
- */
-const MODIFIER_ONLY_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph"]);
-
-export function comboKey(k: Pick<KeyInput, "key" | "ctrl" | "alt" | "meta" | "shift">): string {
-  const mods: string[] = [];
-  if (k.ctrl) mods.push("ctrl");
-  if (k.alt) mods.push("alt");
-  if (k.meta) mods.push("meta");
-  if (k.shift && SHIFT_INSENSITIVE_KEYS.has(k.key)) mods.push("shift");
-  return [...mods, k.key].join("+");
-}
-
-/**
- * prefix（`Ctrl+B`）の状態機械（architecture.md「keys/KeyRouter.ts」）。Vue にも DOM にも依存しない。
- * herdr のソースで確定させた挙動（D55・D56）: prefix 中にもう一度 prefix を押すと `\x02` を端末へ送る、
+ * prefix の状態機械（architecture.md「keys/KeyRouter.ts」）。Vue にも DOM にも依存しない。
+ * herdr のソースで確定させた挙動（D55・D56）: prefix 中にもう一度 prefix を押すと prefix のキー自身を端末へ送る（既定の `ctrl+b` は `\x02`）、
  * 割り当ての無いキーは黙って捨てる、copy モード中も prefix が効き元の copy モードへ戻る。
  * prefix の 3 秒の時間切れは herdr には無いが、AC-I1 の要求により本製品では維持する。
+ *
+ * **prefix と割り当ては解決した表（`ResolvedKeymap`）から引く**（20260921-keybinding-customization。`setKeymap` で差し替える）。キーの照合は `chord.ts` の `chordOf` の正規形。
+ * prefix の後のキー（`prefixMap`）に加えて、terminal モードでだけ**直接のキー**（`directMap`。prefix を押さない 1 打）を引く。
  */
 export class KeyRouter {
   private currentMode: Mode = "terminal";
   /** prefix から戻る先（terminal のことが多いが、copy モード中に prefix へ入った場合は copy）。 */
   private returnMode: Mode = "terminal";
   private prefixTimer: unknown = null;
+  /**
+   * 直接のキーで action を返した chord（押しっぱなしの間だけ覚える）。**その chord の繰り返しは、モードに関わらず食う**——`enterMode` の直接のキー
+   * （`ctrl+alt+r` 等）は最初の 1 打でモードが移り、繰り返しが入ったばかりのモードのキーとして渡ってしまう（resize から抜ける等）ため。
+   * 次の（繰り返しでない）keydown で忘れる。
+   */
+  private directHeld: string | null = null;
   private readonly modeListeners = new Set<(m: Mode) => void>();
 
   constructor(
-    private readonly keymap: Keymap,
+    private keymap: ResolvedKeymap,
     private readonly clock: KeyRouterClock,
     private readonly subModes: SubModeInterpreters = {},
   ) {}
@@ -70,17 +59,36 @@ export class KeyRouter {
     return this.currentMode;
   }
 
+  /**
+   * 割り当てが変わったときに差し替える（設定画面で変えると即時に効く。AC8）。**進行中の状態（prefix 中など）は変えない**——次のキーから新しい表で引く。
+   * 設定画面で変えたときは `dialog` モードだが、別のウィンドウの変更（`store/settings.ts` の `storage` 追従）は任意のモードで届く。
+   */
+  setKeymap(keymap: ResolvedKeymap): void {
+    this.keymap = keymap;
+  }
+
+  /** いまの prefix の `KeyInput`（モバイルの Prefix ボタンが注入する。`KeyInputController.injectPrefix`）。 */
+  prefixKeyInput(): KeyInput {
+    return chordToKeyInput(this.keymap.prefix);
+  }
+
   handle(k: KeyInput): KeyDecision {
     // keydown 以外・IME の変換中は prefix と判定しない（design「キー操作」）。どのモードでも同様に扱う。
     if (k.type !== "keydown" || k.composing) return { kind: "pass" };
 
-    const combo = comboKey(k);
+    const chord = chordOf(k);
 
-    if (this.currentMode === "prefix") return this.handleInPrefix(combo, k.key);
+    if (k.repeat === true) {
+      if (this.directHeld !== null && chord === this.directHeld) return { kind: "consume" };
+    } else {
+      this.directHeld = null;
+    }
+
+    if (this.currentMode === "prefix") return this.handleInPrefix(chord, k.key);
 
     if (this.currentMode === "terminal" || this.currentMode === "copy") {
-      if (combo === "ctrl+b") return this.enterPrefix();
-      if (this.currentMode === "terminal") return { kind: "pass" };
+      if (chord !== null && chord === this.keymap.prefix) return this.enterPrefix();
+      if (this.currentMode === "terminal") return this.handleDirect(chord, k);
       return this.delegateToSubMode(this.subModes.copy, k);
     }
 
@@ -100,20 +108,36 @@ export class KeyRouter {
     this.modeListeners.add(cb);
   }
 
-  private handleInPrefix(combo: string, key: string): KeyDecision {
+  /**
+   * 直接のキー（prefix を押さない 1 打。D4）。terminal モードでだけ引き、割り当てが無ければ端末の入力（`pass`）。**押しっぱなしの繰り返しは、割り当てのあるキーなら何もせず食う**
+   * ——分割・pane の閉鎖が連発する事故を避ける。
+   */
+  private handleDirect(chord: string | null, k: KeyInput): KeyDecision {
+    // AltGr で合成された文字（ドイツ語配列の AltGr+8＝`[` は `ctrl+alt+[` と同じ形で届く）は、直接のキーに当てず端末の入力として通す——取り込みで拒否するのと同じ判定（D6a。`isAltGrComposed`）。
+    // 素の `altGraph` では見ない（Firefox・Windows は Ctrl+Alt を押すだけで真になるので、US 配列の `ctrl+alt+[` まで通してしまう）。
+    if (isAltGrComposed(k)) return { kind: "pass" };
+    const action = chord === null ? undefined : this.keymap.directMap.get(chord);
+    if (action === undefined) return { kind: "pass" };
+    if (k.repeat === true) return { kind: "consume" };
+    this.directHeld = chord;
+    if (action.type === "enterMode") this.setModeInternal(action.mode);
+    return { kind: "action", action };
+  }
+
+  private handleInPrefix(chord: string | null, key: string): KeyDecision {
     // 修飾キー単体の keydown（D81）：prefix を維持したまま無視する（timer にも触らない——`Shift+T` の
     // `Shift` だけで 3 秒の猶予を消費・リセットしないため）。
     if (MODIFIER_ONLY_KEYS.has(key)) return { kind: "consume" };
     this.clearPrefixTimer();
-    if (combo === "ctrl+b") {
+    if (chord !== null && chord === this.keymap.prefix) {
       this.setModeInternal(this.returnMode);
-      return { kind: "send", bytes: "\x02" };
+      return { kind: "send", bytes: this.keymap.prefixBytes };
     }
-    if (combo === "Escape") {
+    if (chord === PREFIX_CANCEL_CHORD) {
       this.setModeInternal(this.returnMode);
       return { kind: "consume" };
     }
-    const action = this.keymap.get(combo);
+    const action = chord === null ? undefined : this.keymap.prefixMap.get(chord);
     if (!action) {
       this.setModeInternal(this.returnMode);
       return { kind: "consume" };

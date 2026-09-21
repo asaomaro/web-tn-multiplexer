@@ -4,7 +4,7 @@ import { KeyInputControllerKey } from "../injection.js";
 import ExtraKeys from "./ExtraKeys.vue";
 
 function makeKeys() {
-  return { injectKey: vi.fn(), setPendingModifier: vi.fn() };
+  return { injectKey: vi.fn(), injectPrefix: vi.fn(), setPendingModifier: vi.fn() };
 }
 
 function mountExtraKeys(keys: ReturnType<typeof makeKeys>) {
@@ -29,11 +29,25 @@ describe("ExtraKeys — 単純なキー", () => {
     expect(keys.injectKey).toHaveBeenLastCalledWith(expect.objectContaining({ key: "PageDown" }));
   });
 
-  it("Prefix は ctrl+b を injectKey する（Ctrl+B と同じ）", async () => {
+  it("Ctrl を armed（one-shot）にして Prefix を押すと、注入のあとに待機を解除する（lock は残る）", async () => {
+    const keys = makeKeys();
+    const wrapper = mountExtraKeys(keys);
+    const buttons = wrapper.findAll("button");
+    const labels = buttons.map((b) => b.text());
+    await buttons[labels.indexOf("Ctrl")]!.trigger("pointerdown");
+    await buttons[labels.indexOf("Ctrl")]!.trigger("pointerup");
+    expect(keys.setPendingModifier).toHaveBeenLastCalledWith({ ctrl: true, alt: false }, { locked: false });
+    await wrapper.get("button:last-child").trigger("click");
+    expect(keys.injectPrefix).toHaveBeenCalledTimes(1);
+    expect(keys.setPendingModifier).toHaveBeenLastCalledWith(null, { locked: false }); // one-shot は使い切って解除
+  });
+
+  it("Prefix は injectPrefix を呼ぶ（いまの prefix を注入する。どのキーかは KeyInputController が Router から得る。AC11）", async () => {
     const keys = makeKeys();
     const wrapper = mountExtraKeys(keys);
     await wrapper.get("button:last-child").trigger("click");
-    expect(keys.injectKey).toHaveBeenCalledWith({ key: "b", code: "KeyB", ctrl: true, alt: false, shift: false, meta: false, type: "keydown", composing: false });
+    expect(keys.injectPrefix).toHaveBeenCalledTimes(1);
+    expect(keys.injectKey, "ctrl+b を直に注入しない（prefix を変えると別のキーになる）").not.toHaveBeenCalled();
   });
 });
 

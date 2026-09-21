@@ -15,6 +15,10 @@ export interface KeyInput {
   meta: boolean;
   type: "keydown" | "keyup" | "keypress";
   composing: boolean;
+  /** `getModifierState("AltGraph")`（20260921-keybinding-customization の D6a。AltGr で合成された文字を割り当てに取り込まない）。省略は偽。 */
+  altGraph?: boolean;
+  /** 押しっぱなしの繰り返し（同 D4。直接のキーは繰り返しを食う）。省略は偽。 */
+  repeat?: boolean;
 }
 
 export type KeyDecision =
