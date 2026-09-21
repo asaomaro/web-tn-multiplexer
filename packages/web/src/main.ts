@@ -160,6 +160,19 @@ watch(
 // 案内は「見ていないタブに出して消費される」のを避けるため、フォーカスが戻ってから出す。
 window.addEventListener("focus", () => notifications.showHintIfDue());
 
+// 自動再生の解除（AC13）。**制限はページの読み込みごとに掛かり直す**ので、設定を「入」にした操作だけでは
+// 読み込み直した後に鳴らない。**最初の操作で解除しておく**（`capture` で受けるのは、端末や
+// ダイアログが握って止めても届かせるため。`passive` で既定の動作には触らない）。
+//
+// **`pointerup` を外さない**——HTML 仕様が「操作」と数えるのは `pointerdown` では
+// `pointerType === "mouse"` のときだけで、**タッチとペンは `pointerup` でしか活性化しない**。
+// `pointerdown` だけにすると、携帯の最初のタップで `AudioContext` を `suspended` のまま作ってしまい、
+// **結線を足す前より悪くなる**（タップ 1 回 → 放置 → 最初の知らせ、が鳴らなくなる。タスク点検 T24 の指摘）。
+// モバイルは OS 通知を出せない（research F79）ので、音が唯一の経路になる。
+for (const type of ["pointerdown", "pointerup", "keydown"] as const) {
+  window.addEventListener(type, () => notifications.noteUserGesture(), { capture: true, passive: true });
+}
+
 notificationsBox.current = notifications;
 
 const actionDispatcher = new ActionDispatcher({ conn, pinia, registry, keys, input: inputGate, notifications });

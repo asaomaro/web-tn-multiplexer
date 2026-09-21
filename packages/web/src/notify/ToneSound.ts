@@ -56,6 +56,9 @@ export class ToneSound implements SoundPort {
     const ctx = this.#context();
     if (!ctx) return "unsupported";
     // 利用者がこの画面をまだ操作していなければ `suspended` のまま——**鳴らない事実を返す**。
+    // **ここでは解除しにいかない**。解除は `NotificationController.#unlockSound()` が握っていて
+    // （成功したら「鳴らせませんでした」の印も下ろす）、ここで直に `unlock()` を呼ぶと
+    // **その出口を迂回して印だけが残る**（タスク点検 T24 ラウンド2 の指摘）。
     if (ctx.state !== "running") return "blocked";
 
     try {
@@ -68,11 +71,23 @@ export class ToneSound implements SoundPort {
     }
   }
 
-  /** 利用者の操作から呼ぶ（案内の［許可する］・設定で音を「入」にしたとき）。 */
-  unlock(): void {
+  /**
+   * 自動再生の制限を解除する。**解除できたら `true`**（`ports.ts` の契約）。
+   * 呼び口は `NotificationController.#unlockSound()` の 1 つだけ（案内の［許可する］・設定で音を
+   * 「入」にしたとき・画面への操作・鳴らせなかった知らせの後）。**reject しない**（`ports.ts` の契約）。
+   */
+  async unlock(): Promise<boolean> {
     const ctx = this.#context();
-    if (!ctx || ctx.state === "running") return;
-    void ctx.resume().catch(() => undefined); // 失敗しても次の `play` が `"blocked"` を返すだけ
+    if (!ctx) return false;
+    if (ctx.state === "running") return true;
+    try {
+      await ctx.resume();
+    } catch {
+      return false; // 失敗しても投げない。次の `play` が `"blocked"` を返すだけ
+    }
+    // **`await` の後の実物の値は型に反映されない**（早期 return で `"running"` 以外に絞られたまま）。
+    // 持ち物のほうから読み直す（同じ `AudioContext` を指している）。
+    return this.#ctx?.state === "running";
   }
 
   #beep(ctx: AudioContext, hz: number, at: number): void {

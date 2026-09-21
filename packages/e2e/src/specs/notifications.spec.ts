@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Page } from "@playwright/test";
+import { devices, type Page } from "@playwright/test";
 import { expect, test } from "../support/fixtures.js";
 import { focusTerminal, prefixKey, typeLine } from "../support/keys.js";
 import type { WtmTestClient } from "../support/wsClient.js";
@@ -90,10 +90,22 @@ async function installNotifyProbe(page: Page, prefs: ProbePrefs, permission: "gr
       (window as unknown as { Notification: unknown }).Notification = FakeNotification;
 
       class FakeAudioContext {
-        state = "running";
+        // **実物は「まだ操作されていないページ」では `suspended` で始まる**（自動再生の制限）。
+        // `running` で始まる偽物にすると、**解除の結線が無くても鳴っているように見え**、
+        // 「読み込み直した直後は永久に鳴らない」という穴が E2E から隠れる（PR レビュー（人間）の指摘）。
+        // ここが `suspended` なので、下の音の判定は `main.ts` の `pointerdown`/`keydown` →
+        // `noteUserGesture()` → `resume()` が繋がっていて初めて通る（`openApp` が端末をクリックする）。
+        state = "suspended";
         currentTime = 0;
         destination = {};
         resume(): Promise<void> {
+          // **実物は「一度でも操作されたページ」でしか解除できない**（sticky activation）。
+          // ただし**この環境では歯止めにならない**——Playwright の chromium は
+          // **何も操作していない時点で既に `hasBeenActive=true`** を返す（実測。`test-result.md` の
+          // 負の対照 D）。つまり E2E は「活性化したか」を見分けられない。実物に近い形で書いておくが、
+          // **これが守りになっているとは考えないこと**。
+          const ua = (navigator as unknown as { userActivation?: { hasBeenActive: boolean } }).userActivation;
+          if (ua && !ua.hasBeenActive) return Promise.reject(new Error("not allowed without user activation"));
           this.state = "running";
           return Promise.resolve();
         }
@@ -150,7 +162,7 @@ interface FakeAgent {
  * 偽のエージェントを起動し、**起動猶予が明けるまで待って**から戻る。
  * 入力待ちにするのは呼ぶ側の `block()`——`sleep` で固定すると競走になる。
  */
-async function launchFakeAgent(page: Page, client: WtmTestClient, paneId: string): Promise<FakeAgent> {
+async function launchFakeAgent(page: Page, client: WtmTestClient, paneId: string, opts: { via?: "keyboard" | "client" } = {}): Promise<FakeAgent> {
   const dir = await mkdtemp(join(tmpdir(), "wtm-e2e-notify-"));
   tempDirs.push(dir);
   const scriptPath = join(dir, "fake-claude.sh");
@@ -168,7 +180,11 @@ async function launchFakeAgent(page: Page, client: WtmTestClient, paneId: string
   await writeFile(scriptPath, script);
 
   const firstJudged = client.waitForEvent("pane.agent_status_changed", (e) => e.data.paneId === paneId);
-  await typeLine(page, `exec -a claude bash ${scriptPath}`);
+  const command = `exec -a claude bash ${scriptPath}`;
+  // **タッチの検証では `via: "client"`**——ブラウザのキーで打つと `keydown` が「操作」に数えられ、
+  // タップだけで解除できるかという問いが成立しなくなる（テストが何も守らなくなる）。
+  if (opts.via === "client") client.sendInput(paneId, `${command}\r`);
+  else await typeLine(page, command);
   await client.waitForOutput(paneId, readyMarker);
   await firstJudged; // 猶予が明けて 500ms 周期の判定に入った
 
@@ -380,4 +396,46 @@ test("通知：prefix+s で設定を開き、キーだけで切り替えられ�
   await expect(dialog).toBeHidden();
   await prefixKey(page, "s");
   await expect(dialog.locator('[role="switch"]').first()).toHaveAttribute("aria-checked", "false");
+});
+
+/**
+ * **タッチ端末**（`devices["iPhone 13"]` のエミュレーション。`mobile.spec.ts` と同じ流儀で
+ * chromium に載せる）。**マウスのクリックもキーも使わない**——タップと、ブラウザの外から打ち込む
+ * 偽エージェントだけで、知らせが届いて音が鳴るところまでを見る。
+ * モバイルは OS 通知を出せない（research F79）ので、**音が唯一の経路**になる。
+ *
+ * **このテストは `main.ts` の `pointerup` の要否を確かめられない**。HTML 仕様ではタッチの
+ * `pointerdown` は「操作」に数えられず `pointerup` が要る（D12）が、**この環境の chromium は
+ * タップ前から `hasBeenActive=true` を返す**ので、`pointerup` を外しても通ってしまう
+ * （負の対照 D で実測）。**タッチでの解除の確認は実機に残っている**（`test-result.md` の未検証の穴）。
+ */
+// **`defaultBrowserType` は describe の中では使えない**（worker を切り替えることになるため。
+// Playwright がその場でそう言う）。この一式は既に chromium で走っているので、端末の条件だけを借りる。
+const IPHONE_13 = { ...devices["iPhone 13"] };
+delete (IPHONE_13 as { defaultBrowserType?: string }).defaultBrowserType;
+
+test.describe("タッチ端末", () => {
+  test.use(IPHONE_13);
+
+  test("通知：タッチ端末でも知らせが届き、音が鳴る（AC13）", async ({ page, appServer }) => {
+    const client = await appServer.openClient();
+    const p1 = client.helloSnapshot()!.panes[0]!.id;
+    await client.request("pane.subscribe", { paneId: p1, scrollbackLines: 4000 });
+    await installNotifyProbe(page, ALL_ON);
+
+    // **`openApp` を使わない**（`focusTerminal` の `.click()` はマウスの押下なので、`pointerdown` で
+    // 活性化してしまいタッチの経路を通らない）。
+    await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+    await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+    const box = (await page.locator(".xterm-helper-textarea").first().boundingBox())!;
+    await page.touchscreen.tap(box.x + 10, box.y + 10); // これがこのテストで唯一の「操作」
+
+    await blurWindow(page);
+    const agent = await launchFakeAgent(page, client, p1, { via: "client" });
+    await agent.block();
+
+    await expect(page.locator(".toast", { hasText: "入力待ちです" })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("#e2e-notify-probe .e2e-tone"), "タッチ端末でも音の経路が通る").toHaveCount(2, { timeout: 5000 });
+  });
 });

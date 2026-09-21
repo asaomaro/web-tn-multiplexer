@@ -40,6 +40,15 @@ export type SoundResult = "played" | "blocked" | "unsupported";
 
 export interface SoundPort {
   play(kind: NotifyKind): SoundResult;
-  /** 利用者の操作から呼んで `AudioContext` を `running` にする（以後そのページでは鳴る）。 */
-  unlock(): void;
+  /**
+   * `AudioContext` を `running` にする。**解除できたら `true`**（呼ぶ側はこれを見て
+   * 「鳴らせませんでした」の印を下ろす）。
+   *
+   * **利用者の操作の中から呼ぶのが本筋**だが（案内の［許可する］・設定で音を「入」にしたとき・
+   * 画面への最初の操作）、鳴らせなかった知らせの後にも呼ぶ——一度でも操作されたページなら
+   * 操作の外からの `resume()` も通るブラウザがあり、通れば**次の知らせから鳴る**。
+   *
+   * **reject しない**（失敗は `false` で返す）。呼ぶ側は「解除できたか」だけを見ればよい。
+   */
+  unlock(): Promise<boolean>;
 }

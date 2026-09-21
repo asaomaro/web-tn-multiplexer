@@ -240,6 +240,18 @@ design の「テストの置き方」に従う。要点:
       対象: `packages/e2e/src/specs/`（新規 spec） / 根拠: design「テストの置き方」、条項 `e2e-observe-browser`、research F49
       依存: T20
       AC: AC1, AC3, AC5, AC10, AC15, AC-I3
+- [x] T24: **利用者の操作で自動再生を解除する**（PR レビュー（人間）の指摘）。
+      設定の注記「どこかを押すと鳴るようになります」が事実ではなかった——解除の経路は
+      「設定で音を入にした瞬間」と「案内の［許可する］」の 2 つだけで、**自動再生の制限は
+      ページの読み込みごとに掛かり直す**ため、読み込み直した後の利用者には効かない。
+      `main.ts` が `pointerdown`/`keydown` を拾って `noteUserGesture()` を呼ぶ経路を足し、
+      `play()` 自身も鳴らせなかったときに解除を試みる。
+      **E2E の偽 `AudioContext` を実物に合わせて `suspended` で始める**（`running` だと
+      結線が無くても鳴って見え、穴が隠れる）
+      対象: `packages/web/src/notify/ToneSound.ts:55` `packages/web/src/notify/NotificationController.ts:351`
+      `packages/web/src/main.ts` `packages/e2e/src/specs/notifications.spec.ts:92`
+      依存: T22
+      AC: AC13
 - [ ] T23: 全パッケージの単体テストと既定の E2E を走らせて結果を記録する
       （**test 工程で消化する**。coding では未チェックのまま承認してよい）。
       **`pnpm build` を通してから E2E を走らせる**

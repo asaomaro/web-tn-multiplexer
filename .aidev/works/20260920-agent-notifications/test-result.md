@@ -2,7 +2,22 @@
 
 ## 実行したもの
 
-**ラウンド 3**（review ラウンド2 の 4 件を直した後。数字はすべてこの時点のもの）
+**ラウンド 4**（PR #5 提出後。利用者の実機確認で見つかった T24 を直した後。最終の数字）
+
+- `pnpm build` — exit 0
+- `vitest run --root packages/protocol` — 18 passed / 0 failed / 0 skipped
+- `vitest run --root packages/server` — 507 passed / 0 failed / 0 skipped
+- `vitest run --root packages/web` — **842 passed** / 0 failed / 0 skipped（T24 で +8 件）
+- `pnpm -C packages/e2e test`（既定の E2E 一式）— **77 passed**（6.6m。**1 回で全部通った**。
+  T24 でタッチ端末の 1 本を足したので 76 → 77）
+- `pnpm -C packages/{protocol,server,web,e2e} typecheck` — 4 つとも exit 0
+- `pnpm lint` — exit 0
+- `aidev smoke` — pass（exit 0）
+
+**この work 以降、一式を回すのは deliver の直前 1 回にする**（利用者の指示。`workers: 1` で 5〜8 分
+かかるので、直している間は該当の spec だけを走らせる）。T24 の間もそうした。
+
+### ラウンド 3（review ラウンド2 の 4 件を直した後。PR #5 提出時点の数字）
 
 **`pnpm build` を通してから E2E を走らせた**（先行 work の decisions D8：`packages/e2e` の test は
 再ビルドせず dist を読むので、直さずに走らせると古いバンドルを見る）。
@@ -17,7 +32,7 @@
 - `pnpm -C packages/e2e test -- src/specs/notifications.spec.ts` — **7 passed**（38.5s）
 - `pnpm -C packages/{protocol,server,web,e2e} typecheck` — 4 つとも exit 0
 - `pnpm lint` — exit 0
-- `aidev smoke` — pass（exit 0）
+- `aidev smoke` — pass（exit 0。ラウンド 4 でも通した）
 
 **E2E は 1 本ずつ走らせた**（`workers: 1`。同時に走らせると無関係な失敗が出る）。
 
@@ -235,43 +250,157 @@ $ 幅の縛りと min-width を外した状態（ellipsis が空振りする）
 **`viewport ratio 0`**——ボタンが画面の外へ完全に出ていた。**D9（知らせから移る手段を与える）の
 目的を直撃する**不具合で、**幅を「design に無い」として外したことが原因**だった。
 
-## 起動確認（smoke）
+### 9. T24（PR レビュー（人間）の指摘。自動再生の解除）
+
+**実機で使った利用者が見つけた不具合**——設定の注記は「どこかを押すと鳴るようになります」と言うのに、
+解除の経路が 2 か所しか無く、画面のどこを押しても解除されなかった。**負の対照を 5 つ**行った
+（A・B・E は単体、C・D は条項どおり**戻した状態でビルドし直してから** E2E）。
+
+**A. 鳴らせなかった知らせの後の解除をやめる**
 
 ```
-smoke: 20260920-agent-notifications
-$ pnpm -s build && pnpm -s smoke
-smoke: starting server on 127.0.0.1:46243 (state dir /tmp/wtm-smoke-mRps4W)
-{"ts":"2026-09-20T15:41:51.665Z","level":"info","msg":"agent manifests loaded","ok":22,"total":22}
-smoke: agent manifests ok (22/22)
-smoke: login ok
-smoke: websocket connected
-smoke: client.hello ok
-smoke: workspace.create ok (pane p2)
-smoke: pane.subscribe ok
-smoke: echo round trip ok
-smoke(web): auto-login (#token) → connect → pane 表示 ok
-smoke(web): 端末の描画用 canvas が画面内にある（xterm.css 有効。D96）
-smoke(web): tab title ok ("OSK2-024680-2: smoke"。H14/AC4）
-smoke(web): typed into pane p2
-smoke(web): echo round trip ok（ブラウザでの入力が PTY まで届いた）
-smoke: PASS
-smoke: pass (exit 0)
+--- 負の対照 A：鳴らせなかった知らせの後の解除をやめた ---
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/notify/NotificationController.test.ts > NotificationController — 音が使えない環境（AC13） > 鳴らせなかった知らせの後は解除を試み、解除できたら印を下ろす
+AssertionError: 諦めずに解除を試みる: expected "vi.fn()" to be called once, but got 0 times
+ ❯ src/notify/NotificationController.test.ts:1033:40
+    1031|     await fire(h);
+    1032|     const store = useNotificationsStore(pinia);
+--
+ Test Files  1 failed (1)
+      Tests  1 failed | 68 passed (69)
+   Start at  09:41:02
+   Duration  509ms (environment 39%, transform 27%, tests 19%, import 13%, worker 1%)
+
+restored: cmp ok
 ```
 
-この work は**新しい入口（サブコマンド・オプション）を足していない**（追加したのはブラウザ側の
-キーとメニューで、smoke は既にブラウザでの往復を確認している）ので、`smokeCommands` への追加は不要と判断した。
+**B. `noteUserGesture()` を何もしないようにする**
+
+```
+--- 負の対照 B：noteUserGesture() を何もしないようにした ---
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/notify/NotificationController.test.ts > NotificationController — 利用者の操作で自動再生を解除する（AC13） > 音が「入」なら、画面のどこかを操作した時点で解除しにいく
+AssertionError: expected "vi.fn()" to be called once, but got 0 times
+ ❯ src/notify/NotificationController.test.ts:1078:28
+    1076|     useNotificationsStore(pinia).setPrefs({ sound: true });
+--
+ Test Files  1 failed (1)
+      Tests  2 failed | 67 passed (69)
+   Start at  09:41:03
+   Duration  502ms (environment 40%, transform 26%, tests 20%, import 13%, worker 1%)
+
+restored: cmp ok
+```
+
+**E. 解除できても「鳴らせませんでした」の印を下ろさないようにする**
+
+```
+--- 負の対照 E：解除できても「鳴らせませんでした」の印を下ろさないようにした ---
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/notify/NotificationController.test.ts > NotificationController — 音が使えない環境（AC13） > 鳴らせなかった知らせの後は解除を試み、解除できたら印を下ろす
+AssertionError: 解除できた時点で印が下りる: expected true to be false // Object.is equality
+
+- Expected
+--
+ Test Files  1 failed | 1 passed (2)
+      Tests  3 failed | 86 passed (89)
+   Start at  09:41:04
+   Duration  1.04s (transform 34%, environment 32%, tests 19%, import 15%, worker 1%)
+
+restored: cmp ok
+```
+
+**C. `main.ts` の `pointerdown`/`pointerup`/`keydown` の結線をすべて外す**（E2E）
+
+```
+--- 負の対照 C：main.ts の結線をすべて外して再ビルドした（E2E） ---
+  ✘  1 src/specs/notifications.spec.ts:221:1 › 通知：入力待ちになると、トースト・OS 通知・音がそろって出る（AC1・AC3） (12.2s)
+  ✘  2 src/specs/notifications.spec.ts:420:3 › タッチ端末 › 通知：タッチ端末でも知らせが届き、音が鳴る（AC13） (10.7s)
+    Error: expect(locator).toHaveCount(expected) failed
+    Locator:  locator('#e2e-notify-probe .e2e-tone')
+    Expected: 2
+    Received: 0
+      - Expect "toHaveCount" locator('#e2e-notify-probe .e2e-tone') with timeout 5000ms
+      - waiting for locator('#e2e-notify-probe .e2e-tone')
+      236 |   await expect(page.locator("#e2e-notify-probe .e2e-notification")).toHaveCount(1, { timeout: 5000 });
+      237 |   await expect(page.locator("#e2e-notify-probe .e2e-notification").first()).toHaveAttribute("data-title", /入力待ち/);
+    > 238 |   await expect(page.locator("#e2e-notify-probe .e2e-tone")).toHaveCount(2); // 2 音
+    Error: タッチ端末でも音の経路が通る
+    expect(locator).toHaveCount(expected) failed
+    Locator:  locator('#e2e-notify-probe .e2e-tone')
+restored: cmp ok
+```
+
+**C がこの work で一番重い**。E2E の偽 `AudioContext` はそれまで `state = "running"` で始まっており、
+**結線が無くても鳴っているように見えていた**（実物は「まだ操作されていないページ」では `suspended`）。
+偽物を実物に合わせて初めて、この E2E が結線を守るようになった——外すと音が 0 になる。
+
+**D. `pointerup` だけを外す**（タッチ端末のテスト）——**落ちなかった**
+
+```
+--- 負の対照 D：pointerup を外して再ビルドした（タッチ端末のテスト） ---
+  ✓  1 src/specs/notifications.spec.ts:415:3 › タッチ端末 › 通知：タップだけで自動再生が解除され、音が鳴る（AC13・D12） (6.3s)
+  1 passed (7.3s)
+restored: cmp ok
+```
+
+**落ちない＝そのテストはその不具合を捕まえていない**（条項 `regression-negative-control`）。
+理由を測った。タップの前後で `navigator.userActivation` を読むと、**何も操作していない時点で既に
+`hasBeenActive=true`** を返す:
+
+```
+before: hasBeenActive=true isActive=true
+pointerdown: hasBeenActive=true isActive=true
+touchstart: hasBeenActive=true isActive=true
+pointerup: hasBeenActive=true isActive=true
+touchend: hasBeenActive=true isActive=true
+click: hasBeenActive=true isActive=true
+```
+
+つまり Playwright の chromium は**常に「操作済み」として振る舞う**ので、
+「タッチの `pointerdown` では活性化しない」という**仕様上の違いを E2E では再現できない**。
+テストの主張を実際に確かめられる範囲（タッチ端末でも知らせが届き、音の経路が通る）に直し、
+**`pointerup` の要否は「未検証の穴」へ送った**。
+
+## 実機確認の結果（PR 提出後。利用者）
+
+**E2E は本物のエージェントを起動できず**（`claude` を名乗るスクリプトで代用）、**OS 通知と音も
+差し替えた偽物**でしか観測していない。その穴を利用者が実機で埋めた。環境は
+**WSL2 上のサーバ ＋ Windows のブラウザ**（`localhost` で接続。secure context なので `Notification` が使える）。
+
+- **本物の Claude Code をエージェントとして見分ける** — OK
+- **入力待ちの判定**（herdr の `claude.toml` の `live_blocked_form` 等が、いまの版の実物の画面で効く）— OK
+- **完了の判定**（`AgentTracker` の working→idle）— OK
+- **画面の中の知らせと［移動］**で、別の workspace の pane へ移れる — OK
+- **ブラウザが前面のときは OS 通知も音も出さない**（`routesFor` の経路 (b)）— OK
+- **ブラウザが裏のとき OS 通知が出る** — OK（Windows の通知として）
+- **音が鳴る** — OK
+- **OS 通知のクリックで、その pane へ移れる** — OK
+- **許可ダイアログ**（`requestPermission()` の実挙動）— OK（設定で「入」にした操作から出て、許可が通った）
+
+**この確認の中で不具合が 1 件見つかり、T24 として直した**（上の「失敗の証跡 9.」）。
 
 ## 未検証の穴（skip / 環境不足）
 
-- **OS 通知と音の実機での確認**。E2E は `Notification` と `AudioContext` を**差し替えて**呼ばれた事実を
-  観測しており、**実際に OS の通知が出るか・音が鳴るかは確かめていない**（ブラウザの自動化では
-  原理的に観測できない）。**利用者の実機確認に送る**。
-- **モバイルでの OS 通知**。Android Chrome は `new Notification()` が throw し、iOS はホーム画面に
+- **モバイル（携帯・タブレット）**。Android Chrome は `new Notification()` が throw し、iOS はホーム画面に
   追加した web アプリでしか出せない（research F78・F79）。**実装は「この環境では使えません」に
   落とす経路を持つが、実機で確かめてはいない**。
-- **自動再生の制限**。`AudioContext` が `suspended` のまま来る経路（開いて放置 → 別タブ → 最初の通知）は
-  単体テストで固定しているが、**実ブラウザでその状況を作ってはいない**。
-- **許可ダイアログの実挙動**。`requestPermission()` がユーザー操作を要求する条件はブラウザごとに違う
-  （research F73）。差し替えた偽物でしか通していない。
+- **タッチでの自動再生の解除**（T24 の `pointerup`）。**この面はテストで守れない**——負の対照 D の
+  とおり、Playwright の chromium はタップ前から `hasBeenActive=true` を返し、
+  「タッチの `pointerdown` は活性化しない」という仕様上の違いを再現できない。
+  **仕様を読んで直しただけで、実機のタッチでは確かめていない**。E2E が見ているのは
+  「タッチ端末でも知らせが届き、音の経路が通る」ところまで。
+- **自動再生の制限が実際に掛かる状況**。`AudioContext` が `suspended` のまま来る経路
+  （読み込み直して放置 → 裏に回す → 最初の知らせ）は単体テストと E2E（偽物を `suspended` で始める）で
+  固定しているが、**実ブラウザでその状況を作ってはいない**。利用者の実機確認は、端末をクリックしてから
+  待つ流れだった（＝解除済みの経路）。
+- **OS 通知が Windows 側の設定で抑えられる場合**。集中モード（応答不可）やブラウザごとの通知の
+  オフは、こちらからは見えない（`show()` は成功を返す）。設定に出す手立てが無いことを
+  **既知の制限として PR に書く**。
 - **E2E 一式の安定性**。1 回目に `workspace-tab-pane.spec.ts` が時間切れで落ちた（2 回目は通った）。
+  **T24 の後にもう一度走らせたときも同じ spec が落ち、単独では 10/10 通った**（下記）。
   先行 work から続く課題で、この work が 6 本足したことで所要が延びている。backlog へ。

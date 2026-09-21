@@ -197,7 +197,12 @@ export class NotificationController {
       // **`"unsupported"` を `blocked` に畳まない**——畳むと「入」のまま注記も出ず、
       // **永久に鳴らない設定を利用者が「入」だと思い続ける**（design の異常系の表）。
       if (r === "unsupported") store.soundUsable = false;
-      else store.soundBlocked = r === "blocked"; // 鳴ったら下ろす
+      else {
+        store.soundBlocked = r === "blocked"; // 鳴ったら下ろす
+        // 鳴らせなかったら、ここで解除を試みる。一度でも操作されたページなら操作の外からの
+        // `resume()` も通るので、通れば**次の知らせから鳴る**（印もその時点で下りる）。
+        if (r === "blocked") this.#unlockSound();
+      }
     }
   }
 
@@ -323,7 +328,7 @@ export class NotificationController {
 
   async #acceptHint(): Promise<void> {
     // **どちらも利用者の操作の中**（AC7・自動再生の解除）。
-    this.#opts.sound.unlock();
+    this.#unlockSound();
     const p = await this.#opts.desktop.request();
     if (p === "granted") this.#store.setPrefs({ desktop: true });
     this.#consumeHint();
@@ -349,7 +354,40 @@ export class NotificationController {
 
   /** 設定で音を「入」にした瞬間＝利用者の操作なので、ここで自動再生を解除しておく。 */
   unlockSound(): void {
-    this.#opts.sound.unlock();
+    this.#unlockSound();
+  }
+
+  /**
+   * **利用者が画面のどこかを操作した**（`main.ts` が `pointerdown`・`pointerup`・`keydown` に繋ぐ）。
+   * **`pointerup` を落とさない**——タッチとペンは `pointerdown` では活性化しない（理由は `main.ts` 側）。
+   *
+   * 自動再生の制限は**ページを読み込むたびに**掛かり直すので、設定を「入」にした操作は
+   * 読み込み直した後には効かない。ここが無いと、**読み込み直してから何も操作しないうちに
+   * 最初の知らせが来た利用者**は、設定を入れ直すまで永久に鳴らないのに、設定の注記は
+   * 「どこかを押すと鳴るようになります」と言う（PR レビュー（人間）の指摘）。
+   *
+   * **「切」の人の操作では `AudioContext` を作らない**——鳴らすつもりが無い利用者に
+   * 音の資源を持たせない。「入」にした瞬間は `unlockSound` が別に解除する。
+   */
+  noteUserGesture(): void {
+    if (!this.#store.prefs.sound) return;
+    this.#unlockSound(); // 既に `running` なら `ToneSound` 側で素通りする
+  }
+
+  /**
+   * **解除の唯一の出口**。解除できたら「鳴らせませんでした」の印を下ろす。
+   *
+   * 下ろさないと、**解除できているのに設定は「どこかを押すと鳴るようになります」と言い続ける**
+   * ——設定を開くには押す（`prefix+s` でもメニューでも）必要があるので、**開いた時点では必ず解除済み**。
+   * 利用者は「押しても変わらない」と見て、設定を入れ直す元の行動に戻ってしまう（タスク点検 T24 の指摘）。
+   */
+  #unlockSound(): void {
+    void this.#opts.sound
+      .unlock()
+      .then((ok) => {
+        if (ok) this.#store.soundBlocked = false;
+      })
+      .catch(() => undefined); // 契約上 reject しないが、握らないと差し替えた実装で未処理の拒否になる
   }
 
   #cleanup(toastId: number | null, paneId: string): void {

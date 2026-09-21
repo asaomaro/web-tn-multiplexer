@@ -94,6 +94,15 @@ describe("ToneSound — 鳴らせないとき", () => {
     expect(a.started, "音を作りにいかない").toEqual([]);
   });
 
+  // **鳴らせなかったときに解除を試みるのは `NotificationController` 側**（印を下ろす出口を通すため。
+  // `NotificationController.test.ts`「鳴らせなかった知らせの後は〜」）。ここは `play()` が
+  // **黙って何かを始めない**ことだけを見る。
+  it("鳴らせないときに自分で解除しにいかない（解除は呼ぶ側の仕事）", () => {
+    const a = installAudioContext({ state: "suspended" });
+    expect(new ToneSound().play("blocked")).toBe("blocked");
+    expect(a.resume).not.toHaveBeenCalled();
+  });
+
   it("AudioContext が無い環境では unsupported", () => {
     vi.stubGlobal("AudioContext", undefined);
     vi.stubGlobal("webkitAudioContext", undefined);
@@ -109,43 +118,44 @@ describe("ToneSound — 鳴らせないとき", () => {
 });
 
 describe("ToneSound — unlock", () => {
+  // **ここでは `play()` を先に呼ばない**——`play()` 自身も解除を試みる（「鳴らせなかったときは
+  // 解除を試み〜」）ようになったので、混ぜると `unlock()` が効いたのかが見えなくなる。
   it("suspended なら resume して、以後は鳴る", async () => {
     const a = installAudioContext({ state: "suspended" });
     const s = new ToneSound();
-    expect(s.play("blocked")).toBe("blocked");
 
-    s.unlock();
-    await Promise.resolve();
+    expect(await s.unlock(), "解除できたことを返す").toBe(true);
     expect(a.resume).toHaveBeenCalledOnce();
     expect(s.play("blocked")).toBe("played");
   });
 
-  // **`unlock()` は `resume()` を待たない**（`void ctx.resume()`）ので、**直後はまだ鳴らない**。
+  // **呼ぶ側は `resume()` の解決を待たない**（`void s.unlock()`）ので、**直後はまだ鳴らない**。
   // 「入にしたその場で試し鳴らし」を足すと、本番では鳴らずに `soundBlocked` が誤って立つ。
   it("unlock した直後はまだ鳴らない（resume の解決を待つ必要がある）", () => {
     installAudioContext({ state: "suspended" });
     const s = new ToneSound();
-    s.unlock();
+    void s.unlock();
     expect(s.play("blocked"), "同じ tick ではまだ suspended").toBe("blocked");
   });
 
-  it("既に running なら resume を呼ばない", () => {
+  it("既に running なら resume を呼ばない（操作のたびに呼ばれても素通りする）", async () => {
     const a = installAudioContext({ state: "running" });
-    new ToneSound().unlock();
+    const s = new ToneSound();
+    expect(await s.unlock()).toBe(true);
+    expect(await s.unlock()).toBe(true);
     expect(a.resume).not.toHaveBeenCalled();
   });
 
-  it("resume が失敗しても投げない（次の play が blocked を返すだけ）", async () => {
+  it("resume が失敗しても投げない（false を返し、次の play も blocked）", async () => {
     installAudioContext({ state: "suspended", resumeRejects: true });
     const s = new ToneSound();
-    expect(() => s.unlock()).not.toThrow();
-    await Promise.resolve();
+    expect(await s.unlock(), "解除できなかったことを返す").toBe(false);
     expect(s.play("blocked")).toBe("blocked");
   });
 
-  it("AudioContext が無くても投げない", () => {
+  it("AudioContext が無くても投げない（false を返す）", async () => {
     vi.stubGlobal("AudioContext", undefined);
     vi.stubGlobal("webkitAudioContext", undefined);
-    expect(() => new ToneSound().unlock()).not.toThrow();
+    await expect(new ToneSound().unlock()).resolves.toBe(false);
   });
 });

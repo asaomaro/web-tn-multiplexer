@@ -53,7 +53,12 @@ export const useNotificationsStore = defineStore("notifications", () => {
 
   /** この環境で OS 通知を出せるか。Android Chrome は `new Notification()` が throw するので**出してみるまで分からない**。 */
   const desktopUsable = ref(true);
-  /** 直近の再生が自動再生の制限で止められたか（AC13）。鳴った時点で下ろす。 */
+  /**
+   * **いま音を鳴らせない状態か**（AC13。自動再生の制限に掛かっている）。
+   * 立てるのは鳴らせなかった知らせ、下ろすのは**鳴った時点と、解除できた時点**
+   * （`NotificationController.#unlockSound()`。D12）——「直近の再生の結果」ではない。
+   * 下ろす側を再生だけにすると、**解除できているのに設定が「押せば鳴る」と言い続ける**。
+   */
   const soundBlocked = ref(false);
   /** この環境で音を鳴らせるか（`AudioContext` が無い／作れない）。**一度立てたら下ろさない**（環境の性質）。 */
   const soundUsable = ref(true);

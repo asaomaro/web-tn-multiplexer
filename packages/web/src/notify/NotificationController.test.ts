@@ -48,16 +48,19 @@ function fakeDesktop(opts: { permission?: DesktopPermission; showFails?: boolean
   return { port, shown, closed };
 }
 
-function fakeSound(result: SoundResult = "played") {
+function fakeSound(result: SoundResult = "played", unlockResult = true) {
   const played: NotifyKind[] = [];
+  // **実物は「解除できたか」を返す**（`ports.ts`）。常に成功を返す偽物にすると、
+  // 「解除できなかったのに印を下ろす」穴が見えなくなる。
+  const unlock = vi.fn(async () => unlockResult);
   const port: SoundPort = {
     play: (k) => {
       played.push(k);
       return result;
     },
-    unlock: vi.fn(),
+    unlock,
   };
-  return { port, played };
+  return { port, played, unlock };
 }
 
 /** 既定は「フォーカス無し・その pane は非表示」＝表の (a)（3 経路とも出る行）。 */
@@ -372,9 +375,11 @@ describe("NotificationController — 環境の可否", () => {
     expect(useNotificationsStore(pinia).desktopUsable).toBe(false);
   });
 
-  it("音が鳴らせなかったことを覚える（AC13）／鳴れば下ろす", async () => {
+  // **解除も通らない環境で見る**（D12）。解除が通るなら印は下りるのが正しいので、
+  // 「鳴らせなかった」だけでは立ったままにならない。
+  it("音が鳴らせなかったことを覚える（AC13）", async () => {
     vi.useFakeTimers();
-    const blockedSound = fakeSound("blocked");
+    const blockedSound = fakeSound("blocked", false);
     const h = makeController({ sound: blockedSound.port });
     h.setFocused(false);
     useNotificationsStore(pinia).setPrefs({ sound: true });
@@ -1016,6 +1021,27 @@ describe("NotificationController — 音が使えない環境（AC13）", () => 
     await fire(h);
     expect(useNotificationsStore(pinia).soundBlocked).toBe(false);
   });
+
+  // **鳴らせなかったまま黙って諦めない**（PR レビュー（人間）の指摘）。一度でも操作されたページなら
+  // 操作の外からの `resume()` も通るので、**次の知らせから鳴る**。通れば印もその時点で下りる。
+  it("鳴らせなかった知らせの後は解除を試み、解除できたら印を下ろす", async () => {
+    vi.useFakeTimers();
+    const sound = fakeSound("blocked");
+    const h = makeController({ sound: sound.port });
+    await fire(h);
+    const store = useNotificationsStore(pinia);
+    expect(sound.unlock, "諦めずに解除を試みる").toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0); // unlock の解決（実物も非同期）
+    expect(store.soundBlocked, "解除できた時点で印が下りる").toBe(false);
+  });
+
+  it("解除もできなければ印は立ったまま（嘘をつかない）", async () => {
+    vi.useFakeTimers();
+    const h = makeController({ sound: fakeSound("blocked", false).port });
+    await fire(h);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useNotificationsStore(pinia).soundBlocked).toBe(true);
+  });
 });
 
 // review ラウンド1（US4）：既定では OS 通知が「切」なので、これが無いと
@@ -1038,5 +1064,58 @@ describe("NotificationController — 知らせから移動する（US4）", () =
     expect(view.focusedPaneId, "その pane へ移る").toBe("p1");
     expect(view.toasts.filter((t) => t.message.includes("入力待ちです")), "その 1 件は消える").toHaveLength(0);
     expect(useNotificationsStore(pinia).queue).toHaveLength(0);
+  });
+});
+
+// **PR レビュー（人間）の指摘**：設定の注記は「どこかを押すと鳴るようになります」と言うのに、
+// 解除する経路が「設定で入にした瞬間」と「案内の［許可する］」の 2 つしか無かった。
+// **自動再生の制限はページの読み込みごとに掛かり直す**ので、読み込み直した後の利用者には効かない。
+describe("NotificationController — 利用者の操作で自動再生を解除する（AC13）", () => {
+  it("音が「入」なら、画面のどこかを操作した時点で解除しにいく", () => {
+    const h = makeController();
+    useNotificationsStore(pinia).setPrefs({ sound: true });
+    h.c.noteUserGesture();
+    expect(h.sound.unlock).toHaveBeenCalledOnce();
+  });
+
+  it("音が「切」なら解除しにいかない（鳴らすつもりの無い利用者に AudioContext を作らせない）", () => {
+    const h = makeController();
+    useNotificationsStore(pinia).setPrefs({ sound: false });
+    h.c.noteUserGesture();
+    expect(h.sound.unlock).not.toHaveBeenCalled();
+  });
+
+  // 「押しても変わらない」と見せないための一手（タスク点検 T24 の指摘）。
+  it("解除できたら「鳴らせませんでした」の印を下ろす", async () => {
+    const h = makeController();
+    const store = useNotificationsStore(pinia);
+    store.setPrefs({ sound: true });
+    store.soundBlocked = true;
+    h.c.noteUserGesture();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.soundBlocked, "押した後の設定は「押せば鳴る」と言わない").toBe(false);
+  });
+
+  it("解除できなかったら印は下ろさない（嘘をつかない）", async () => {
+    const h = makeController({ sound: fakeSound("played", false).port });
+    const store = useNotificationsStore(pinia);
+    store.setPrefs({ sound: true });
+    store.soundBlocked = true;
+    h.c.noteUserGesture();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.soundBlocked).toBe(true);
+  });
+
+  it("設定で音を「入」にしたときも同じ出口を通る", async () => {
+    const h = makeController();
+    const store = useNotificationsStore(pinia);
+    store.soundBlocked = true;
+    h.c.unlockSound();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.sound.unlock).toHaveBeenCalledOnce();
+    expect(store.soundBlocked).toBe(false);
   });
 });
