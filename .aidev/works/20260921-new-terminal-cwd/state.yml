@@ -1,0 +1,12 @@
+schema: 11
+slug: new-terminal-cwd
+current: tasks
+approved: [requirements, research, design, tasks]
+mode: autonomous
+profile: full
+humanGates: []
+maxSendBacks: 3
+dependsOn: []
+harnessRev: unknown
+backlog: product-roadmap.md
+backlogItem: ブラウザから別のリポジトリの workspace を作れるようにする: 全 workspace がサーバの process.cwd() 固定で、web は workspace.create に cwd を送っていない
