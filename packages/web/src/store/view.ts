@@ -135,7 +135,8 @@ export type DialogContext =
   | { kind: "newTab"; workspaceId: string }
   | { kind: "renamePane"; paneId: string; currentLabel: string }
   | { kind: "renameTab"; tabId: string; currentLabel: string }
-  | { kind: "renameWorkspace"; workspaceId: string; currentLabel: string }
+  // `currentAutoLabel` は開いた時点で名前が自動だったか（20260921-workspace-auto-label。変えずに確定したら送らない判定に使う）。
+  | { kind: "renameWorkspace"; workspaceId: string; currentLabel: string; currentAutoLabel: boolean }
   | { kind: "confirmClose"; targets: { type: "pane" | "tab" | "workspace"; id: string }[] }
   | { kind: "help" }
   | { kind: "goto" }

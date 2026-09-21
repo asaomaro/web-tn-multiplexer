@@ -29,7 +29,7 @@ function makeTab(): Tab {
   return { id: "t1", workspaceId: "w1", label: "tab-A", layout: { type: "pane", paneId: "p1" }, focusedPaneId: "p1", zoomedPaneId: null, sizeOwnerClientId: null };
 }
 function makeWorkspace(): Workspace {
-  return { id: "w1", label: "ws-A", cwd: "/", tabIds: ["t1"], activeTabId: "t1", groupId: null, git: null };
+  return { id: "w1", label: "ws-A", cwd: "/", tabIds: ["t1"], activeTabId: "t1", groupId: null, git: null, autoLabel: false };
 }
 
 function fakeDesktop(opts: { permission?: DesktopPermission; showFails?: boolean } = {}) {

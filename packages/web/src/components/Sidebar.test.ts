@@ -17,7 +17,7 @@ beforeEach(() => {
 });
 
 function makeWorkspace(id: string, overrides: Partial<Workspace> = {}): Workspace {
-  return { id, label: id, cwd: "/", tabIds: ["t1"], activeTabId: "t1", groupId: null, git: null, ...overrides };
+  return { id, label: id, cwd: "/", tabIds: ["t1"], activeTabId: "t1", groupId: null, git: null, autoLabel: false, ...overrides };
 }
 function makeTab(id: string, workspaceId: string, focusedPaneId = "p1"): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId: focusedPaneId }, focusedPaneId, zoomedPaneId: null, sizeOwnerClientId: null };

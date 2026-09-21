@@ -284,6 +284,7 @@ function toSessionFileData(session: SessionService): SessionFileData {
     workspaces: snapshot.workspaces.map((ws) => ({
       id: ws.id,
       label: ws.label,
+      autoLabel: ws.autoLabel,
       cwd: ws.cwd,
       activeTabId: ws.activeTabId,
       tabs: snapshot.tabs

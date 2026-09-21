@@ -497,7 +497,7 @@ test("worktree：prefix+G で作ると、その場所の workspace が開く。�
   // git リポジトリの workspace を作って、そこへ表示を移す（既定の workspace はこのリポジトリを指しうる）。
   const repo = await makePlainRepo();
   const created = client.waitForEvent("workspace.created");
-  await client.request("workspace.create", { cwd: repo, label: "wt-repo" }); // 既定の workspace も "1" なのでラベルで区別する
+  await client.request("workspace.create", { cwd: repo, label: "wt-repo" }); // 自動の名前（フォルダ名）に頼らず、ラベルで区別する
   const repoWs = (await created).data.workspace;
   await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(2);
   await page.locator(".sidebar-spaces .sidebar-row").filter({ hasText: "wt-repo" }).click();

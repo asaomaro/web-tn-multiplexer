@@ -1,5 +1,5 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
-import { decodeFrame, FRAME_TYPE } from "@wtm/protocol";
+import { decodeFrame, FRAME_TYPE, type ServerEvent } from "@wtm/protocol";
 
 /**
  * ブラウザ（ページの WebSocket）が受けたバイナリのフレーム（OUTPUT・SNAPSHOT）を、接続ごとに記録するテスト専用の道具
@@ -70,6 +70,29 @@ export async function watchReceivedFrames(page: Page): Promise<ReceivedFrames> {
     log.record(connection, new Uint8Array(Buffer.from(e.response.payloadData, "base64")));
   });
   return log;
+}
+
+/**
+ * ブラウザ（ページの実物の WebSocket）が受けた JSON のイベントを、受けた順に返す関数を作る（20260921-workspace-auto-label）。
+ * `watchReceivedFrames` はバイナリのフレームだけを見るので、名前の変化（`workspace.created`・`workspace.updated`）のような JSON のイベントは
+ * これで見る。テスト自身のクライアントに届いたイベントではなく、**このブラウザが受けたもの**（条項 `e2e-observe-browser`）。
+ * **`page.goto()` の前に `await` して呼ぶ**（`Network.enable` より前に張られた接続は見えない）。
+ * `watchReceivedFrames` と違い、**接続を分けず**（再接続をまたいで受けた順につなぐ）、`/ws` 以外の WebSocket があれば（今は無い）それも数える。
+ */
+export async function watchReceivedEvents(page: Page): Promise<() => ServerEvent[]> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Network.enable");
+  const received: ServerEvent[] = [];
+  cdp.on("Network.webSocketFrameReceived", (e) => {
+    if (e.response.opcode !== 1) return; // テキストのフレーム（JSON）だけ
+    try {
+      const msg = JSON.parse(e.response.payloadData) as { event?: unknown };
+      if (typeof msg.event === "string") received.push(msg as ServerEvent);
+    } catch {
+      // JSON でないテキストは無い想定だが、あっても無視する。
+    }
+  });
+  return () => [...received];
 }
 
 /** ページが送った JSON の要求（`{id, method, params}`）。 */

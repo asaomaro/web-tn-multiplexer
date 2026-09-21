@@ -21,6 +21,8 @@ import type { TerminalManager } from "../terminal/TerminalManager.js";
 import type { EventBus } from "../bus/EventBus.js";
 import { NotFoundError, SessionModel } from "./SessionModel.js";
 import { resolveNewCwd, type NewCwdDeps } from "./newCwd.js";
+import { autoWorkspaceLabel, defaultWorkspaceLabelDeps, folderLabelOf, type WorkspaceLabelDeps } from "./workspaceLabel.js";
+import { monotonicNow } from "../log/LogThrottle.js";
 import type { PersistScheduler } from "./PersistScheduler.js";
 import type { Logger } from "../log/Logger.js";
 
@@ -36,6 +38,12 @@ export interface PaneRuntimePatch {
   title?: string;
   agent?: AgentInfo | null;
 }
+
+/**
+ * 復元で自動の名前を決めるのにかける合計の時間（20260921-workspace-auto-label の review ラウンド 2）。1 つずつ決めるので、遅いだけの fs でも
+ * 数に比例して `/ws` の受け付けが遅れる——超えたら残りは根を探さずフォルダ名にする（最悪でもこれと 1 回分の上限の和）。
+ */
+const RESTORE_LABEL_BUDGET_MS = 1000;
 
 export interface SessionServiceOptions {
   model: SessionModel;
@@ -55,6 +63,13 @@ export interface SessionServiceOptions {
    * **任意**——無ければ `newCwd` を見ない（今までどおり）。
    */
   newCwdDeps?: NewCwdDeps | undefined;
+  /**
+   * workspace の自動の名前を決める依存（20260921-workspace-auto-label の design D3）。省略時は本物の fs と `os.homedir`。
+   * テストは偽物を渡して、手元のファイルシステムに依存させない。
+   */
+  workspaceLabelDeps?: WorkspaceLabelDeps | undefined;
+  /** 復元の合計の期限を測る時計（ms）。既定は単調な `monotonicNow`（壁時計は戻りうる。D103 の独立点検 #8）。テストで差し替える。 */
+  clock?: { now(): number } | undefined;
 }
 
 /**
@@ -74,6 +89,18 @@ export class SessionService {
   private readonly shell: string | undefined;
   private readonly logger: Logger;
   private readonly newCwdDeps: NewCwdDeps | undefined;
+  private readonly workspaceLabelDeps: WorkspaceLabelDeps;
+  /**
+   * 上限を超えたまままだ返っていない、根を探す問い合わせの数（review ラウンド 1・2）。0 でない間は新しく根を探さずフォルダ名にする——応答しない fs
+   * （止まった NFS 等）への stat は取り消せず libuv のスレッドを塞ぐので、重ねてサーバ全体の fs を止めない。遅いだけなら返った時点で元に戻る。
+   */
+  private labelLookupsStuck = 0;
+  private readonly clock: { now(): number };
+  /**
+   * workspace ごとの名前変更の世代（20260921-workspace-auto-label の design D9）。名前変更のたびに進め、自動の名前に戻す待ち（await）から
+   * 戻ったときに世代が変わっていれば、後から来た名前変更が勝つ（古い結果を捨てる）。workspace が閉じたら消す。
+   */
+  private readonly labelGen = new Map<WorkspaceId, number>();
 
   constructor(opts: SessionServiceOptions) {
     this.model = opts.model;
@@ -88,12 +115,27 @@ export class SessionService {
     this.shell = opts.shell;
     this.logger = opts.logger;
     this.newCwdDeps = opts.newCwdDeps;
+    this.clock = opts.clock ?? { now: monotonicNow };
+    const labelDeps = opts.workspaceLabelDeps ?? defaultWorkspaceLabelDeps;
+    this.workspaceLabelDeps = {
+      ...labelDeps,
+      onTimeout: (settled) => {
+        this.labelLookupsStuck++;
+        // 数を戻す処理はログより先に付ける——warn が投げても数が戻る（review ラウンド 3）。
+        void settled.then(() => {
+          this.labelLookupsStuck--;
+        });
+        this.logger.warn("workspace label lookup timed out; using folder names until it returns", { stuck: this.labelLookupsStuck });
+        labelDeps.onTimeout?.(settled);
+      },
+    };
   }
 
   /**
    * 新しい pane の場所。`newCwd` が無い・依存が無ければ `fallback`（今までどおり）を**同期で**返し、あれば `newCwd.ts` の規則で決める
    * Promise を返す（20260921-new-terminal-cwd）。呼ぶ側は **Promise のときだけ `await` する**——方針の無い要求では、以前と同じく
    * 起動（`spawnForPane`）までを同期で進め、猶予の競走の起点を変えない（`SessionService.test.ts` の分割の孤児のテストが前提にしている）。
+   * **例外：workspace の作成で名前を決めるとき**は、起動の前に名前を待つ（20260921-workspace-auto-label の design D4b・decisions D1）。
    * **場所を明示する `cwd`（worktree）はここを通さない**——呼ぶ側で先に使う（design D5）。
    */
   private placeFor(
@@ -151,10 +193,15 @@ export class SessionService {
     const pending = cwd !== undefined ? { cwd, fellBack: false } : this.placeFor(newCwd, followSource(newCwd), this.defaultCwd);
     const place = pending instanceof Promise ? await pending : pending;
     const resolvedCwd = place.cwd;
+    // 名前が無い（空白だけを含む）なら、開く場所から自動の名前を決めて**から**予約と起動へ進む（20260921-workspace-auto-label の design D4b）。
+    // 起動の成功から commit までの間に await を挟むと、その間に終わったシェルの pane を `closePaneAfterExit` が見つけられず残る
+    // （decisions D1）。名前を渡したとき（worktree）は待たない。
+    const named = label?.trim() ? { label, autoLabel: false } : this.autoLabelFor(resolvedCwd);
+    const naming = named instanceof Promise ? await named : named;
     // D37「成功を確認してからモデルを更新する順にする」：先に id とオブジェクトだけ用意し（reserve）、
     // spawn の成功を確認してから初めて Map へ入れる（commit）。レビュー指摘：以前は逆順で、
     // 猶予期間中に他クライアントが「存在するはずの無い」workspace を読めてしまっていた。
-    const reserved = this.model.reserveWorkspace(resolvedCwd, label ?? "1", {
+    const reserved = this.model.reserveWorkspace(resolvedCwd, naming.label, naming.autoLabel, {
       cwd: resolvedCwd,
       shell: this.shell ?? "",
       cols: HEADLESS_COLS,
@@ -178,9 +225,27 @@ export class SessionService {
     return { workspace: reserved.workspace, tab: reserved.tab, pane: reserved.pane, ...(place.fellBack ? { cwdFallback: true as const } : {}) };
   }
 
-  renameWorkspace(id: WorkspaceId, label: string): void {
-    const ws = this.model.renameWorkspace(id, label);
-    this.bus.publish({ event: "workspace.updated", data: { workspace: ws } });
+  /** 開く場所から自動の名前を決める。`autoWorkspaceLabel` は投げないが、万一 reject しても作成を失敗させない（design のエラー処理の表）。 */
+  private async autoLabelFor(cwd: string): Promise<{ label: string; autoLabel: true }> {
+    // 上限を超えた問い合わせがまだ返っていない間は、fs に問い合わせない（`labelLookupsStuck`）。
+    if (this.labelLookupsStuck > 0) return { label: folderLabelOf(cwd, this.workspaceLabelDeps), autoLabel: true };
+    const label = await autoWorkspaceLabel(cwd, this.workspaceLabelDeps).catch(() => folderLabelOf(cwd, this.workspaceLabelDeps));
+    return { label, autoLabel: true };
+  }
+
+  /**
+   * 名前を付ける（文字列）か、自動の名前に戻す（null・空白だけ。20260921-workspace-auto-label の design D5・D10）。**要求の時点で workspace が
+   * 無ければ `RpcError("not_found")` で拒否する**（待つ前に確かめる）。自動の名前は `ws.cwd` から決め直し、待っている間に別の名前変更が来たら
+   * そちらが勝つ（design D9）。待っている間に workspace が閉じられたら何もしない（保存も予約しない）。
+   */
+  async renameWorkspace(id: WorkspaceId, label: string | null): Promise<void> {
+    const ws = this.requireWorkspace(id);
+    const gen = (this.labelGen.get(id) ?? 0) + 1;
+    this.labelGen.set(id, gen);
+    const named = label?.trim() ? { label, autoLabel: false } : await this.autoLabelFor(ws.cwd);
+    if (this.labelGen.get(id) !== gen || !this.model.getWorkspace(id)) return;
+    const updated = this.model.renameWorkspace(id, named.label, named.autoLabel);
+    this.bus.publish({ event: "workspace.updated", data: { workspace: updated } });
     this.persist.touch();
   }
 
@@ -197,6 +262,7 @@ export class SessionService {
     for (const paneId of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId } });
     for (const tabId of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId } });
     this.bus.publish({ event: "workspace.closed", data: { workspaceId: id } });
+    this.labelGen.delete(id);
     this.persist.touch();
     await this.recreateIfEmpty(); // D24
   }
@@ -259,6 +325,7 @@ export class SessionService {
     for (const tabId of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId } });
     if (result.closedWorkspaceId) {
       this.bus.publish({ event: "workspace.closed", data: { workspaceId: result.closedWorkspaceId } });
+      this.labelGen.delete(result.closedWorkspaceId);
     } else {
       // workspace 自体は生き残った＝`model.closeTab` が `tabIds`/`activeTabId` を更新している
       // （`SessionModel.closeTabInternal`）。その変化を知らせる（D88。上の createTab と対）。
@@ -313,6 +380,7 @@ export class SessionService {
     for (const tid of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId: tid } });
     if (result.closedWorkspaceId) {
       this.bus.publish({ event: "workspace.closed", data: { workspaceId: result.closedWorkspaceId } });
+      this.labelGen.delete(result.closedWorkspaceId);
     } else if (result.removedTabIds.length > 0 && workspaceId) {
       // pane を閉じた結果、tab ごと連鎖して閉じたが workspace は生き残った（D18 の連鎖・closeTab と同じ形。D88）。
       const updatedWs = this.model.getWorkspace(workspaceId);
@@ -472,22 +540,42 @@ export class SessionService {
   /** 起動時に呼ぶ：workspace が無ければ 1 つ作る（design「起動と再起動後の復元」）。 */
   async ensureNotEmpty(): Promise<void> {
     if (!this.model.isEmpty()) return;
-    await this.createWorkspace(this.defaultCwd, "1");
+    await this.createWorkspace(this.defaultCwd, undefined); // 名前を渡さない＝開く場所から自動の名前（20260921-workspace-auto-label）
   }
 
   /** D24：workspace が 0 個になったら自動で 1 つ作り直す（herdr と異なる意図的な挙動。decisions.md
    *  D24・D36）。PTY の起動を伴うので、この層（SessionService）で実物の workspace を作る。
    *  `closeWorkspace`/`closeTab`/`closePane` の3箇所から同じ形で呼ぶ（レビュー指摘：重複していた）。 */
   private async recreateIfEmpty(): Promise<void> {
-    if (this.model.isEmpty()) await this.createWorkspace(this.defaultCwd, "1");
+    if (this.model.isEmpty()) await this.createWorkspace(this.defaultCwd, undefined); // 自動の名前（同上）
   }
 
   /** `session.json` から復元する。失敗した pane は閉じずに `status: 'failed'` にする。 */
   async restore(data: SessionFileData): Promise<void> {
     this.model.setNextIdCounters(data.nextId);
-    for (const wsData of data.workspaces) {
-      this.restoreWorkspace(wsData);
+    // 名前を先に決めてから入れる（20260921-workspace-auto-label の design D6・D10）。自動の名前はその場所から決め直し（保存した後に git の状態が
+    // 変わっていれば新しい名前になる）、付けた名前はそのまま。**1 つずつ決める**——一度に始めると上限のタイマーも一斉に始まって workspace が
+    // 多いと全部が上限に達し（T6 の点検）、応答しないマウントの上に並んでいると止まった stat が libuv のスレッドを塞ぎ合う（review ラウンド 1）。
+    // 1 つが上限を超えたら、それが返るまで残りはフォルダ名（`autoLabelFor`）。**合計の期限を過ぎたら残りもフォルダ名**（review ラウンド 2）。
+    // 期限を過ぎてフォルダ名にしたときは、警告を 1 度だけ出す（review ラウンド 3）。
+    const deadline = this.clock.now() + RESTORE_LABEL_BUDGET_MS;
+    let warnedOverBudget = false;
+    const restored: (SessionFileWorkspace & { autoLabel: boolean })[] = [];
+    for (const [i, wsData] of data.workspaces.entries()) {
+      const overBudget = (): boolean => {
+        if (this.clock.now() < deadline) return false;
+        if (!warnedOverBudget) {
+          warnedOverBudget = true;
+          this.logger.warn("workspace label lookup over restore budget; using folder names for the rest", {
+            budgetMs: RESTORE_LABEL_BUDGET_MS,
+            remaining: data.workspaces.slice(i).filter((ws) => isAutoLabel(ws)).length, // フォルダ名になる自動の名前の数（付けた名前は数えない）
+          });
+        }
+        return true;
+      };
+      restored.push({ ...wsData, ...(await this.restoredLabel(wsData, overBudget)) });
     }
+    for (const wsData of restored) this.restoreWorkspace(wsData, wsData.autoLabel);
     for (const wsData of data.workspaces) {
       for (const tabData of wsData.tabs) {
         for (const paneData of tabData.panes) {
@@ -504,10 +592,21 @@ export class SessionService {
     }
   }
 
-  private restoreWorkspace(wsData: SessionFileWorkspace): void {
+  /**
+   * 復元する名前。保存した印があればそれ、無ければ（以前の版）`"1"`（以前の既定の名前）を自動とみなす。空・空白だけの名前も自動（design D10）。
+   * 利用者が自分で「1」と付けていた workspace も自動になる（以前の保存には区別が無い。requirements の割り切り）。`overBudget` は自動の名前のときだけ
+   * 呼ぶ（復元の合計の期限を過ぎたか。過ぎていれば `restore` が警告を 1 度だけ出す）。
+   */
+  private async restoredLabel(wsData: SessionFileWorkspace, overBudget: () => boolean): Promise<{ label: string; autoLabel: boolean }> {
+    if (!isAutoLabel(wsData)) return { label: wsData.label, autoLabel: false };
+    if (overBudget()) return { label: folderLabelOf(wsData.cwd, this.workspaceLabelDeps), autoLabel: true };
+    return this.autoLabelFor(wsData.cwd);
+  }
+
+  private restoreWorkspace(wsData: SessionFileWorkspace, autoLabel: boolean): void {
     // SessionModel には「既存の id を使って作る」専用口が無いので、内部の Map へ直接組み立てる代わりに
     // 通常の作成 API は使わず、復元専用の経路で入れる（実装は SessionModel.restoreFrom に委譲）。
-    this.model.restoreWorkspace(wsData);
+    this.model.restoreWorkspace(wsData, autoLabel);
   }
 
   private async restorePaneProcess(paneId: PaneId, cwd: string): Promise<void> {
@@ -582,6 +681,14 @@ function sameAgent(a: AgentInfo | null, b: AgentInfo | null): boolean {
     a.verified === b.verified &&
     a.since === b.since
   );
+}
+
+/**
+ * 保存された workspace の名前が自動の名前か（20260921-workspace-auto-label の design D6・D10）。保存した印があればそれ、無ければ（以前の版）`"1"` を
+ * 自動とみなす。空・空白だけの名前も自動。
+ */
+function isAutoLabel(wsData: SessionFileWorkspace): boolean {
+  return (wsData.autoLabel ?? wsData.label === "1") || !wsData.label.trim();
 }
 
 /** 「引き継ぐ」の元の pane（`newCwd.sourcePaneId`）。ほかの方針では元の pane を使わない。 */

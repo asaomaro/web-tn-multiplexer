@@ -83,7 +83,7 @@ function makeDispatcher(
 }
 
 function makeWorkspace(id: string, tabIds: string[] = [], overrides: Partial<Workspace> = {}): Workspace {
-  return { id, label: id, cwd: "/", tabIds, activeTabId: tabIds[0] ?? "", groupId: null, git: null, ...overrides };
+  return { id, label: id, cwd: "/", tabIds, activeTabId: tabIds[0] ?? "", groupId: null, git: null, autoLabel: false, ...overrides };
 }
 function makeTab(id: string, workspaceId: string, focusedPaneId = "p1"): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId: focusedPaneId }, focusedPaneId, zoomedPaneId: null, sizeOwnerClientId: null };
@@ -754,7 +754,7 @@ describe("ActionDispatcher — T22 向けの「任意の対象」メソッド（
     const { dispatcher } = makeDispatcher(conn);
 
     dispatcher.renameWorkspaceById("w9");
-    expect(view.dialogContext).toEqual({ kind: "renameWorkspace", workspaceId: "w9", currentLabel: "w9" });
+    expect(view.dialogContext).toEqual({ kind: "renameWorkspace", workspaceId: "w9", currentLabel: "w9", currentAutoLabel: false });
 
     dispatcher.closeWorkspaceById("w9");
     expect(view.dialogContext).toEqual({ kind: "confirmClose", targets: [{ type: "workspace", id: "w9" }] });
@@ -802,8 +802,8 @@ describe("ActionDispatcher — worktree", () => {
     await Promise.resolve();
     expect(conn.requests.map(([m]) => m)).toEqual(["worktree.create", "workspace.create"]);
     expect(conn.requests[0]![1]).toEqual({ workspaceId: "w1", branch: "feature/x" });
-    // **label にブランチ名を渡す**（review ラウンド1）。渡さないとサーバの既定 `"1"` になり、
-    // サイドバーに `1` が並んでどの worktree か分からなくなる（ブランチの 2 行目は上流が無いと出ない）。
+    // **label にブランチ名を渡す**（review ラウンド1）。渡さなければ worktree のフォルダ名が自動の名前になるが、選んだブランチ名のほうが
+    // 情報が多い（20260921-workspace-auto-label。ブランチの 2 行目は上流が無いと出ない）。
     expect(conn.requests[1]![1]).toEqual({ cwd: "/root/wtm/feature-x", label: "feature/x" });
   });
 
@@ -1043,5 +1043,61 @@ describe("ActionDispatcher — 新しく開く場所（newCwd）", () => {
     dispatcher.splitPane("p1", "right");
     await flush();
     expect(view.toasts.filter((t) => t.message === FALLBACK_TOAST), "3 つの作成それぞれで知らせる").toHaveLength(3);
+  });
+});
+
+// 20260921-workspace-auto-label：空で確定すると自動の名前に戻し、自動の名前のまま変えずに確定したら送らない（design D7）。
+describe("ActionDispatcher — workspace の名前変更と自動の名前", () => {
+  function open(autoLabel: boolean) {
+    const conn = makeConnection();
+    useSessionStore(pinia).workspaceUpserted(makeWorkspace("w1", [], { label: "my-repo", autoLabel }));
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.renameWorkspaceById("w1");
+    return { conn, dispatcher, view: useViewStore(pinia) };
+  }
+
+  it("開いた時点で名前が自動だったかを持つ", () => {
+    expect(open(true).view.dialogContext).toMatchObject({ kind: "renameWorkspace", currentLabel: "my-repo", currentAutoLabel: true });
+  });
+
+  it("空（空白だけ）で確定すると label: null（自動の名前に戻す）", () => {
+    const { conn, dispatcher } = open(false);
+    dispatcher.confirmRenameWorkspace("   ");
+    expect(conn.requests).toEqual([["workspace.rename", { workspaceId: "w1", label: null }]]);
+  });
+
+  it("自動の名前のまま変えずに確定したら送らない（付けた名前として固定しない）", () => {
+    const { conn, dispatcher, view } = open(true);
+    dispatcher.confirmRenameWorkspace(" my-repo ");
+    expect(conn.requests).toEqual([]);
+    expect(view.dialogContext, "ダイアログは閉じる").toBeNull();
+  });
+
+  it("自動の名前のときに空で確定しても label: null を送る（手掛かりの約束どおり）", () => {
+    const { conn, dispatcher } = open(true);
+    dispatcher.confirmRenameWorkspace("  ");
+    expect(conn.requests).toEqual([["workspace.rename", { workspaceId: "w1", label: null }]]);
+  });
+
+  it("変えたかどうかは開いた時点の名前で比べ、大小は区別する", () => {
+    const { conn, dispatcher } = open(true);
+    // 開いた後にほかのブラウザで名前が付けられても、変えずに確定したことに変わりはない（開いた時点の値で見る）。
+    useSessionStore(pinia).workspaceUpserted(makeWorkspace("w1", [], { label: "other", autoLabel: false }));
+    dispatcher.confirmRenameWorkspace("my-repo");
+    expect(conn.requests).toEqual([]);
+    pinia = createPinia();
+    const cased = open(true);
+    cased.dispatcher.confirmRenameWorkspace("My-Repo");
+    expect(cased.conn.requests).toEqual([["workspace.rename", { workspaceId: "w1", label: "My-Repo" }]]);
+  });
+
+  it("自動の名前でも変えて確定すれば送る。付けた名前は今までどおり送る", () => {
+    const auto = open(true);
+    auto.dispatcher.confirmRenameWorkspace("api");
+    expect(auto.conn.requests).toEqual([["workspace.rename", { workspaceId: "w1", label: "api" }]]);
+    pinia = createPinia();
+    const named = open(false);
+    named.dispatcher.confirmRenameWorkspace("my-repo");
+    expect(named.conn.requests).toEqual([["workspace.rename", { workspaceId: "w1", label: "my-repo" }]]);
   });
 });

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, nextTick, ref, watch } from "vue";
+import { computed, inject, nextTick, ref, watch } from "vue";
 import { ActionDispatcherKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
 import { useViewStore } from "../store/view.js";
@@ -8,7 +8,8 @@ import { useViewStore } from "../store/view.js";
  * 名前の入力ダイアログ（T23。design「ダイアログ」）。`view.dialogContext` の
  * `newTab` / `renamePane` / `renameTab` / `renameWorkspace` を扱う。今の名前を入力済み・全選択で開く。
  * 新規 tab は tab の数＋1 を入力済みにする（D55 の 12）。空欄で確定した場合は `ActionDispatcher` 側で
- * 名前を送らない（`confirmNewTab`/`confirmRenameTab`/`confirmRenameWorkspace` が判定する）。
+ * 名前を送らない（`confirmNewTab`/`confirmRenameTab` が判定する）。**workspace は空なら自動の名前に戻す**（`label: null` を送る。
+ * 自動の名前のまま変えずに確定したら送らない——`confirmRenameWorkspace`。20260921-workspace-auto-label）。
  * 新規 tab は「プリフィルした値から変更していない」場合も送らない（herdr の `overlay_input.rs`
  * `trimmed != default_name` と同じ。D75）——このコンポーネントがプリフィル値を空文字に読み替えて
  * `confirmNewTab` に渡す（`ActionDispatcher` 側の「空なら送らない」判定をそのまま使う）。
@@ -82,6 +83,14 @@ const confirm = (): void => {
   else if (ctx.kind === "renameWorkspace") actions.confirmRenameWorkspace(value.value);
 };
 
+/** workspace の名前を変えるときの手掛かり。空で確定すると自動の名前に戻ることと、いま自動の名前かどうか。 */
+const workspaceHint = computed(() => {
+  const ctx = view.dialogContext;
+  if (ctx?.kind !== "renameWorkspace") return "";
+  const now = ctx.currentAutoLabel ? "いまは自動の名前です。" : "";
+  return `${now}空にして確定すると、自動の名前（リポジトリ名かフォルダ名）に戻ります。`;
+});
+
 function cancel(): void {
   view.closeDialog();
 }
@@ -98,8 +107,16 @@ function onNativeCancel(ev: Event): void {
     <form method="dialog" @submit.prevent="confirm">
       <label class="name-dialog-label">
         <span>{{ title() }}</span>
-        <input ref="inputEl" v-model="value" type="text" class="name-dialog-input" />
+        <input
+          ref="inputEl"
+          v-model="value"
+          type="text"
+          class="name-dialog-input"
+          :aria-describedby="workspaceHint ? 'name-dialog-hint' : undefined"
+        />
       </label>
+      <!-- workspace の名前を変えるときだけ（tab・pane の見た目は変えない。20260921-workspace-auto-label の design D8）。 -->
+      <p v-if="workspaceHint" id="name-dialog-hint" class="name-dialog-hint">{{ workspaceHint }}</p>
       <div class="name-dialog-actions">
         <button type="button" @click="cancel">キャンセル</button>
         <button type="submit">OK</button>
@@ -115,6 +132,8 @@ function onNativeCancel(ev: Event): void {
   color: var(--wtm-menu-fg, #f8f8f2);
   border-radius: 4px;
   min-width: 20em;
+  /* workspace の名前変更の手掛かり（1 行の文）がダイアログを横に広げすぎないよう、上限を置いて折り返させる（20260921-workspace-auto-label）。 */
+  max-width: min(30em, calc(100% - 16px));
   padding: 1em;
 }
 .name-dialog::backdrop {
@@ -128,6 +147,11 @@ function onNativeCancel(ev: Event): void {
 .name-dialog-input {
   font: inherit;
   padding: 0.3em 0.5em;
+}
+.name-dialog-hint {
+  margin: 0.4em 0 0;
+  font-size: 0.85em;
+  opacity: 0.8;
 }
 .name-dialog-actions {
   display: flex;

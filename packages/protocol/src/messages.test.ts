@@ -5,6 +5,7 @@ import {
   PaneSplitParams,
   TabCreateParams,
   WorkspaceCreateParams,
+  WorkspaceRenameParams,
 } from "./messages.js";
 
 describe("messages", () => {
@@ -84,5 +85,21 @@ describe("NewCwd", () => {
       cwd: "/repo/wt",
       newCwd: { policy: "home" },
     });
+  });
+});
+
+// 20260921-workspace-auto-label：null で自動の名前に戻す（pane の名前と同じ形）。
+describe("WorkspaceRenameParams", () => {
+  it("名前を付ける（文字列）と、自動の名前に戻す（null）を受け付ける", () => {
+    expect(WorkspaceRenameParams.parse({ workspaceId: "w1", label: "api" }).label).toBe("api");
+    expect(WorkspaceRenameParams.parse({ workspaceId: "w1", label: null }).label).toBeNull();
+    // 空白だけはスキーマでは弾かず、サーバが trim して自動の名前として扱う（design D10 の前提）。
+    expect(WorkspaceRenameParams.parse({ workspaceId: "w1", label: "  " }).label).toBe("  ");
+  });
+
+  // 空と null の 2 通りの「無い」を作らない（design D5）。空白だけはサーバが trim して自動として扱う（design D10）。
+  it("空文字と、label の無い形は弾く", () => {
+    expect(() => WorkspaceRenameParams.parse({ workspaceId: "w1", label: "" })).toThrow();
+    expect(() => WorkspaceRenameParams.parse({ workspaceId: "w1" })).toThrow();
   });
 });

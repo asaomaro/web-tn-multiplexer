@@ -328,6 +328,24 @@ describe("composeServer (integration)", () => {
     10000,
   );
 
+  // 20260921-workspace-auto-label：保存に名前が自動かの印が載る（`toSessionFileData` は非公開なので、保存した session.json を読む）。
+  it("保存した session.json の workspace に、名前が自動か付けたものかの印（autoLabel）が載る", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await server.listen(); // 起動時の最初の workspace は名前を渡さない（自動の名前）
+    const { workspace: named } = await server.session.createWorkspace(process.cwd(), "persisted");
+    await server.persist.flush();
+    const saved = JSON.parse(await readFile(join(stateDir, "session.json"), "utf8")) as {
+      workspaces: { id: string; label: string; autoLabel?: boolean }[];
+    };
+    const first = saved.workspaces.find((w) => w.id !== named.id);
+    expect(first?.autoLabel).toBe(true);
+    expect(saved.workspaces.find((w) => w.id === named.id)).toMatchObject({ label: "persisted", autoLabel: false });
+  }, 10000);
+
   it("persists and restores the session across two composeServer instances (AC18)", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
     const port1 = await getFreePort();

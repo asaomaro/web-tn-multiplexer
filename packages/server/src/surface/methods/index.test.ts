@@ -15,6 +15,7 @@ import { ControlSurface } from "../ControlSurface.js";
 import { registerAllMethods } from "./index.js";
 import type { WorktreeService } from "../../git/WorktreeService.js";
 import type { NewCwdDeps } from "../../session/newCwd.js";
+import type { WorkspaceLabelDeps } from "../../session/workspaceLabel.js";
 
 class FakeFanout implements OutputFanout {
   readonly subscribed: string[] = [];
@@ -92,6 +93,8 @@ const HOST_INFO: HostInfo = { os: "linux", windowsBuild: null, hostname: "test" 
 const fakeSink = (clientId: string): ClientSink => ({ clientId, sendOutput: () => undefined, sendSnapshot: () => undefined, bufferedAmount: 0 });
 
 function makeContext(newCwdDeps?: NewCwdDeps) {
+  // 名前を確かめるテストがあるので、手元の fs に依存させない（20260921-workspace-auto-label。git のリポジトリは無い）。
+  const workspaceLabelDeps: WorkspaceLabelDeps = { stat: async () => null, readFile: async () => null, home: () => "/home/u" };
   const terminals = new FakeTerminalManager();
   const session = new SessionService({
     model: new SessionModel(),
@@ -104,6 +107,7 @@ function makeContext(newCwdDeps?: NewCwdDeps) {
     spawnGraceMs: 1,
     defaultCwd: "/home/u",
     newCwdDeps,
+    workspaceLabelDeps,
     logger: new MemoryLogger(),
   });
   const clients = new DefaultClientRegistry();
@@ -277,6 +281,24 @@ describe("registerAllMethods — 新しく開く場所（newCwd）", () => {
     if (!splitResult.ok) throw new Error(JSON.stringify(splitResult.error));
     // 使えない場所は分割の以前の場所（元の pane の記録された場所）で開き、知らせる印を返す（AC9）。
     expect(splitResult.result).toMatchObject({ pane: { cwd: "/home/me" }, cwdFallback: true });
+  });
+});
+
+// 名前変更は await してから応答し、null は自動の名前に戻す（20260921-workspace-auto-label）。
+describe("registerAllMethods — workspace.rename", () => {
+  it("名前を付け、null で自動の名前に戻し、無い workspace は not_found を返す", async () => {
+    const ctx = makeContext();
+    const clientId = ctx.clients.register();
+    const c = { clientId, sink: fakeSink(clientId) };
+    const { workspace } = await ctx.session.createWorkspace("/srv/app", undefined);
+    expect((await ctx.surface.invoke(c, "workspace.rename", { workspaceId: workspace.id, label: "mine" })).ok).toBe(true);
+    expect(ctx.session.snapshot().workspaces[0]).toMatchObject({ label: "mine", autoLabel: false });
+    const back = await ctx.surface.invoke(c, "workspace.rename", { workspaceId: workspace.id, label: null });
+    expect(back).toEqual({ ok: true, result: {} });
+    // 応答の時点で自動の名前に戻っている（await してから応答する）。
+    expect(ctx.session.snapshot().workspaces[0]).toMatchObject({ label: "app", autoLabel: true });
+    const missing = await ctx.surface.invoke(c, "workspace.rename", { workspaceId: "w999", label: null });
+    expect(missing).toEqual({ ok: false, error: { code: "not_found", message: expect.stringContaining("w999") } });
   });
 });
 

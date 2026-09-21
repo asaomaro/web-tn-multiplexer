@@ -206,10 +206,46 @@ describe("SessionModel — misc mutations", () => {
     const { workspace, tab, pane } = model.createWorkspace("/home/u", "api", init);
     model.renamePane(pane.id, "reviewer");
     model.renameTab(tab.id, "agents");
-    model.renameWorkspace(workspace.id, "renamed");
+    model.renameWorkspace(workspace.id, "renamed", false);
     expect(model.getPane(pane.id)?.label).toBe("reviewer");
     expect(model.getTab(tab.id)?.label).toBe("agents");
     expect(model.getWorkspace(workspace.id)?.label).toBe("renamed");
+  });
+
+  // 20260921-workspace-auto-label：以前は workspace の名前に印が無く、どれも付けた名前と同じ扱いだった。
+  it("autoLabel は作成・名前変更・復元で呼ぶ側が決めたとおりに入る", () => {
+    const model = new SessionModel();
+    const auto = model.createWorkspace("/r", "r", init, true).workspace;
+    const named = model.createWorkspace("/s", "mine", init).workspace;
+    expect([auto.autoLabel, named.autoLabel], "一括版の既定は付けた名前").toEqual([true, false]);
+    expect(model.renameWorkspace(auto.id, "fixed", false).autoLabel).toBe(false);
+    expect(model.renameWorkspace(named.id, "s", true)).toMatchObject({
+      label: "s",
+      autoLabel: true,
+    });
+
+    const restored = new SessionModel();
+    const data = {
+      id: "w9",
+      label: "x",
+      cwd: "/x",
+      activeTabId: "t9",
+      tabs: [
+        {
+          id: "t9",
+          label: "1",
+          focusedPaneId: "p9",
+          zoomedPaneId: null,
+          layout: { type: "pane" as const, paneId: "p9" },
+          panes: [{ id: "p9", label: null, cwd: "/x", shell: "/bin/sh" }],
+        },
+      ],
+    };
+    restored.restoreWorkspace(data, true);
+    expect(restored.getWorkspace("w9")?.autoLabel).toBe(true);
+    const named2 = new SessionModel();
+    named2.restoreWorkspace({ ...data, id: "w8" }, false);
+    expect(named2.getWorkspace("w8")?.autoLabel, "付けた名前として復元").toBe(false);
   });
 
   it("setRightClick and updatePaneRuntime patch only the given fields", () => {

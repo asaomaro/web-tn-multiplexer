@@ -1,0 +1,13 @@
+schema: 11
+slug: workspace-auto-label
+current: deliver
+approved: [requirements, research, design, tasks, coding, test, review, deliver]
+mode: autonomous
+profile: full
+humanGates: []
+maxSendBacks: 3
+dependsOn: []
+harnessRev: unknown
+backlog: product-roadmap.md
+backlogItem: workspace の既定の名前をリポジトリ名（git でなければフォルダ名）から自動で付ける
+harnessRevDelivered: unknown

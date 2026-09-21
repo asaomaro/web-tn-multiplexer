@@ -10,6 +10,7 @@ import type { PersistScheduler } from "./PersistScheduler.js";
 import { SessionModel } from "./SessionModel.js";
 import { SessionService } from "./SessionService.js";
 import type { NewCwdDeps } from "./newCwd.js";
+import type { WorkspaceLabelDeps } from "./workspaceLabel.js";
 import type { SessionFileData } from "../persist/SessionFile.js";
 
 /** 即座に失敗させたい pane の id を登録しておける偽の TerminalManager（T17「テスト方針」）。 */
@@ -90,9 +91,30 @@ class FakePersistScheduler implements PersistScheduler {
 
 const HOST_INFO: HostInfo = { os: "linux", windowsBuild: null, hostname: "test-host" };
 
-function makeService(terminals: FakeTerminalManager, bus: EventBus, persist: FakePersistScheduler, shell?: string) {
+/**
+ * 名前を決める偽の依存（20260921-workspace-auto-label）。`gitRoots` の下（とその階層）は git のリポジトリ（`.git/HEAD` がある）とみなす。
+ * `/home/u` はホーム。stat を保留にしたいテストは `stat` を差し替える。
+ */
+function fakeLabelDeps(gitRoots: string[] = []): WorkspaceLabelDeps {
+  const files = new Set(gitRoots.map((r) => `${r}/.git/HEAD`));
+  const dirs = new Set(gitRoots.map((r) => `${r}/.git`));
+  return {
+    stat: async (p) => (files.has(p) ? { isDirectory: false, isFile: true } : dirs.has(p) ? { isDirectory: true, isFile: false } : null),
+    readFile: async () => null,
+    home: () => "/home/u",
+  };
+}
+
+function makeService(
+  terminals: FakeTerminalManager,
+  bus: EventBus,
+  persist: FakePersistScheduler,
+  shell?: string,
+  workspaceLabelDeps?: WorkspaceLabelDeps,
+) {
   return new SessionService({
     shell,
+    workspaceLabelDeps,
     model: new SessionModel(),
     terminals,
     bus,
@@ -608,6 +630,7 @@ describe("SessionService — 新しく開く場所（newCwd）", () => {
       defaultCwd: "/start",
       logger: new MemoryLogger(),
       newCwdDeps,
+      workspaceLabelDeps: fakeLabelDeps(["/home/u/api"]), // /home/u/api は git のリポジトリ（20260921-workspace-auto-label）
     });
     return { service, terminals, model, live };
   }
@@ -621,6 +644,17 @@ describe("SessionService — 新しく開く場所（newCwd）", () => {
     expect(r.workspace.cwd).toBe("/srv/live");
     expect(r.pane.cwd).toBe("/srv/live");
     expect(r.cwdFallback).toBeUndefined();
+  });
+
+  // 20260921-workspace-auto-label：自動の名前は、方針で決めた場所（`cd` した先・代わりの場所）から付く。
+  it("引き継ぐで開いた新しい workspace の名前は、元の pane のいまの場所の名前。代わりの場所に回ったらその場所の名前", async () => {
+    const h = makeNewCwdService();
+    const { pane } = await h.service.createWorkspace("/home/u", "home");
+    h.live[pane.id] = "/home/u/api";
+    const followed = await h.service.createWorkspace(undefined, undefined, { policy: "follow", sourcePaneId: pane.id });
+    expect(followed.workspace).toMatchObject({ label: "api", autoLabel: true });
+    const fellBack = await h.service.createWorkspace(undefined, undefined, { policy: "path", path: "/nope" });
+    expect(fellBack.workspace).toMatchObject({ cwd: "/start", label: "start", autoLabel: true });
   });
 
   it("引き継ぐ：新しい tab は元の pane のいまの場所で起動し、pane の記録もそこ。workspace の場所は変えない（AC2）", async () => {
@@ -718,5 +752,346 @@ describe("SessionService — 新しく開く場所（newCwd）", () => {
     // **モデルに無い pane の PTY が生きたまま残っていない**（分割で起動した PTY は破棄されている）。
     const orphans = [...h.terminals.hosts.entries()].filter(([id, host]) => !(host as FakeTerminalHost).disposed && !h.model.getPane(id));
     expect(orphans.map(([id]) => id)).toEqual([]);
+  });
+});
+
+// 20260921-workspace-auto-label：名前を渡さない作成は、開く場所から自動の名前を付ける（design D4b・D10）。
+describe("SessionService — workspace の自動の名前", () => {
+  function setup(gitRoots: string[] = ["/r"]) {
+    const terminals = new FakeTerminalManager();
+    const bus = new EventBus();
+    const created: string[] = [];
+    bus.subscribe((e) => {
+      if (e.event === "workspace.created") created.push(e.data.workspace.label);
+    });
+    const service = makeService(terminals, bus, new FakePersistScheduler(), undefined, fakeLabelDeps(gitRoots));
+    return { terminals, bus, created, service };
+  }
+
+  it("名前を渡さないと、git の中なら根の名前・外ならフォルダ名・ホームなら ~ で、最初から付いている（AC1・AC3・AC9）", async () => {
+    const h = setup();
+    const inRepo = await h.service.createWorkspace("/r/src/deep", undefined);
+    const outside = await h.service.createWorkspace("/srv/app", undefined);
+    const home = await h.service.createWorkspace("/home/u", undefined);
+    expect([inRepo.workspace.label, outside.workspace.label, home.workspace.label]).toEqual(["r", "app", "~"]);
+    expect([inRepo.workspace.autoLabel, outside.workspace.autoLabel, home.workspace.autoLabel]).toEqual([true, true, true]);
+    expect(h.created, "workspace.created にも最初から自動の名前（「1」を経ない）").toEqual(["r", "app", "~"]);
+  });
+
+  it("名前を渡せば付けた名前。空白だけの名前は自動の名前（design D10）", async () => {
+    const h = setup();
+    const named = await h.service.createWorkspace("/r/src", "feat/x");
+    const blank = await h.service.createWorkspace("/r/src", "   ");
+    expect(named.workspace).toMatchObject({ label: "feat/x", autoLabel: false });
+    expect(blank.workspace).toMatchObject({ label: "r", autoLabel: true });
+  });
+
+  it("起動時の最初の workspace と、最後を閉じた後の作り直しも自動の名前（AC4）", async () => {
+    const terminals = new FakeTerminalManager();
+    const service = new SessionService({
+      model: new SessionModel(),
+      terminals,
+      bus: new EventBus(),
+      persist: new FakePersistScheduler(),
+      serverVersion: "0.1.0-test",
+      host: HOST_INFO,
+      scrollbackLines: 1000,
+      spawnGraceMs: 5,
+      defaultCwd: "/r/packages/e2e",
+      logger: new MemoryLogger(),
+      workspaceLabelDeps: fakeLabelDeps(["/r"]),
+    });
+    await service.ensureNotEmpty();
+    const [first] = service.snapshot().workspaces;
+    expect(first).toMatchObject({ label: "r", autoLabel: true });
+    await service.closeWorkspace(first!.id); // D24：最後を閉じると作り直す
+    const [again] = service.snapshot().workspaces;
+    expect(again!.id).not.toBe(first!.id);
+    expect(again).toMatchObject({ label: "r", autoLabel: true });
+  });
+
+  // 起動の成功から commit までの間に await を挟まない（decisions D1）——名前を決めている間は、シェルを起動せず何も知らせない。
+  it("名前を決めている間は起動も知らせもせず、決まってから起動する", async () => {
+    const h = setup();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const base = fakeLabelDeps(["/r"]);
+    const slow: WorkspaceLabelDeps = { ...base, timeoutMs: 60_000, stat: async (p) => (await gate, base.stat(p)) };
+    const service = makeService(h.terminals, h.bus, new FakePersistScheduler(), undefined, slow);
+    const creating = service.createWorkspace("/r/src", undefined);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.terminals.createOptions, "名前が決まる前にシェルを起動しない").toEqual([]);
+    expect(h.created).toEqual([]);
+    release();
+    const { workspace } = await creating;
+    expect(h.terminals.createOptions).toHaveLength(1);
+    expect(workspace.label).toBe("r");
+  });
+
+  describe("名前変更（design D5・D9・D10）", () => {
+    it("付けた名前は autoLabel: false、null と空白だけは開いた場所から決め直した自動の名前に戻る（AC6）", async () => {
+      const h = setup();
+      const updated: { label: string; autoLabel: boolean }[] = [];
+      h.bus.subscribe((e) => {
+        if (e.event === "workspace.updated") updated.push({ label: e.data.workspace.label, autoLabel: e.data.workspace.autoLabel });
+      });
+      const { workspace } = await h.service.createWorkspace("/r/src", undefined);
+      await h.service.renameWorkspace(workspace.id, "mine");
+      await h.service.renameWorkspace(workspace.id, null);
+      await h.service.renameWorkspace(workspace.id, "again");
+      await h.service.renameWorkspace(workspace.id, "  ");
+      expect(updated).toEqual([
+        { label: "mine", autoLabel: false },
+        { label: "r", autoLabel: true },
+        { label: "again", autoLabel: false },
+        { label: "r", autoLabel: true },
+      ]);
+    });
+
+    it("名前変更は、名前を入れたときに保存を予約する（null で戻すときも）", async () => {
+      const persist = new FakePersistScheduler();
+      const service = makeService(new FakeTerminalManager(), new EventBus(), persist, undefined, fakeLabelDeps(["/r"]));
+      const { workspace } = await service.createWorkspace("/r/src", "mine");
+      const before = persist.touchCount;
+      await service.renameWorkspace(workspace.id, null);
+      expect(persist.touchCount - before).toBe(1);
+    });
+
+    it("要求の時点で無い workspace は not_found で拒否する", async () => {
+      const h = setup();
+      await expect(h.service.renameWorkspace("w999", "x")).rejects.toThrow(/w999/);
+      await expect(h.service.renameWorkspace("w999", null)).rejects.toThrow(/w999/);
+    });
+
+    // 自動の名前を決めている間に付けた名前が来たら、後から来た付けた名前が勝つ（古い自動の名前で上書きしない）。
+    /** 名前を決める stat を `release` まで保留する service（作成は名前を渡して deps を通らないようにする）。 */
+    function gated() {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => (release = r));
+      const base = fakeLabelDeps(["/r"]);
+      const slow: WorkspaceLabelDeps = { ...base, timeoutMs: 60_000, stat: async (path) => (await gate, base.stat(path)) };
+      const terminals = new FakeTerminalManager();
+      const bus = new EventBus();
+      const persist = new FakePersistScheduler();
+      const service = makeService(terminals, bus, persist, undefined, slow);
+      return { service, bus, persist, release: () => release() };
+    }
+
+    it("自動の名前に戻す待ちの間に名前を付けたら、付けた名前が勝つ（捨てた結果では保存を予約しない）", async () => {
+      const h = gated();
+      const { workspace } = await h.service.createWorkspace("/r/src", "first");
+      const touches = h.persist.touchCount;
+      const toAuto = h.service.renameWorkspace(workspace.id, null);
+      await h.service.renameWorkspace(workspace.id, "later");
+      h.release();
+      await toAuto;
+      expect(h.service.snapshot().workspaces[0]).toMatchObject({ label: "later", autoLabel: false });
+      expect(h.persist.touchCount - touches, "付けた名前の 1 回だけ").toBe(1);
+    });
+
+    it("自動の名前に戻す待ちの間に workspace が閉じられたら、何もしない（投げない）", async () => {
+      const h = gated();
+      await h.service.createWorkspace("/srv/keep", "keep"); // 閉じても D24 の作り直しが走らないように 2 つにする
+      const { workspace } = await h.service.createWorkspace("/r/src", "first");
+      const events: string[] = [];
+      h.bus.subscribe((e) => events.push(e.event));
+      const toAuto = h.service.renameWorkspace(workspace.id, null);
+      await h.service.closeWorkspace(workspace.id);
+      h.release();
+      await expect(toAuto).resolves.toBeUndefined();
+      expect(events.filter((e) => e === "workspace.updated")).toEqual([]);
+    });
+  });
+
+  describe("復元（design D6・D10）", () => {
+    function workspaceData(id: string, label: string, cwd: string, autoLabel?: boolean) {
+      return {
+        id,
+        label,
+        ...(autoLabel !== undefined ? { autoLabel } : {}),
+        cwd,
+        activeTabId: `t-${id}`,
+        tabs: [
+          {
+            id: `t-${id}`,
+            label: "1",
+            focusedPaneId: `p-${id}`,
+            zoomedPaneId: null,
+            layout: { type: "pane" as const, paneId: `p-${id}` },
+            panes: [{ id: `p-${id}`, label: null, cwd, shell: "/bin/sh" }],
+          },
+        ],
+      };
+    }
+
+    it("自動の名前は場所から決め直し、付けた名前はそのまま。以前の版の「1」と空白だけの名前は自動（AC5〜AC7）", async () => {
+      // 保存した後に /r/sub が git のリポジトリになった（親で git init した）状態を、偽の fs で表す。
+      const h = setup(["/r"]);
+      await h.service.restore({
+        schema: 1,
+        savedAt: "2026-09-21T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [
+          workspaceData("w1", "sub", "/r/sub", true), // 自動（保存した印）→ 決め直して r
+          workspaceData("w2", "mine", "/r/sub", false), // 付けた名前 → git の状態が変わってもそのまま
+          workspaceData("w3", "1", "/srv/app"), // 以前の版の既定の名前 → 自動
+          workspaceData("w4", "feat/x", "/r/sub"), // 以前の版の付けた名前（worktree のブランチ名等）→ そのまま
+          workspaceData("w5", "  ", "/srv/app", false), // 空白だけ → 自動
+          workspaceData("w6", "1", "/r/sub", false), // 新しい版で利用者が「1」と付けた（印がある）→ 付けた名前のまま
+        ],
+        focus: null,
+      });
+      expect(h.service.snapshot().workspaces.map((w) => [w.id, w.label, w.autoLabel])).toEqual([
+        ["w1", "r", true],
+        ["w2", "mine", false],
+        ["w3", "app", true],
+        ["w4", "feat/x", false],
+        ["w5", "app", true],
+        ["w6", "1", false],
+      ]);
+    });
+  });
+
+  // 応答しないファイルシステムへの stat は取り消せず libuv のスレッドを塞ぐので、上限を超えた問い合わせが返るまでは根を探さない（review ラウンド 1・2）。
+  describe("名前を決める処理が上限を超えた後", () => {
+    function stuckDeps() {
+      const calls: string[] = [];
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => (release = r));
+      let hang = true;
+      const base = fakeLabelDeps(["/r"]);
+      const deps: WorkspaceLabelDeps = {
+        ...base,
+        timeoutMs: 20,
+        stat: (p) => {
+          calls.push(p);
+          // 止まっている間の問い合わせは、release するまで返らない（止まった NFS の stat の代わり）。
+          return hang ? gate.then(() => base.stat(p)) : base.stat(p);
+        },
+      };
+      return {
+        deps,
+        calls,
+        release: () => {
+          hang = false;
+          release();
+        },
+      };
+    }
+
+    it("上限を超えた問い合わせが返るまでは fs に問い合わせずフォルダ名にし、返ったらまた根を探す", async () => {
+      const s = stuckDeps();
+      const service = makeService(new FakeTerminalManager(), new EventBus(), new FakePersistScheduler(), undefined, s.deps);
+      const first = await service.createWorkspace("/r/src", undefined);
+      expect(first.workspace.label, "上限を超えたのでフォルダ名").toBe("src");
+      const asked = s.calls.length;
+      const second = await service.createWorkspace("/r/src", undefined);
+      expect(second.workspace).toMatchObject({ label: "src", autoLabel: true });
+      expect(s.calls.length, "止まった問い合わせが返るまでは問い合わせない").toBe(asked);
+      s.release(); // 止まっていた stat が返る（遅いだけだった）
+      await new Promise((r) => setTimeout(r, 10));
+      const third = await service.createWorkspace("/r/src", undefined);
+      expect(third.workspace.label, "返ったらまた根を探す").toBe("r");
+    });
+
+    // 数を戻す処理はログより先に付ける——warn が投げても、止まった問い合わせが返ったら数が戻る（review ラウンド 3）。
+    it("上限を超えたときのログが投げても、問い合わせが返ったらまた根を探す", async () => {
+      const s = stuckDeps();
+      const logger = new MemoryLogger();
+      logger.warn = () => {
+        throw new Error("warn failed");
+      };
+      const service = new SessionService({
+        model: new SessionModel(),
+        terminals: new FakeTerminalManager(),
+        bus: new EventBus(),
+        persist: new FakePersistScheduler(),
+        serverVersion: "0.1.0-test",
+        host: HOST_INFO,
+        scrollbackLines: 1000,
+        spawnGraceMs: 5,
+        defaultCwd: "/home/u",
+        logger,
+        workspaceLabelDeps: s.deps,
+      });
+      const first = await service.createWorkspace("/r/src", undefined);
+      expect(first.workspace.label, "上限を超えたのでフォルダ名").toBe("src");
+      s.release();
+      await new Promise((r) => setTimeout(r, 10));
+      const second = await service.createWorkspace("/r/src", undefined);
+      expect(second.workspace.label, "warn が投げても数が戻り、また根を探す").toBe("r");
+    });
+
+    // 1 つずつ決めるので、遅いだけの fs でも数に比例して `/ws` の受け付けが遅れる——合計の期限（1 秒）を過ぎたら残りはフォルダ名（review ラウンド 2）。
+    it("復元は合計の期限を過ぎたら、残りを問い合わせずフォルダ名にする（警告は 1 度だけ）", async () => {
+      let now = 0;
+      const calls: string[] = [];
+      const logger = new MemoryLogger();
+      const base = fakeLabelDeps(["/r"]);
+      const deps: WorkspaceLabelDeps = {
+        ...base,
+        stat: (p) => {
+          calls.push(p);
+          now += 400; // 上限（200ms）には達しないが遅い stat（時計だけを進める）
+          return base.stat(p);
+        },
+      };
+      const service = new SessionService({
+        model: new SessionModel(),
+        terminals: new FakeTerminalManager(),
+        bus: new EventBus(),
+        persist: new FakePersistScheduler(),
+        serverVersion: "0.1.0-test",
+        host: HOST_INFO,
+        scrollbackLines: 1000,
+        spawnGraceMs: 5,
+        defaultCwd: "/home/u",
+        logger,
+        workspaceLabelDeps: deps,
+        clock: { now: () => now },
+      });
+      const ws = (id: string, cwd: string) => ({
+        id,
+        label: "1",
+        cwd,
+        activeTabId: `t-${id}`,
+        tabs: [{ id: `t-${id}`, label: "1", focusedPaneId: `p-${id}`, zoomedPaneId: null, layout: { type: "pane" as const, paneId: `p-${id}` }, panes: [{ id: `p-${id}`, label: null, cwd, shell: "/bin/sh" }] }],
+      });
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-21T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        // w3 は付けた名前（期限を過ぎても決め直さない・フォルダ名にしない——期限は自動の名前のときだけ見る。review ラウンド 4）。
+        workspaces: [ws("w1", "/r/a"), ws("w2", "/r/b"), { ...ws("w3", "/r/c"), label: "mine", autoLabel: false }, ws("w4", "/r/d")],
+        focus: null,
+      });
+      expect(service.snapshot().workspaces.map((w) => w.label), "w1 は根を探して r、期限を過ぎた w2・w4 はフォルダ名、w3 は付けた名前").toEqual(["r", "b", "mine", "d"]);
+      expect(calls.every((p) => p.startsWith("/r/a") || p === "/r/.git" || p === "/r/.git/HEAD"), "w2・w3 は問い合わせない").toBe(true);
+      const overBudget = logger.lines.filter((l) => l.level === "warn" && l.msg.startsWith("workspace label lookup over restore budget"));
+      expect(overBudget, "期限を過ぎたら警告を 1 度だけ（w2・w3 の 2 つとも過ぎているが 1 度）").toEqual([
+        { level: "warn", msg: "workspace label lookup over restore budget; using folder names for the rest", fields: { budgetMs: 1000, remaining: 2 } },
+      ]);
+    });
+
+    it("復元では 1 つずつ決め、1 つが上限を超えたら残りは問い合わせずフォルダ名にする", async () => {
+      const s = stuckDeps();
+      const service = makeService(new FakeTerminalManager(), new EventBus(), new FakePersistScheduler(), undefined, s.deps);
+      const ws = (id: string, cwd: string) => ({
+        id,
+        label: "1",
+        cwd,
+        activeTabId: `t-${id}`,
+        tabs: [{ id: `t-${id}`, label: "1", focusedPaneId: `p-${id}`, zoomedPaneId: null, layout: { type: "pane" as const, paneId: `p-${id}` }, panes: [{ id: `p-${id}`, label: null, cwd, shell: "/bin/sh" }] }],
+      });
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-21T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [ws("w1", "/r/a"), ws("w2", "/r/b"), ws("w3", "/r/c")],
+        focus: null,
+      });
+      expect(service.snapshot().workspaces.map((w) => w.label)).toEqual(["a", "b", "c"]);
+      expect(s.calls, "止まった 1 つ（w1 の最初の stat）の後は問い合わせない").toEqual(["/r/a"]);
+    });
   });
 });
