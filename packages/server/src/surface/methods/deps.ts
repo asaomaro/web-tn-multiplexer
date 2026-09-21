@@ -1,3 +1,4 @@
+import type { WorktreeService } from "../../git/WorktreeService.js";
 import type { SessionService } from "../../session/SessionService.js";
 import type { ClientRegistry } from "../../clients/ClientRegistry.js";
 import type { SizeAuthority } from "../../clients/SizeAuthority.js";
@@ -9,4 +10,6 @@ export interface MethodDeps {
   clients: ClientRegistry;
   sizeAuthority: SizeAuthority;
   terminals: TerminalManager;
+  /** worktree の一覧と作成（20260920-git-worktree-actions）。 */
+  worktrees: WorktreeService;
 }

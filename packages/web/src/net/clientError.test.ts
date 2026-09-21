@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clientErrorMessage } from "./clientError.js";
+import { clientErrorMessage, errorCodeOf } from "./clientError.js";
 
 describe("clientErrorMessage（D107：client.error の英語の message をそのまま出さず、code から日本語の文言を引く）", () => {
   it("今のサーバが送る invalid_params（1MB を超える貼り付け等）は、送った分が端末に届いていないことを日本語で示す", () => {
@@ -22,5 +22,45 @@ describe("clientErrorMessage（D107：client.error の英語の message をそ�
   it("Object の既定のプロパティ名（toString 等）は知らない code として扱う", () => {
     expect(clientErrorMessage("toString")).toBe("サーバでエラーが起きました（toString）。");
     expect(clientErrorMessage("__proto__")).toBe("サーバでエラーが起きました（__proto__）。");
+  });
+});
+
+// 20260920-git-worktree-actions：git の失敗は**種類ごとに別のコード**で来る（D2）。
+// 生の診断は見せないので、ここが利用者の目に触れる唯一の文言になる。
+describe("worktree のエラー（20260920-git-worktree-actions）", () => {
+  it("種類ごとに違う文言を返す", () => {
+    expect(clientErrorMessage("not_a_git_repository")).toContain("Git リポジトリではありません");
+    expect(clientErrorMessage("worktree_branch_in_use")).toContain("既に別の場所");
+    expect(clientErrorMessage("worktree_path_exists")).toContain("作成先のパス");
+    // **「作成」と言い切らない**——一覧の取得の失敗にも同じコードを使う（cross 点検の nit）。
+    expect(clientErrorMessage("worktree_failed")).toContain("操作に失敗しました");
+    expect(clientErrorMessage("worktree_failed")).not.toContain("作成できませんでした");
+    expect(clientErrorMessage("worktree_no_commits")).toContain("コミット");
+  });
+
+  it("6 つとも互いに違う（同じ文言に潰れていない）", () => {
+    const codes = [
+      "not_a_git_repository",
+      "worktree_branch_in_use",
+      "worktree_path_exists",
+      "worktree_no_commits",
+      "worktree_invalid_branch",
+      "worktree_failed",
+    ];
+    expect(new Set(codes.map(clientErrorMessage)).size).toBe(6);
+  });
+});
+
+// `Connection` は `new Error(`<code>: <message>`)` で reject する（decisions.md D4）。
+// **この書式が変わると黙って汎用の文言に落ちる**ので、ここで固定する。
+describe("errorCodeOf", () => {
+  it("`<code>: <message>` の code を取り出す", () => {
+    expect(errorCodeOf(new Error("worktree_path_exists: git worktree add failed"))).toBe("worktree_path_exists");
+  });
+
+  it("書式に合わなければ null", () => {
+    expect(errorCodeOf(new Error("something went wrong"))).toBeNull();
+    expect(errorCodeOf(new Error("Not A Code: x"))).toBeNull();
+    expect(errorCodeOf(undefined)).toBeNull();
   });
 });

@@ -69,10 +69,20 @@ const items = computed<MenuItem[]>(() => {
     ];
   }
   if (target.kind === "workspace") {
-    // herdr は worktree 対応で 4 パターンあるが、本製品はグルーピングが対象外なので常にこの 2 項目（D56 の訂正 10）。
+    // herdr は worktree の状態で 4 パターンに変える。本製品はグルーピングと削除が対象外なので
+    // 「git リポジトリか」の 2 パターンだけ（20260920-git-worktree-actions。元は D56 の訂正 10 で 2 項目固定だった）。
+    // 判定は `workspace.git`（`GitInfoPoller` が 5 秒周期で埋める）。**作った直後は間に合わない**ので、
+    // その間は `prefix+G` から始められるようにしてある（decisions.md D3）。
+    const isGit = session.workspaces.get(target.workspaceId)?.git != null;
     return [
       { label: "名前の変更", run: () => actions.renameWorkspaceById(target.workspaceId) },
       { label: "閉じる", run: () => actions.closeWorkspaceById(target.workspaceId) },
+      ...(isGit
+        ? [
+            { label: "新しい worktree", run: () => actions.newWorktree(target.workspaceId) },
+            { label: "worktree を開く…", run: () => actions.openWorktree(target.workspaceId) },
+          ]
+        : []),
     ];
   }
   // global：どこにも属さない全体の操作。この製品に設定画面も更新機構も無いので、

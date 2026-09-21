@@ -108,3 +108,13 @@ export interface SessionSnapshot {
   focus: SessionFocus | null;
   limits: SessionLimits;
 }
+
+/**
+ * `git worktree list --porcelain` の 1 エントリ（20260920-git-worktree-actions）。
+ * **bare と prunable はサーバ側で落とす**ので、ここに来るのは「開ける」ものだけ。
+ */
+export interface WorktreeEntry {
+  path: string;
+  /** detached HEAD なら null。 */
+  branch: string | null;
+}

@@ -22,6 +22,7 @@ import { OriginRejectionLog } from "./auth/OriginRejectionLog.js";
 import { DefaultLoginRateLimiter } from "./auth/LoginRateLimiter.js";
 import { OsNetworkInfo } from "./infra/OsNetworkInfo.js";
 import { ChildProcessGitRunner } from "./infra/GitRunner.js";
+import { DefaultWorktreeService } from "./git/WorktreeService.js";
 import { DefaultGitInfoPoller } from "./git/GitInfoPoller.js";
 import { DefaultClientRegistry } from "./clients/ClientRegistry.js";
 import { DefaultSizeAuthority } from "./clients/SizeAuthority.js";
@@ -137,7 +138,10 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
     logger,
   });
 
-  const gitPoller = new DefaultGitInfoPoller(session, new ChildProcessGitRunner());
+  const gitRunner = new ChildProcessGitRunner();
+  const gitPoller = new DefaultGitInfoPoller(session, gitRunner);
+  // worktree の一覧と作成（20260920-git-worktree-actions）。`GitInfoPoller` と同じ runner を使い回す。
+  const worktrees = new DefaultWorktreeService(session, gitRunner, logger);
 
   // エージェント判定（02-agent-detection T10）。判定ルール（third_party/herdr/agent-detection）を読み、
   // 結果の要約をログへ出す（個々のファイルの失敗は ManifestStore.loadAll 自身が warn で出す。D46）。
@@ -150,7 +154,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   const clients = new DefaultClientRegistry();
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(logger);
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals });
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees });
   const wsServer = new WsServerWs(httpServer.server, originRejections, auth.authorizeUpgrade, logger);
   // `/ws` は `listen()` の最後（復元と poller の開始の後）まで受け付けない（D102）。
   wsServer.setReady(false);

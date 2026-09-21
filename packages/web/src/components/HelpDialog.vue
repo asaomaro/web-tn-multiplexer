@@ -63,7 +63,7 @@ const HELP_GROUPS: HelpGroup[] = [
       { keys: "shift+n", label: "新規 workspace" },
       { keys: "shift+w", label: "workspace の名前を変更" },
       { keys: "shift+d", label: "workspace を閉じる" },
-      notYet("G", "shift+g"),
+      { keys: "shift+g", label: "新しい worktree" },
       { keys: "c", label: "新規 tab" },
       { keys: "n / p", label: "次 / 前の tab" },
       { keys: "1..9", label: "tab を切り替え" },

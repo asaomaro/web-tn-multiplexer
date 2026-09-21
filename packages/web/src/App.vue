@@ -14,6 +14,8 @@ import Sidebar from "./components/Sidebar.vue";
 import TabBar from "./components/TabBar.vue";
 import TerminalPane from "./components/TerminalPane.vue";
 import Toast from "./components/Toast.vue";
+import WorktreeCreateDialog from "./components/WorktreeCreateDialog.vue";
+import WorktreeOpenDialog from "./components/WorktreeOpenDialog.vue";
 import { isMobileViewport } from "./mobile/detect.js";
 import MobileShell from "./mobile/MobileShell.vue";
 import { useSessionStore } from "./store/session.js";
@@ -64,6 +66,8 @@ const isMobile = isMobileViewport();
     </template>
     <ContextMenu />
     <NameDialog />
+    <WorktreeCreateDialog />
+    <WorktreeOpenDialog />
     <ConfirmDialog />
     <HelpDialog />
     <GotoPicker />

@@ -29,9 +29,14 @@
 | `packages/server/src/agent/agents.ts` | `src/detect/mod.rs`（`lookup_agent`・`agent_label`） |
 | `packages/server/src/agent/AgentTracker.ts` | `src/pane/agent_detection.rs`（起動猶予・working→idle の保留） |
 | `packages/server/src/agent/regexConvert.ts` | （herdr のコードの移植ではなく、herdr の判定ルールが使う Rust `regex` 構文を実測して起こした変換規則） |
+| `packages/server/src/git/worktree.ts` | `src/worktree.rs`（`generated_branch_slug`・`parse_worktree_list_porcelain`） |
+| `packages/protocol/src/worktreePath.ts` | `src/worktree.rs`（`branch_to_path_slug`・`default_checkout_path`） |
 
-テストの一部（`ManifestEngine.test.ts`・`ProcessMatcher.test.ts`・`AgentTracker.test.ts`）にも、
+テストの一部（`ManifestEngine.test.ts`・`ProcessMatcher.test.ts`・`AgentTracker.test.ts`・
+`packages/server/src/git/worktree.test.ts`・`packages/protocol/src/worktreePath.test.ts`）にも、
 herdr 側のテストケース（fixture・期待値）を本製品の型に書き換えて移植したものを含む。
 各ファイルの冒頭コメントと、該当 `describe` の見出しに移植元の herdr 側の関数名を記す。
 
 判断の経緯は `.aidev/works/20260918-web-terminal-multiplexer/decisions.md` の D5・D34・D45〜D50。
+worktree の移植（作成先とブランチ名の規則）は `.aidev/works/20260920-git-worktree-actions/`——
+**herdr と同じ場所に同じ名前で作られる**ことを狙って、規則をそのまま移した。
