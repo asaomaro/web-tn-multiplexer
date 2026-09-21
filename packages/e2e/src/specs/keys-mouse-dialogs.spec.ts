@@ -390,3 +390,71 @@ test("リンク（M6）：出力の中の URL と OSC 8 のリンクは、ただ
     await expect(pointer, link.url).toHaveCount(0);
   }
 });
+
+/** 枠の計算後のスタイル（AC5・AC6 の判定に使う。単体テストは scoped CSS を当てないので、ここでしか見られない）。 */
+function edgeStyle(page: Page): Promise<{ border: string; bg: string }> {
+  return page.evaluate(() => {
+    const el = document.querySelector(".pane-frame-edge") as HTMLElement;
+    const cs = getComputedStyle(el);
+    return { border: cs.borderTopWidth, bg: cs.backgroundColor };
+  });
+}
+
+/**
+ * AC4・AC5・AC6（20260920-ui-selection-visuals）：強調はホバーではなく選択で起きる。
+ * 以前は `.pane-frame-edge:hover` が 4px の帯を全面塗りしていた（選択とは無関係）。
+ */
+test("pane の枠：選ばれている pane を 2px の線で強調し、マウスを乗せても見た目は変わらない（AC4・AC5・AC6）", async ({ page, appServer }) => {
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  // pane は 1 つだけなので、それが選ばれている。
+  await expect(page.locator(".pane-frame-edge.pane-frame-edge-current")).toHaveCount(1);
+  const selected = await edgeStyle(page);
+  expect(selected.border, "選択中の枠は 2px の線").toBe("2px");
+
+  // 外寸は変えない（変えると PTY の行・列が変わる）。
+  const padding = await page.locator(".pane-frame").first().evaluate((el) => getComputedStyle(el).paddingTop);
+  expect(padding, "枠の外寸（padding）は 4px のまま").toBe("4px");
+
+  // 4px の帯にポインタを乗せる。`locator.hover()` は中央を狙うので `.pane-frame-body` に横取りされる。
+  const area = (await page.locator(".app-panes").boundingBox())!;
+  await page.mouse.move(area.x + 2, area.y + area.height / 2);
+  // **ポインタが本当に帯の上に乗ったか**をブラウザに聞く。これを省くと、座標がずれてホバーが成立しなくても
+  // 「前後で変わらない」が成り立ってしまい、`:hover` が復活しても気づけない（空振りのテストになる）。
+  await expect
+    .poll(() => page.evaluate(() => document.querySelector(".pane-frame-edge:hover") !== null), { message: "ポインタが枠の帯の上にある" })
+    .toBe(true);
+  await expect.poll(() => edgeStyle(page), { message: "ホバーで見た目が変わらない" }).toEqual(selected);
+});
+
+/** AC-I3（20260920-ui-selection-visuals）：既定の経路（prefix+h/l）で選び直すと強調が移る。 */
+test("pane の枠：prefix のキーで選び直すと強調が移る（AC-I3）", async ({ page, appServer }) => {
+  const client = await appServer.openClient();
+  const shown = await watchShownPanes(page);
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+  await focusTerminal(page);
+  const p1 = client.helloSnapshot()!.panes[0]!.id;
+
+  const created = client.waitForEvent("pane.created");
+  await prefixKey(page, "v"); // 右へ分割（焦点は新しい p2）
+  const p2 = (await created).data.pane.id;
+  await expect.poll(shown).toContain(p2);
+
+  const edges = page.locator(".pane-frame-edge");
+  await expect(edges).toHaveCount(2);
+  // `PaneLayout` は分割の a → b の順に描くので、DOM の 2 つ目が p2。
+  await expect(edges.nth(1)).toHaveClass(/pane-frame-edge-current/);
+  await expect(edges.nth(0)).not.toHaveClass(/pane-frame-edge-current/);
+
+  // ブラウザは焦点を手元で移してから `pane.focus` を送るので、この知らせが届いた時点でブラウザでも選ばれている。
+  await prefixKey(page, "h");
+  await client.waitForEvent("session.focus_changed", (e) => e.data.focus?.paneId === p1);
+  await expect(edges.nth(0)).toHaveClass(/pane-frame-edge-current/);
+  await expect(edges.nth(1)).not.toHaveClass(/pane-frame-edge-current/);
+
+  await prefixKey(page, "l");
+  await client.waitForEvent("session.focus_changed", (e) => e.data.focus?.paneId === p2);
+  await expect(edges.nth(1)).toHaveClass(/pane-frame-edge-current/);
+});

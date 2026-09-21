@@ -34,11 +34,15 @@ const session = props.enabled ? useSessionStore() : null;
 const view = props.enabled ? useViewStore() : null;
 const edge = ref<HTMLElement | null>(null);
 
-const label = computed(() => {
+/** 利用者が付けた名前 → エージェント名 → 端末のタイトル の順に拾う。どれも無ければ空。 */
+const paneName = computed(() => {
   const pane = session?.panes.get(props.paneId);
-  const name = pane ? pane.label || pane.agent?.label || pane.title : "";
-  return name ? `pane「${name}」のメニュー` : "pane のメニュー";
+  return pane ? pane.label || pane.agent?.label || pane.title : "";
 });
+/** pane そのものの名前。枠の `aria-label` は**メニューボタン**の名前なので流用しない（AC8）。 */
+const paneLabel = computed(() => (paneName.value ? `pane「${paneName.value}」` : "pane"));
+/** 枠（メニューボタン）の名前。 */
+const label = computed(() => (paneName.value ? `pane「${paneName.value}」のメニュー` : "pane のメニュー"));
 /** 選ばれている pane の枠だけを Tab で止まる場所にする（roving tabindex。独立点検 #2）。 */
 const selected = computed(() => view?.focusedPaneId === props.paneId);
 const root = ref<HTMLElement | null>(null);
@@ -88,17 +92,24 @@ function onKeydown(ev: KeyboardEvent): void {
 </script>
 
 <template>
-  <div ref="root" class="pane-frame" :class="{ 'pane-frame-enabled': enabled }">
+  <div
+    ref="root"
+    class="pane-frame"
+    :class="{ 'pane-frame-enabled': enabled }"
+    :role="enabled ? 'group' : undefined"
+    :aria-label="enabled ? paneLabel : undefined"
+    :aria-current="enabled && selected ? 'true' : undefined"
+  >
     <div
       v-if="enabled"
       ref="edge"
       class="pane-frame-edge"
+      :class="{ 'pane-frame-edge-current': selected }"
       role="button"
       :tabindex="selected ? 0 : -1"
       aria-haspopup="menu"
       :aria-expanded="menuOpen ? 'true' : 'false'"
       :aria-label="label"
-      title="右クリックで pane のメニュー"
       @mousedown="onMouseDown"
       @contextmenu="onContextMenu"
       @keydown="onKeydown"
@@ -125,8 +136,11 @@ function onKeydown(ev: KeyboardEvent): void {
   inset: 0;
   cursor: context-menu;
 }
-.pane-frame-edge:hover {
-  background: var(--wtm-menu-border, #44475a);
+/* 強調はホバーではなく選択で起きる（20260920-ui-selection-visuals の AC4・AC5）。
+ * `inset: 0` の絶対配置なので border は内側に収まり、`.pane-frame-enabled` の 4px は変わらない
+ * ——外寸が変わると PTY の行・列が変わってしまう。 */
+.pane-frame-edge-current {
+  border: 2px solid var(--wtm-menu-border, #44475a);
 }
 .pane-frame-edge:focus-visible {
   outline: 1px solid var(--wtm-fg, #f8f8f2);
