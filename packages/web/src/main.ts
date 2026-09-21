@@ -1,0 +1,210 @@
+import type { ITerminalOptions } from "@xterm/xterm";
+// xterm.js の必須の CSS（canvas の重ね方・入力用 textarea の隠し方）。無いと描画用の canvas が端末の下へ
+// 押し出され、端末の中身が一切見えない（親の統合 test で発見。D96）。
+import "@xterm/xterm/css/xterm.css";
+import { createPinia } from "pinia";
+import { createApp, watch } from "vue";
+import App from "./App.vue";
+import { ActionDispatcher } from "./actions/ActionDispatcher.js";
+import { ActionDispatcherKey, ConnectionKey, KeyInputControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
+import { KeyInputController } from "./keys/KeyInputController.js";
+import { KeyRouter } from "./keys/KeyRouter.js";
+import { CopyMode } from "./keys/CopyMode.js";
+import { NavigateMode } from "./keys/NavigateMode.js";
+import { ResizeMode } from "./keys/ResizeMode.js";
+import { DEFAULT_KEYMAP } from "./keys/keymap.js";
+import { isCoarsePointer } from "./mobile/detect.js";
+import { clientErrorMessage } from "./net/clientError.js";
+import { Connection } from "./net/Connection.js";
+import { InputGate } from "./net/InputGate.js";
+import type { ConnectionPort, TerminalSinkPort } from "./net/ports.js";
+import { StoreAdapter } from "./store/StoreAdapter.js";
+import { useSeenStore } from "./store/seen.js";
+import { useSessionStore } from "./store/session.js";
+import { useViewStore } from "./store/view.js";
+import { MouseBridge } from "./term/MouseBridge.js";
+import { RendererPool } from "./term/RendererPool.js";
+import { TerminalRegistry } from "./term/TerminalRegistry.js";
+import { ViewSync } from "./term/ViewSync.js";
+
+/**
+ * composition root（T26。architecture.md「Web の主要な型と port」）。net/term/keys/store/actions の部品を
+ * 組み立てる。**循環する port は、片方を先に実体化できないので「後から埋める」**（`KeyInputController.bind`
+ * は既存の仕組み、`TerminalSinkPort` は `Connection` を先に作るために薄いフォワーダを用意する。下記参照）。
+ * `kind`（`desktop`/`mobile`）は `isCoarsePointer()` で 1 回だけ判定する（04-mobile T8。design「モバイル」
+ * の判定——1 列レイアウトへの切り替え（`isMobileViewport()`）とは別軸。`App.vue` 側で行う）。
+ */
+
+const DESKTOP_TERMINAL_CAPACITY = 24; // D28・D60（LRU の容量）
+const DESKTOP_WEBGL_CAPACITY = 12; // D60（表示中の WebGL の上限）
+const MOBILE_TERMINAL_CAPACITY = 2; // D28（モバイルの LRU＝表示中＋直前）
+const MOBILE_WEBGL_CAPACITY = 2; // D60（モバイルの WebGL 上限。design.md の「4」は D28 改訂前の取り残し）
+const MOBILE_SCROLLBACK_LINES = 1000; // design「WebSocket の通信」：モバイルは 1000 を申告する
+
+const kind = isCoarsePointer() ? "mobile" : "desktop";
+const terminalCapacity = kind === "mobile" ? MOBILE_TERMINAL_CAPACITY : DESKTOP_TERMINAL_CAPACITY;
+const webglCapacity = kind === "mobile" ? MOBILE_WEBGL_CAPACITY : DESKTOP_WEBGL_CAPACITY;
+
+const pinia = createPinia();
+const session = useSessionStore(pinia);
+const view = useViewStore(pinia);
+const seen = useSeenStore(pinia);
+
+const httpOrigin = ""; // 同一オリジン配信（vite dev は /api・/ws を proxy する。vite.config.ts）
+const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
+
+// `Connection` は `sink: TerminalSinkPort` を要求するが、`TerminalRegistry` は `conn: ConnectionPort` を
+// 要求する——どちらを先に作っても他方が無い。`TerminalSinkPort` は 3 メソッドだけなので、こちらを
+// 薄いフォワーダにして `Connection` を先に作る。フォワーダは「後で埋める箱」（`registryBox`）を介して
+// 本物の `TerminalRegistry` へ委譲する（箱自体は作った時点で確定するので `registry` を素の `let` にせず
+// 済む——呼び出しは実際に pane を購読した後＝配線が終わった後にしか起きない）。
+const registryBox: { current?: TerminalRegistry } = {};
+const sinkProxy: TerminalSinkPort = {
+  onOutput: (paneId, chunk) => registryBox.current?.onOutput(paneId, chunk),
+  onSnapshot: (paneId, cols, rows, text) => registryBox.current?.onSnapshot(paneId, cols, rows, text),
+  onSizeChanged: (paneId, cols, rows) => registryBox.current?.onSizeChanged(paneId, cols, rows),
+};
+
+const storeAdapter = new StoreAdapter({
+  pinia,
+  onAuthRequired: () => view.onAuthRequired(),
+  onConnectionState: (s) => view.onConnectionState(s),
+  onPaneExited: (_paneId, exitCode) => view.toast(`pane を閉じました（終了コード ${exitCode}）`),
+  // サーバの英語の固定文（`message`）は出さず、code から日本語の文言を引く（D107）。
+  onClientError: (code) => view.toast(clientErrorMessage(code)),
+  onOriginRejectSuspected: (suspected) => view.setOriginRejectSuspected(suspected),
+});
+
+const connection = new Connection({ kind, httpOrigin, wsUrl, store: storeAdapter, sink: sinkProxy });
+const conn: ConnectionPort = connection;
+// 端末への入力は全てこの関所を通す（xterm.js の `onData`・`KeyInputController` の直接の送信）。分割・新しい tab・
+// 新しい workspace の応答を待つ間の入力を溜め、新しい pane へ流す（D99）。
+const inputGate = new InputGate(conn);
+
+const router = new KeyRouter(
+  DEFAULT_KEYMAP,
+  { now: () => Date.now(), setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (h) => window.clearTimeout(h as number) },
+  { navigate: new NavigateMode(), copy: new CopyMode(), resize: new ResizeMode() },
+);
+const keys = new KeyInputController(router, inputGate);
+
+const renderers = new RendererPool({ capacity: webglCapacity });
+
+// `ActionDispatcher` は `registry`/`keys` の両方を要求するので、この 2 つより後にしか作れない。だが
+// `TerminalRegistry.createMouseBridge` は `ActionDispatcher`（`UiPort`）を要求する——同じ「箱」の手で
+// 後から埋める（呼ばれるのは pane を acquire した後＝配線完了後なので安全）。
+const actionDispatcherBox: { current?: ActionDispatcher } = {};
+
+/** `host.windowsBuild` が分かってから埋める（`client.hello` の応答は非同期）。`TerminalRegistry.create()` は
+ *  pane を作るたびにこのオブジェクトを読むので、後から書き換えれば以後の pane に反映される。 */
+const terminalOptions: Partial<ITerminalOptions> = {};
+
+/**
+ * pane の scrollback の行数（design「WebSocket の通信」：デスクトップは `limits.scrollbackLines`（既定 5,000・上限 10,000）、
+ * モバイルは 1,000）。`pane.subscribe` で SNAPSHOT に求める行数（`ViewSync`）と、ブラウザの xterm.js が持つ行数
+ * （`TerminalRegistry` が作るときの `scrollback`）の両方に使う（D107。以前の xterm.js は既定の 1,000 行で、それを超える分を捨てていた）。
+ */
+const getScrollbackLines = (): number => (kind === "mobile" ? MOBILE_SCROLLBACK_LINES : session.limits.scrollbackLines);
+
+const registry = new TerminalRegistry({
+  capacity: terminalCapacity,
+  conn: inputGate,
+  renderers,
+  keys,
+  createMouseBridge: (term, paneId) =>
+    new MouseBridge({
+      term,
+      paneId,
+      ui: actionDispatcherBox.current!,
+      getRightClickTarget: () => session.panes.get(paneId)?.rightClick ?? "herdr",
+    }),
+  hasSizeAuthority: (paneId) => {
+    const pane = session.panes.get(paneId);
+    return pane ? session.hasSizeAuthority(pane.tabId) : false;
+  },
+  terminalOptions,
+  getScrollbackLines,
+});
+registryBox.current = registry;
+
+const viewSync = new ViewSync({ conn, registry, getScrollbackLines });
+// 新しい接続の `client.hello` が通るたび（初回・自動の再接続・503 等からの再試行・再ログイン・「再接続」ボタン）に、表示と
+// 購読を張り直す（D107）。サーバは接続ごとに新しい clientId を振り、前の接続の購読・表示・fit を引き継がない。
+connection.onOpened(() => viewSync.onConnectionOpened());
+// 閉じてから次の hello が通るまでは、`client.view`・`pane.subscribe` を送らない（D107）。
+connection.onClosed(() => viewSync.onConnectionClosed());
+
+const actionDispatcher = new ActionDispatcher({ conn, pinia, registry, keys, input: inputGate });
+actionDispatcherBox.current = actionDispatcher;
+keys.bind({ action: actionDispatcher, focus: actionDispatcher, mode: { onModeChange: (m) => view.onModeChange(m) } });
+
+// Windows のホストなら ConPTY 向けのオプションを足す（design「エージェントの argv[0]」隣接。H-cfg 相当）。
+watch(
+  () => session.host,
+  (host) => {
+    if (host?.os === "windows") terminalOptions.windowsPty = { backend: "conpty", buildNumber: host.windowsBuild ?? 0 };
+  },
+);
+
+// 接続が `open` でない間は端末への入力を止める（D95。打った文字を表示もせずに捨てない。止めていることは
+// `ReconnectOverlay` が示す）。
+watch(
+  () => view.connectionState,
+  (state) => registry.setInputEnabled(state === "open"),
+  { immediate: true },
+);
+
+// ダイアログの開閉と `KeyRouter` のモードを同期する（design の状態遷移図「prefix --> dialog」「dialog -->
+// terminal」）。ダイアログ自身が Esc/Enter 等の全キーを処理するので、KeyRouter 側はここでは何も横取りしない
+// （`KeyRouter.handle` は mode:"dialog" のとき常に consume を返すのみ）。
+watch(
+  () => view.openDialog,
+  (open) => keys.setMode(open ? "dialog" : "terminal"),
+);
+
+// 端末以外（サイドバー・tab バー等）にフォーカスがあるときの keydown（design「フォーカスの抜け道」）。
+// **xterm.js の内部 textarea にフォーカスがある間は何もしない**——`attachCustomKeyEventHandler` は
+// `preventDefault()` はしても `stopPropagation()` はしないため、この window レベルの listener にも
+// 同じ keydown が届いてしまう（実機の Chromium で確認済み。二重処理すると例えば「端末フォーカス中に
+// Ctrl+B を押す」が「prefix に入る→直後に \x02 が送られて抜ける」という壊れた動きになる）。
+// ダイアログが開いている間も同様にここでは何もしない（ダイアログ自身が処理する。上の watch 参照）。
+window.addEventListener("keydown", (ev) => {
+  if (view.openDialog) return;
+  if (document.activeElement?.classList.contains("xterm-helper-textarea")) return;
+  const passThrough = keys.handleDomKey(ev);
+  if (!passThrough) ev.preventDefault();
+});
+
+// 既読の送出（design「エラー処理 / 異常系」隣接、D56 の訂正 6）。`store/seen`（T15）の `markSeen` を
+// 実際に呼ぶ経路がここまで無かった——pane が表示中（`TerminalPane` が acquire している）かつウィンドウの
+// フォーカスが失われたと分かっていない、を「表示中の pane 全部」で定期的に確かめる。厳密な「表示中」の
+// 判定は `TerminalPane` 側（acquire/release）の責務なので、ここでは簡略化して
+// 「session に存在する全 pane」を対象にする——非表示の pane も含むが、`markSeen` は `completionSeq` を
+// 前進させるだけの冪等な操作なので、対象を広げても実害は無い（意図的な簡略化）。
+function markVisibleAgentsSeen(): void {
+  if (!document.hasFocus()) return;
+  for (const pane of session.panes.values()) {
+    if (pane.agent) seen.markSeen(pane.agent.instanceId, pane.agent.completionSeq);
+  }
+}
+watch(() => [...session.panes.values()].map((p) => p.agent?.completionSeq ?? -1), markVisibleAgentsSeen, { deep: true });
+window.addEventListener("focus", markVisibleAgentsSeen);
+
+// ブラウザのタブのタイトル（H14／AC4）：`{hostname}: {workspace}`。どちらか欠けていれば既定の "wtm"。
+watch(
+  () => [session.host?.hostname, view.workspaceId ? session.workspaces.get(view.workspaceId)?.label : null] as const,
+  ([hostname, workspaceLabel]) => {
+    document.title = hostname && workspaceLabel ? `${hostname}: ${workspaceLabel}` : "wtm";
+  },
+);
+
+const app = createApp(App);
+app.use(pinia);
+app.provide(ConnectionKey, conn);
+app.provide(ActionDispatcherKey, actionDispatcher);
+app.provide(TerminalRegistryKey, registry);
+app.provide(ViewSyncKey, viewSync);
+app.provide(KeyInputControllerKey, keys);
+app.mount("#app");
+
+conn.connect();

@@ -1,0 +1,35 @@
+Web ターミナルマルチプレクサ (wtm)
+Copyright (c) 2026 wtm contributors
+
+This product includes agent-detection rule files derived from Herdr
+(https://github.com/herdrdev/herdr), Copyright (c) Ogulcan Celik and Herdr
+contributors, licensed under the Apache License, Version 2.0.
+
+  Location in this repository: third_party/herdr/agent-detection/*.toml
+  License text:                third_party/herdr/LICENSE
+  Source commit:                da6bcd5969779bfe0396bcf89a8025d4375d611e
+  Retrieved:                    2026-09-18
+
+These files are included unmodified. See third_party/herdr/README.md for details.
+
+This product also includes source code translated (ported) from Herdr's Rust
+implementation into TypeScript, Copyright (c) Ogulcan Celik and Herdr
+contributors, licensed under the Apache License, Version 2.0. These files are
+NOT unmodified copies: the logic was rewritten in TypeScript for this
+product's types and runtime. Each ported file states its Herdr source path
+(as of commit da6bcd5969779bfe0396bcf89a8025d4375d611e) at the top of the
+file, per Apache License 2.0 section 4(b).
+
+  Location in this repository (implementation):
+    packages/server/src/agent/ManifestStore.ts     (from src/detect/manifest.rs)
+    packages/server/src/agent/ManifestEngine.ts     (from src/detect/manifest.rs)
+    packages/server/src/agent/ProcessMatcher.ts     (from src/detect/mod.rs)
+    packages/server/src/agent/agents.ts             (from src/detect/mod.rs)
+    packages/server/src/agent/AgentTracker.ts       (from src/pane/agent_detection.rs)
+    packages/server/src/agent/regexConvert.ts       (regex syntax observed across the
+                                                       agent-detection/*.toml rule files)
+
+  Location in this repository (ported test cases, alongside this product's own tests):
+    packages/server/src/agent/ManifestEngine.test.ts   (from src/detect/manifest/tests.rs)
+    packages/server/src/agent/ProcessMatcher.test.ts   (from src/detect/mod.rs tests)
+    packages/server/src/agent/AgentTracker.test.ts     (from src/pane/agent_detection.rs tests)

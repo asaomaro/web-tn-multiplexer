@@ -1,0 +1,289 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { platform } from "node:os";
+import type { HostInfo } from "@wtm/protocol";
+import { ConfigError, type RawServeArgs, type ServeOptions, resolveServeOptions, stateDirInUseError } from "./config.js";
+import { FileLogger, type Logger } from "./log/Logger.js";
+import { EventBus } from "./bus/EventBus.js";
+import { NodePtyBackend } from "./pty/NodePtyBackend.js";
+import { LinuxProcessInspector } from "./platform/LinuxProcessInspector.js";
+import { WindowsProcessInspector } from "./platform/WindowsProcessInspector.js";
+import type { ProcessInspector } from "./platform/ProcessInspector.js";
+import { DefaultTerminalManager } from "./terminal/TerminalManager.js";
+import { SessionModel } from "./session/SessionModel.js";
+import { SessionService } from "./session/SessionService.js";
+import { DefaultPersistScheduler } from "./session/PersistScheduler.js";
+import { FsSessionFile, type SessionFileData } from "./persist/SessionFile.js";
+import { FsAuthFile } from "./persist/AuthFile.js";
+import { StateDirInUseError, StateDirLock } from "./persist/StateDirLock.js";
+import { DefaultAuthService } from "./auth/AuthService.js";
+import { DefaultOriginPolicy } from "./auth/OriginPolicy.js";
+import { OriginRejectionLog } from "./auth/OriginRejectionLog.js";
+import { DefaultLoginRateLimiter } from "./auth/LoginRateLimiter.js";
+import { OsNetworkInfo } from "./infra/OsNetworkInfo.js";
+import { ChildProcessGitRunner } from "./infra/GitRunner.js";
+import { DefaultGitInfoPoller } from "./git/GitInfoPoller.js";
+import { DefaultClientRegistry } from "./clients/ClientRegistry.js";
+import { DefaultSizeAuthority } from "./clients/SizeAuthority.js";
+import { ControlSurface } from "./surface/ControlSurface.js";
+import { registerAllMethods } from "./surface/methods/index.js";
+import { HttpServer } from "./http/HttpServer.js";
+import { WsServerWs } from "./ws/WsServerWs.js";
+import { WsGateway } from "./ws/WsGateway.js";
+import { AgentMonitor } from "./agent/AgentMonitor.js";
+import { DefaultManifestStore, type ManifestStore } from "./agent/ManifestStore.js";
+import { FsManifestSource } from "./infra/FsManifestSource.js";
+
+export interface ComposedServer {
+  httpServer: HttpServer;
+  session: SessionService;
+  gitPoller: DefaultGitInfoPoller;
+  persist: DefaultPersistScheduler;
+  /** 起動時の判定ルール読み込みの結果（smoke・結合テスト用。design「起動確認」・02-agent-detection T10）。 */
+  manifestStore: ManifestStore;
+  logger: Logger;
+  options: ServeOptions;
+  /**
+   * token を初めて作った場合だけ値が入る（design「起動時の表示」）。token は `listen()` が待ち受けに成功してから作るので、
+   * **`listen()` が resolve するまでは常に `undefined`**（待ち受けに失敗した起動で token を作って失わないため。D102）。
+   */
+  readonly freshToken: string | undefined;
+  /**
+   * 起動する（architecture.md「6. 起動と再起動後の復元」・D102・D103）：状態ディレクトリのロック（`wtm.lock`。生きている
+   * 別の wtm が持っていれば `ConfigError`）→ auth.json の読み込み（ロックの後。組み立ての時点では読まない）→ 待ち受け
+   * （bind。失敗したら reject）→ token の作成 → 復元（無ければ workspace を 1 つ作る）→ poller の開始 → `/ws` の受け付けの開始。ロックと bind を最初に行うので、同じ state-dir の wtm が既に
+   * 動いている起動（ポートが違っても）や待ち受けに失敗した起動は、token を作らず・シェルを起動せず・session.json と
+   * auth.json に触れない。失敗したらロックを放してから reject する。
+   */
+  listen(): Promise<void>;
+  /** 止める。最後に状態ディレクトリのロックを放す（途中で失敗しても放す）。 */
+  close(): Promise<void>;
+}
+
+function pickProcessInspector(): ProcessInspector {
+  // 対象 OS は Linux / WSL2 / Windows（requirements）。WSL2 は Linux として動く。
+  // macOS 等それ以外は Linux 実装をフォールバックとして使う（/proc が無い環境では前面プロセスの検出だけ諦める）。
+  return platform() === "win32" ? new WindowsProcessInspector() : new LinuxProcessInspector();
+}
+
+function webDistDirFor(): string {
+  // packages/server/dist/composeServer.js から見て ../../web/dist
+  return join(import.meta.dirname, "..", "..", "web", "dist");
+}
+
+function manifestDirFor(): string {
+  // packages/server/dist/composeServer.js から見て ../../../third_party/herdr/agent-detection
+  // （リポジトリ直下。`third_party` は成果物にも同梱する前提——移植元のライセンス表示ごと持ち歩く。D5・D34）。
+  return join(import.meta.dirname, "..", "..", "..", "third_party", "herdr", "agent-detection");
+}
+
+/** 起動オプションから、部品をすべて組み立てる（composition root）。`main.ts` と `smoke.ts` の両方から使う。 */
+export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServer> {
+  const options = resolveServeOptions(rawArgs);
+  const logger = new FileLogger(join(options.stateDir, "server.log"));
+
+  // 同じ state-dir の wtm を 2 つ動かさない（D103）。取るのは `listen()` の最初。放すときの失敗はログに残すだけ。
+  const lock = new StateDirLock(options.stateDir, { logger });
+  const authFile = new FsAuthFile(options.stateDir);
+  // auth.json はここでは読まない——ロックを取ってから `listen()` で読む（D103）。組み立てとロックの間に `wtm token reset`
+  // （ロックを取って作り直す）が走ると、先に読んだ古い token をメモリに持ったまま起動し、新しい token を受け付けず、次の
+  // ログイン等で auth.json を古い token に書き戻していた（独立点検で dist で再現）。
+  const auth = new DefaultAuthService(authFile);
+
+  // 証明書の読み込み・解釈の失敗は設定の誤りとして終了コード 2 にする。token はまだ作っていないので失わない（D102）。
+  const cert = options.cert ? await readPem(options.cert, "--cert") : undefined;
+  const key = options.key ? await readPem(options.key, "--key") : undefined;
+  const secure = Boolean(cert && key);
+
+  const origins = new DefaultOriginPolicy(
+    { host: options.host, port: options.port, secure, extraOrigins: options.extraOrigins },
+    new OsNetworkInfo(),
+  );
+  const rateLimiter = new DefaultLoginRateLimiter();
+  // Origin の検査と拒否のログは `/api/login` と `/ws` で 1 つを共有する（間引きの状態を分けない——同じブラウザが両方で
+  // 拒否されても 1 回。`HttpServer`・`WsServerWs` の必須の依存。D102・D103）。
+  const originRejections = new OriginRejectionLog(logger, origins, { extraOrigins: options.extraOrigins });
+  let httpServer: HttpServer;
+  try {
+    httpServer = new HttpServer(auth, originRejections, rateLimiter, { webDistDir: webDistDirFor(), cert, key, logger });
+  } catch (err) {
+    // `https.createServer` は証明書と秘密鍵をその場で解釈する（PEM でない・鍵が合わない等で投げる）。
+    if (!secure) throw err;
+    throw new ConfigError(
+      `cannot use the TLS certificate/key: ${err instanceof Error ? err.message : String(err)}`,
+      "--cert と --key に、対になる PEM 形式の証明書と秘密鍵を指定してください（docs/tls-setup.md）。",
+    );
+  }
+
+  const model = new SessionModel();
+  const bus = new EventBus();
+  const processInspector = pickProcessInspector();
+  const terminals = new DefaultTerminalManager(new NodePtyBackend(), processInspector, options.scrollbackLines);
+  const sessionFile = new FsSessionFile(options.stateDir);
+  const persist = new DefaultPersistScheduler(async () => {
+    await sessionFile.save(toSessionFileData(session));
+  });
+  const host: HostInfo = { os: platform() === "win32" ? "windows" : "linux", windowsBuild: null, hostname: (await import("node:os")).hostname() };
+  const session = new SessionService({
+    model,
+    terminals,
+    bus,
+    persist,
+    serverVersion: "0.1.0",
+    host,
+    scrollbackLines: options.scrollbackLines,
+    defaultCwd: process.cwd(),
+    shell: options.shell, // `--shell`（T27。以前はどこにも渡しておらず効いていなかった）
+    logger,
+  });
+
+  const gitPoller = new DefaultGitInfoPoller(session, new ChildProcessGitRunner());
+
+  // エージェント判定（02-agent-detection T10）。判定ルール（third_party/herdr/agent-detection）を読み、
+  // 結果の要約をログへ出す（個々のファイルの失敗は ManifestStore.loadAll 自身が warn で出す。D46）。
+  const manifestStore = await DefaultManifestStore.load(new FsManifestSource(manifestDirFor()), logger);
+  const manifestSummaries = manifestStore.summaries();
+  const manifestOkCount = manifestSummaries.filter((s) => s.ok).length;
+  logger.info("agent manifests loaded", { ok: manifestOkCount, total: manifestSummaries.length });
+  const agentMonitor = new AgentMonitor({ session, terminals, processInspector, manifestStore, bus, logger });
+
+  const clients = new DefaultClientRegistry();
+  const sizeAuthority = new DefaultSizeAuthority(clients, session);
+  const surface = new ControlSurface(logger);
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals });
+  const wsServer = new WsServerWs(httpServer.server, originRejections, auth.authorizeUpgrade, logger);
+  // `/ws` は `listen()` の最後（復元と poller の開始の後）まで受け付けない（D102）。
+  wsServer.setReady(false);
+  new WsGateway(wsServer, surface, clients, sizeAuthority, terminals, bus, auth, logger);
+
+  let freshToken: string | undefined;
+  /** 復元（または最初の workspace の作成）を済ませたか。済ませていない状態を session.json へ書かないために使う。 */
+  let sessionLoaded = false;
+
+  return {
+    httpServer,
+    session,
+    gitPoller,
+    persist,
+    manifestStore,
+    logger,
+    options,
+    get freshToken(): string | undefined {
+      return freshToken;
+    },
+
+    async listen(): Promise<void> {
+      // 0. 状態ディレクトリのロック（D103）。bind・token・復元より前に取る。ポートを変えれば bind は両方成功する
+      //    （docs の手元用 7780 と LAN 用 8443 等）ので、bind だけでは同じ state-dir の二重起動を止められず、2 つ目が
+      //    全シェルを二重に起動し、session.json・auth.json を互いに上書きし合っていた。
+      try {
+        await lock.acquire();
+      } catch (err) {
+        if (err instanceof StateDirInUseError) throw stateDirInUseError(err, options.stateDir, "serve");
+        throw err;
+      }
+      try {
+        // 0'. auth.json を読む（ロックを取った後。上記）。token は待ち受けに成功してから作る（D102）。
+        await auth.initialize();
+        // 1. 待ち受け（bind）を最初に行う（D102）。失敗（ポートが使用中・このマシンに無いアドレス・権限の無いポート等）は
+        //    reject で返す（呼び出し側が案内を出して終わる。拾わないと未処理の 'error' でプロセスが落ちる）。以前は token の
+        //    作成・復元（全 pane のシェルの起動）・poller の後に bind していたため、失敗した起動が token を作って失い、
+        //    シェルを起動し、session.json を上書きしえた。
+        await new Promise<void>((resolve, reject) => {
+          httpServer.server.once("error", reject);
+          httpServer.server.listen(options.port, options.host, () => {
+            httpServer.server.off("error", reject);
+            resolve();
+          });
+        });
+        // 2. token（初回だけ作る。表示は呼び出し側が行う——この後で失敗しても `freshToken` は読める）。
+        const { created, token } = await auth.ensureToken();
+        freshToken = created ? token : undefined;
+        // 3. 起動時の復元（design「起動と再起動後の復元」）。
+        const loaded = await sessionFile.load();
+        if (loaded.kind === "ok") {
+          await session.restore(loaded.data);
+        } else {
+          if (loaded.kind === "corrupt") logger.warn("session.json was corrupt; starting fresh", { backupPath: loaded.backupPath });
+          await session.ensureNotEmpty();
+        }
+        sessionLoaded = true;
+        // 4. poller。
+        gitPoller.start();
+        agentMonitor.start();
+        // 5. `/ws` の受け付けを始める。復元は bus にイベントを出さないので、ここより前に hello したクライアントは
+        //    作りかけのスナップショットのまま取り残される（それまでは 503。ブラウザは間隔を空けて繋ぎ直す）。
+        wsServer.setReady(true);
+      } catch (err) {
+        // 失敗した起動はロックを放す（`main` は close() を呼ばずに終わる）。放す前に、復元を済ませていない状態の保存の
+        // 予約を取り消す（ロックを放した後に session.json を書かない）。
+        if (!sessionLoaded) persist.cancel();
+        await lock.release();
+        throw err;
+      }
+    },
+
+    async close(): Promise<void> {
+      try {
+        // 閉じ始めたら新しい `/ws` を受け付けない（closeAll の後に届いた upgrade を通さない。D102）。
+        wsServer.setReady(false);
+        // 実行中の判定周期を待ってから terminals/session を破棄する（review 指摘。should。D51 の隣の
+        // agent/AgentMonitor.ts 参照）。
+        await agentMonitor.stop();
+        gitPoller.stop();
+        // 復元を済ませる前（待ち受けに失敗した・復元の途中で失敗した起動）の状態で session.json を上書きしない（D102）。
+        // 復元の途中の保存の予約（シェルが猶予中に終わった pane を閉じた等）も取り消す。
+        if (sessionLoaded) await persist.flush();
+        else persist.cancel();
+        for (const pane of session.snapshot().panes) terminals.dispose(pane.id);
+        // 繋がったままの WebSocket を明示的に閉じる（レビュー指摘。無いと httpServer.server.close() が
+        // 永久にコールバックを呼ばない）。
+        wsServer.closeAll(1001, "server shutting down");
+        await new Promise<void>((resolve) => httpServer.server.close(() => resolve()));
+      } finally {
+        // session.json を書き終えてから放す（D103。持っていなければ——ロックで断られた起動等——何もしない）。
+        await lock.release();
+      }
+    },
+  };
+}
+
+/** `--cert`/`--key` の PEM を読む。読めなければ設定の誤り（終了コード 2）にする。 */
+async function readPem(path: string, flag: "--cert" | "--key"): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    throw new ConfigError(
+      `cannot read ${flag} ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      `${flag} のファイルのパスと読み取り権限を確かめてください。`,
+    );
+  }
+}
+
+function toSessionFileData(session: SessionService): SessionFileData {
+  const snapshot = session.snapshot();
+  return {
+    schema: 1,
+    savedAt: new Date().toISOString(),
+    nextId: session.getNextIdCounters(),
+    workspaces: snapshot.workspaces.map((ws) => ({
+      id: ws.id,
+      label: ws.label,
+      cwd: ws.cwd,
+      activeTabId: ws.activeTabId,
+      tabs: snapshot.tabs
+        .filter((t) => t.workspaceId === ws.id)
+        .map((tab) => ({
+          id: tab.id,
+          label: tab.label,
+          focusedPaneId: tab.focusedPaneId,
+          zoomedPaneId: tab.zoomedPaneId,
+          layout: tab.layout,
+          panes: snapshot.panes
+            .filter((p) => p.tabId === tab.id)
+            .map((p) => ({ id: p.id, label: p.label, cwd: p.cwd, shell: p.shell, status: p.status })),
+        })),
+    })),
+    focus: snapshot.focus,
+  };
+}

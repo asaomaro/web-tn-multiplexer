@@ -1,0 +1,549 @@
+# TLS の証明書と、LAN（別マシン・スマートフォン）からの接続
+
+AC11（`--host 0.0.0.0 --cert … --key …` で起動し、別のマシンのブラウザから `https://` でログインして
+AC1〜AC9 の操作を行う）と、WSL2 環境からの LAN 公開（design.md「WSL2」）の手順をまとめる。
+構成ごとのファイアウォールの開け方（手順4）・動かし続けるときの注意（「起動と運用の注意」）・リバースプロキシの後ろに
+置く場合（「リバースプロキシの後ろに置く」）もここに書く。
+
+## この docs のコマンドの書き方（`wtm` は PATH に無い）
+
+`@wtm/server` は公開していない（`private`）ワークスペースのパッケージなので、`pnpm install && pnpm -s build` の後も
+**`wtm` というコマンドはどこにも入らない**（PATH に無い）。実体は `packages/server/dist/main.js` で、リポジトリの直下で
+次のように起動する：
+
+```sh
+node packages/server/dist/main.js --help     # 使い方（`serve --help` ではない。`serve` の後ろの --help は未知のオプションになる）
+node packages/server/dist/main.js serve      # 手元用（127.0.0.1:7780・HTTP）
+```
+
+**この docs の `wtm …` は `node <リポジトリ>/packages/server/dist/main.js …` の略**。同じように打てるようにするなら：
+
+```sh
+# bash / zsh（リポジトリの直下で実行する。$PWD はこの場で展開される。~/.bashrc 等に書くなら $PWD ではなく実際のパスを書く）
+alias wtm="node $PWD/packages/server/dist/main.js"
+```
+
+```powershell
+# PowerShell（Windows ネイティブ）。パスは自分の clone の場所に置き換える。常用するなら $PROFILE に書く
+function wtm { node "C:\src\web-tn-multiplexer\packages\server\dist\main.js" @args }
+```
+
+alias・関数はその shell の中でしか使えない（`setsid`・systemd 等から起動するときは `node <main.js のフルパス>` と書く。
+「起動と運用の注意」の例を参照）。
+
+## なぜ TLS が要るか
+
+- `wtm serve` は、**ループバック（`localhost`/`127.0.0.1`/`::1`）以外のホストへ証明書なしで bind しようと
+  すると起動を拒否する**（`packages/server/src/config.ts` の `cannot bind to non-loopback host "…" without
+  a certificate`。終了コード 2）。これは zellij の Web クライアントと同じ方針（research.md F9.1）——ネットワーク越しに
+  端末の入出力を平文で流さないための設計上の制約で、フラグでは無効化できない。
+- ブラウザの Clipboard API（`Ctrl+Shift+V` の貼り付け・M4 の選択時コピー）は
+  [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts)
+  （HTTPS か `localhost`）でしか動かない。LAN の IP に平文 HTTP でつなぐ構成では、これらの機能がすべて
+  使えなくなる（research.md F9.4）。
+- 同一マシン（`localhost`）だけで使うなら、`--cert`/`--key` を付けずに起動すればよい（既定の HTTP のまま）。
+
+## 手順1：証明書を用意する
+
+3 通りの入手手段がある（research.md F9.5）。**どれでも `--cert`/`--key` に渡す形式は同じ**（PEM 形式の
+証明書ファイルと秘密鍵ファイル）。`wtm serve` を動かすユーザーが**両方のファイルを読める**こと（読めなければ
+`wtm: cannot read --key …` で終了コード 2。下の「鍵の権限」）。
+
+### mkcert（ローカルで自己署名。最も手軽）
+
+[mkcert](https://github.com/FiloSottile/mkcert) はローカル CA を作り、その CA をブラウザ・OS に
+信頼させたうえで証明書を発行するツール。**自己署名証明書と違い、mkcert の CA を各クライアント端末に
+インストールしておけば警告なしで開ける**。
+
+```sh
+# サーバを動かすマシンで（初回のみ）ローカル CA を作り、OS の信頼ストアへ登録する
+mkcert -install
+
+# ブラウザが開く名前・IP を SAN に含めて証明書を発行する（例：ホスト名 myhost、LAN の IP 192.168.1.50）。
+# SAN に要るのは「サーバのインタフェースの IP」ではなく「ブラウザのアドレスバーに入る名前・IP」。
+# WSL2 では、mirrored モードでも NAT＋portproxy でも、別のマシンが開くのは母艦（Windows）の LAN の IP なので、
+# それを入れる（WSL の 172.x ではない）。構成ごとの表は下の「手順2」。
+mkcert -cert-file wtm.pem -key-file wtm-key.pem myhost 192.168.1.50 localhost 127.0.0.1
+
+wtm serve --host 0.0.0.0 --port 8443 --cert wtm.pem --key wtm-key.pem
+```
+
+**別マシン（スマートフォン等）からアクセスする場合**、そのマシンにも mkcert の CA
+（サーバのマシンで `mkcert -CAROOT` が示すディレクトリの `rootCA.pem`）を入れないと、ブラウザが警告を出す。
+**渡すのは `rootCA.pem` だけ**（同じディレクトリの `rootCA-key.pem` は CA の秘密鍵で、渡すとそれを持つ誰でも、入れた
+マシンに信頼される証明書を作れてしまう。どこにも写さない）。入れ方（[mkcert の README「Installing the CA on other systems」・
+「Mobile devices」](https://github.com/FiloSottile/mkcert#installing-the-ca-on-other-systems)）：
+
+- **PC（Linux・macOS・Windows）の OS の信頼ストア**：そのマシンにも mkcert を入れ、`rootCA.pem` を置いたディレクトリを
+  `CAROOT` に指定して `mkcert -install` する（CA の鍵は要らない）。例：`rootCA.pem` を `~/wtm-ca` に置いたなら
+  `CAROOT=~/wtm-ca mkcert -install`（PowerShell は `$env:CAROOT = "$HOME\wtm-ca"; mkcert -install`）。Chrome・Edge は OS の
+  信頼ストアを使う。
+- **Firefox**：OS とは別の証明書ストアを持つ。Linux・macOS では上の `mkcert -install` が Firefox にも入れる（Linux は
+  `certutil`——Debian・Ubuntu なら `libnss3-tools`——が要る）。入らなければ Firefox の設定の「プライバシーとセキュリティ」→
+  「証明書を表示...」→「認証局証明書」→「読み込む...」で `rootCA.pem` を読み込み、ウェブサイトの識別に使うことを
+  信頼する旨にチェックを入れる。
+- **iOS・iPadOS**：`rootCA.pem` を AirDrop・メール等で送って開き、「設定」に出る「プロファイルがダウンロードされました」から
+  インストールしたうえで、「設定」→「一般」→「情報」→「証明書信頼設定」でその CA を全面的に信頼する設定をオンにする
+  （これを忘れると警告が消えない）。
+- **Android**：「設定」の「セキュリティ」→「暗号化と認証情報」→「証明書のインストール」→「CA 証明書」で `rootCA.pem` を
+  入れる（利用者が入れる CA。メニューの名前・場所は機種・版で違う）。Chrome は利用者が入れた CA も信頼する
+  （この検証環境では実機で未確認）。
+
+CA を配れない環境（会社支給の iPad 等）では、後述の自己署名の代わりに `tailscale cert` を検討する。
+
+### tailscale cert（Tailscale ネットワーク内。Let's Encrypt 由来）
+
+[Tailscale](https://tailscale.com/) の tailnet に参加しているマシン同士なら、正規の Let's Encrypt
+証明書を無料で取得できる——警告なしで開け、CA の配布も不要（tailnet の管理画面で MagicDNS と HTTPS を有効にしておく。
+[Tailscale の docs](https://tailscale.com/kb/1153/enabling-https)）。
+
+```sh
+# 下の「鍵の権限」の方法1（operator）を済ませてから、sudo を付けずに実行する
+tailscale cert your-machine.your-tailnet.ts.net
+# カレントディレクトリに your-machine.your-tailnet.ts.net.crt / .key が生成される
+
+# MagicDNS の名前はサーバのインタフェースに無いので --origin で渡す（手順2）。起動時に先頭に表示される。
+wtm serve --host 0.0.0.0 --port 7780 \
+  --cert your-machine.your-tailnet.ts.net.crt --key your-machine.your-tailnet.ts.net.key \
+  --origin https://your-machine.your-tailnet.ts.net:7780
+```
+
+**鍵の権限**：`sudo tailscale cert …` で作ると、鍵（`.key`）は **root が持ち主で、持ち主しか読めない（0600）**。
+一般ユーザーで `wtm serve --key …` すると読めずに止まる：
+
+```
+wtm: cannot read --key your-machine.your-tailnet.ts.net.key: EACCES: permission denied, open 'your-machine.your-tailnet.ts.net.key'
+--key のファイルのパスと読み取り権限を確かめてください。
+```
+
+（終了コード 2）。どちらかで直す：
+
+```sh
+# 方法1：wtm を動かすユーザーを tailscale の operator にし、sudo なしで tailscale cert を実行する（ファイルはそのユーザーのものになる）。
+# operator は sudo なしで tailscale を操作できるようになる（tailscale up/down 等）ことに注意。
+sudo tailscale set --operator=$USER
+tailscale cert your-machine.your-tailnet.ts.net
+
+# 方法2：sudo で作ったファイルの持ち主を、wtm を動かすユーザーに変える（鍵は 0600 のままでよい）
+sudo tailscale cert your-machine.your-tailnet.ts.net
+sudo chown "$USER" your-machine.your-tailnet.ts.net.crt your-machine.your-tailnet.ts.net.key
+```
+
+`tailscale set --operator` の後も `tailscale cert` が権限で断られる版があれば、方法2を使う（この検証環境には Tailscale が無く、
+どちらも実機では未確認。Tailscale の docs も参照）。Let's Encrypt の証明書は約 90 日で切れる。`tailscale cert` を実行し直して
+更新し、wtm は起動時にしか証明書を読まないので **wtm を再起動する**。
+
+**注意（research.md F9.5）**：取得したマシン名（`your-machine.your-tailnet.ts.net`）は
+[Certificate Transparency ログ](https://tailscale.com/kb/1153/enabling-https)に公開される
+（ドメイン名だけで、tailnet 内部の IP やその他の情報は漏れない）。
+
+### 自己署名（お試し用）
+
+CA を配れず、tailscale も使わない場合の最終手段。`openssl` で自己署名証明書を直接作れるが、
+**ブラウザは「安全でない接続」の警告を出す**（初回にユーザーが例外を承認する必要がある）。
+**iPad では自己署名証明書がそもそも読み込めない例が報告されている**（code-server のガイド。
+research.md F9.5）——iOS/iPadOS の実機検証では mkcert か tailscale cert を優先すること
+（`docs/verification.md`「実機（iOS Safari・Android Chrome。AC12）」参照）。
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout wtm-key.pem -out wtm.pem -subj "/CN=myhost" \
+  -addext "subjectAltName=DNS:myhost,IP:192.168.1.50"
+```
+
+## 手順2：Origin の許可（別マシンから繋ぐ場合の注意）
+
+`wtm serve --host 0.0.0.0` で待ち受けると、**サーバが自分自身のネットワークインタフェースから検出した
+IP と OS のホスト名（`hostname` の値そのもの。`myhost.local`・FQDN 等の別名は含まない）を、待ち受けのポートと
+組にしたものだけが自動で許可される**（DNS rebinding 対策として、それ以外の `Host`
+ヘッダは拒否する。`packages/server/src/auth/OriginPolicy.ts`）。サーバは、ブラウザが実際にどの宛先
+（アドレス・ポート・名前）を開くかを知ることができない。
+
+**ブラウザが開く宛先のアドレス・ポート・名前のどれかが、サーバのインタフェースと待ち受けのポートに無いときは、
+ブラウザが開く Origin を `--origin` で渡す必要がある**。例：WSL2 の NAT＋portproxy（母艦の LAN の IP で開く）、
+ポート転送（転送元のポートが待ち受けのポートと違う）、リバースプロキシ、Tailscale の MagicDNS 名。
+渡した Origin は、起動時に開ける URL の**先頭**に表示される。渡さずに開くと `/api/login` が 403 になり、
+ログイン画面にその説明と、写せる形の `--origin <このページの Origin>` の行が出る（その行を起動オプションに加える）。
+サーバのログ（標準エラーと `<state-dir>/server.log`）にも `origin rejected` が、ブラウザの `Origin`・`Host`
+と許可しているアドレスの一覧つきで出る——**この拒否は token とは関係ない（token はまだ確かめていない）ので、
+`wtm token reset` しても直らない**。
+
+ログイン済み（Cookie が有効）のまま許可外になったとき（`--origin` で許可していた名前で開いたまま `--origin` を付けずに起動し
+直した・同じ名前の別のポート（転送したポート）で開き直した等。Cookie は名前ごとでポートを区別しないので、別のポートにも
+送られる）は、ページを開くときの確認 `GET /api/session` も 403 になる（Cookie を確かめた後に `Host` を見る。Cookie が無効なら
+`Host` を問わず 401 でログイン画面に進む。D106）。WebSocket（`/ws`）も断られると、端末の画面に「接続できません（このアドレスは
+許可されていません）」の枠と、同じ `--origin <このページの Origin>` の行・「再試行」ボタンが出る（自動では繋ぎ直さない。起動し
+直してから「再試行」を押す。D107）。`/api/session` は通るのに `/ws` だけが続けて断られるとき（前段のプロキシが `Host` を許可された名前で渡していて、
+`--origin` が無い等）は、3 回目から「再接続中…」の下に同じ `--origin` の行が添えられる（`docs/verification.md`
+「うまくいかないとき」）。
+
+| 構成 | `--port` | `--origin` | ブラウザで開く URL | 証明書の SAN |
+|---|---|---|---|---|
+| Linux（LAN に直接つながる） | 任意（例 8443） | IP か OS のホスト名（`hostname` の値そのもの）で開くなら不要。それ以外の名前（`myhost.local`・FQDN 等）で開くなら**必須**：`https://<その名前>:<port>` | `https://<LAN の IP>:<port>`（表示される） | その LAN の IP（名前で開くならその名前も） |
+| WSL2 の mirrored モード（方法A） | 任意 | 不要 | `https://<母艦の LAN の IP>:<port>`（表示される） | 母艦の LAN の IP |
+| WSL2 の NAT＋portproxy（方法B） | portproxy の `connectport`（`listenport` と同じ値。例 8443） | **必須**：`https://<母艦の LAN の IP>:<listenport>` | `--origin` の URL（表示の先頭） | 母艦の LAN の IP |
+| Windows ネイティブ | 任意（除外ポート範囲の外） | 不要 | `https://<LAN の IP>:<port>`（表示される） | その LAN の IP |
+| Tailscale（`tailscale cert`） | 任意（例 7780） | **必須**：`https://<machine>.<tailnet>.ts.net:<port>` | `--origin` の URL（表示の先頭） | その ts.net の名前 |
+| リバースプロキシ（TLS はプロキシ側。「リバースプロキシの後ろに置く」） | プロキシの転送先 | **必須**：`https://<プロキシの名前>[:<port>]` | `--origin` の URL（表示の先頭） | プロキシの証明書 |
+
+```sh
+# 例：tailscale cert で発行した名前でアクセスする場合
+wtm serve --host 0.0.0.0 --cert … --key … --origin https://your-machine.your-tailnet.ts.net:7780
+```
+
+`--origin` には**完全な Origin**（`scheme://host[:port]`）を渡す。複数回指定できる。**ポートも含める**
+（既定は 7780。ブラウザで開く URL のポートが 443 のときだけ省ける——ブラウザは既定ポートを Origin から省くため）。
+`--origin` のホスト（名前とポート）は、`/api/session` が見る `Host` の許可にも使う。既定ポートの Origin（`https://<名前>`・
+`http://<名前>`）なら、`Host: <名前>` に加えて、ポートを付けて送る前段の `Host: <名前>:443`（http は `:80`）も許す（D106）。
+既定でないポートの Origin（`https://<名前>:7780`）はそのポートだけ。
+
+起動時に表示される LAN の IP の URL からは、docker・libvirt 等の仮想ブリッジ（`docker0`・`br-*`・`virbr*` 等）と
+Windows の Hyper-V の内部スイッチ（`vEthernet (WSL)`・`vEthernet (Default Switch)` 等）のアドレスを除いている
+（別のマシンからは届かないため）。ただし名前で見分けているので、すべては除けない（WSL2 の mirrored モードの
+仮想アダプタは `eth1` 等の名前で見える）。表示された URL が別のマシンから開けないときは、そのマシンから届く
+LAN の IP を使う。
+
+## 手順3（WSL2 のみ）：LAN・スマートフォンへ出す
+
+design.md「WSL2」・research.md F9.6 のとおり、WSL2 の既定の NAT モードでは **Windows 側（母艦）からは
+`localhost` でそのまま届く**が、**LAN やスマートフォンからは追加の設定が要る**。どちらか一方を選ぶ。
+
+### 方法A：mirrored ネットワークモード（Windows 11 22H2 以降。推奨）
+
+`%UserProfile%\.wslconfig`（無ければ新規作成）に以下を書き、`wsl --shutdown` してから WSL2 を起動し直す。
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+mirrored モードでは WSL2 のネットワークインタフェースが Windows 側と共有され、WSL2 内で
+`wtm serve --host 0.0.0.0 …` を起動すれば、**追加のポート転送なしで LAN から届く**。ただし LAN からの着信は
+**Hyper-V ファイアウォール**が止めるので、そのポートを開ける（手順4「WSL2 の mirrored モード」。通常の Windows の
+ファイアウォールの規則 `New-NetFirewallRule` では開かない）。母艦の LAN の IP が WSL2 のインタフェースに
+見えるので `--origin` は要らない。証明書の SAN には母艦の LAN の IP を入れる。
+
+起動時の表示には、母艦の LAN の IP のほかに、Windows の仮想アダプタ（Hyper-V の `vEthernet (WSL)` 等）の
+172.x などが並ぶことがある——mirrored モードでは Windows のアダプタが WSL2 の中で `eth1` 等の名前で見えるため、
+名前では見分けられず、表示から除けない。別のマシンからは母艦の LAN の IP の URL を開く。
+
+mirrored モードでは Windows と WSL2 が同じポートの空間を使うので、同じポートで Windows ネイティブの wtm 等を
+同時に待ち受けることはできない（後から起動した方が待ち受けに失敗する）。
+
+### 方法B：portproxy（mirrored モードが使えない環境）
+
+管理者権限の PowerShell（Windows 側）で、WSL2 のポートを Windows のポートへ転送する。
+**`listenport`（別のマシンがつなぐ母艦のポート）と `connectport`（wtm が待ち受けるポート）は同じ値にそろえる**
+（例は 8443）。
+
+```powershell
+# WSL2 側の IP を確認（WSL2 のシェルで）：ip addr show eth0 | grep inet
+$wslIp = "172.x.x.x"  # 上で確認した WSL2 の IP に置き換える
+netsh interface portproxy add v4tov4 listenport=8443 listenaddress=0.0.0.0 connectport=8443 connectaddress=$wslIp
+
+# 張った転送の確認・外すとき
+netsh interface portproxy show v4tov4
+netsh interface portproxy delete v4tov4 listenport=8443 listenaddress=0.0.0.0
+```
+
+LAN からの着信を許可するファイアウォールの規則も要る（手順4「WSL2 の NAT＋portproxy」。portproxy は Windows 側で
+待ち受けるので、こちらは通常の Windows のファイアウォールの規則で開く）。
+
+WSL2 の中では、`--port` を `connectport` に合わせ、**別のマシンが開く `https://<母艦の LAN の IP>:<listenport>`
+を `--origin` で渡して**起動する（母艦の LAN の IP は WSL2 のインタフェースに無いので、渡さないと
+`/api/login` が 403 になる。手順2）。
+
+```sh
+wtm serve --host 0.0.0.0 --port 8443 --cert … --key … --origin https://<母艦の LAN の IP>:8443
+# 例：母艦の LAN の IP が 192.168.1.50（Windows 側の ipconfig で確認する）なら --origin https://192.168.1.50:8443
+```
+
+- **証明書の SAN には母艦の LAN の IP（例 192.168.1.50）を入れる**（手順1。WSL2 の 172.x ではない）。
+- 起動時には `--origin` の URL が先頭に表示される。別のマシンからはこれを開く。
+- 続けて表示される WSL2 の IP（172.x）の URL は、**母艦の Windows からしか開けない**（NAT の内側のアドレス）。
+- portproxy を通ると、wtm からは**すべての接続元が同じアドレス**（母艦）に見える。ログインの失敗の回数の制限
+  （「リバースプロキシの後ろに置く」の「ログインの失敗の回数の制限」）は、LAN の全員で 1 つを共有することになる。
+
+WSL2 の IP は再起動のたびに変わりうるので、`.wslconfig` の mirrored モード（方法A）が使えるなら
+そちらを優先する。portproxy は WSL2 が再起動されるたびに `$wslIp` を確認し直して張り直す必要がある。
+
+## 手順4：ファイアウォール（構成ごと）
+
+別のマシンから届かない（ブラウザが「接続できません」・タイムアウトになる）ときは、まずここを確かめる。例のポートは 8443。
+以下のうち、**自分の構成の節だけ**を行う。
+
+### Linux（ufw・firewalld）
+
+ファイアウォールを動かしていなければ何もしなくてよい（`sudo ufw status` が `inactive`・`firewall-cmd` が無い等）。
+
+```sh
+# ufw（Ubuntu 等）
+sudo ufw allow 8443/tcp
+# LAN の中だけに絞るなら（例：192.168.1.0/24）
+sudo ufw allow from 192.168.1.0/24 to any port 8443 proto tcp
+sudo ufw status            # 8443/tcp が ALLOW で並ぶこと
+
+# firewalld（Fedora・RHEL 等）。--permanent は再起動後も残す設定で、--reload で今の設定へ反映する
+sudo firewall-cmd --permanent --add-port=8443/tcp
+sudo firewall-cmd --reload
+sudo firewall-cmd --list-ports   # 8443/tcp が並ぶこと
+```
+
+firewalld で、LAN の I/F が既定と違うゾーンに入っているなら、`--zone=<ゾーン>` を付ける
+（`sudo firewall-cmd --get-active-zones` で確かめる）。Tailscale 越しに使い ufw を動かしているなら、tailnet からの着信も
+許可が要る（例：`sudo ufw allow in on tailscale0`。Tailscale の docs「UFW」を参照）。
+WSL2 の中の Linux のファイアウォールは通常は動いていない。WSL2 で着信を止めているのは、通常は Windows 側（下の 2 節）。
+
+### WSL2 の mirrored モード（Hyper-V ファイアウォール）
+
+mirrored モードでは、LAN から WSL2 への着信は **Hyper-V ファイアウォール**が扱い、既定では止まる。通常の Windows の
+ファイアウォールの規則（`New-NetFirewallRule`）では開かない。管理者権限の PowerShell（Windows 側）で、WSL の VM を
+表す固定の値 `{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}` を指定して開ける
+（[Microsoft の docs「Accessing network applications with WSL」の mirrored モード・Hyper-V ファイアウォール](https://learn.microsoft.com/windows/wsl/networking)）：
+
+```powershell
+# そのポートだけを開ける（推奨）
+New-NetFirewallHyperVRule -Name "wtm-8443" -DisplayName "wtm (8443)" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 8443
+
+# 確かめる・外すとき
+Get-NetFirewallHyperVRule -Name "wtm-8443"
+Remove-NetFirewallHyperVRule -Name "wtm-8443"
+```
+
+WSL2 への着信をすべて許す方法もある（WSL2 で動くすべてのサーバが LAN に見えるので、上の規則を優先する）：
+
+```powershell
+Set-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -DefaultInboundAction Allow
+```
+
+### WSL2 の NAT＋portproxy（Windows のファイアウォール）
+
+portproxy は Windows 側（母艦）で待ち受けるので、通常の Windows のファイアウォールの規則で開ける（管理者権限の PowerShell）：
+
+```powershell
+New-NetFirewallRule -DisplayName "wtm (8443)" -Direction Inbound -Protocol TCP -LocalPort 8443 -Action Allow -Profile Private
+
+# 確かめる・外すとき
+Get-NetFirewallRule -DisplayName "wtm (8443)"
+Remove-NetFirewallRule -DisplayName "wtm (8443)"
+```
+
+`-Profile Private` は「プライベート ネットワーク」のときだけ開ける指定。LAN が「パブリック」になっていると開かないので、
+下の「Windows ネイティブ」の「ネットワークのプロファイル」を確かめる（家庭・社内の LAN をパブリックのまま使うなら `-Profile Private` を外すが、
+その場合は公衆 Wi-Fi 等でも開くことに注意）。
+
+### Windows ネイティブ（node.exe の許可・ネットワークのプロファイル）
+
+- **初回の許可のダイアログ**：`wtm serve --host 0.0.0.0 …` を初めて起動すると、Windows セキュリティの
+  「このアプリの機能のいくつかが Windows Defender ファイアウォールでブロックされています」のダイアログが node.exe
+  （「Node.js JavaScript Runtime」等の名前で出る）について出る。**「プライベート ネットワーク」にチェックを入れて「アクセスを許可する」**。
+- ダイアログを「キャンセル」した・「パブリック」だけを許可した等で届かないときは、コントロール パネルの
+  「Windows Defender ファイアウォール」→「Windows Defender ファイアウォールを介したアプリまたは機能を許可」で、
+  node.exe の行の「プライベート」にチェックを入れる。**ブロックの規則は許可の規則より優先される**ので、
+  ポートの許可の規則（上の `New-NetFirewallRule`）を足しても、node.exe のブロックの規則が残っていれば届かない——
+  「セキュリティが強化された Windows Defender ファイアウォール」の「受信の規則」で node.exe の「ブロック」の規則を
+  無効にするか削除する。node.exe に付いている規則は次で一覧できる：
+
+  ```powershell
+  Get-NetFirewallApplicationFilter -Program (Get-Command node).Source | Get-NetFirewallRule | Format-Table DisplayName, Direction, Action, Profile, Enabled
+  ```
+
+  node を nvm-windows・volta・fnm 等で入れていると、`(Get-Command node).Source` はシム（中継の実行ファイル）や
+  シンボリックリンクのパスで、規則に書かれた実際の node.exe のパスと一致せず、何も出ないことがある。そのときは、
+  プログラムが `node.exe` の規則をすべて出す（全部の規則を調べるので少し時間がかかる）か、「受信の規則」の一覧を
+  「プログラム」の列で見る。`wtm serve` が動いていれば、実際に動いている node.exe のパスも分かる：
+
+  ```powershell
+  Get-NetFirewallApplicationFilter -All | Where-Object Program -like '*\node.exe' | Get-NetFirewallRule | Format-Table DisplayName, Direction, Action, Profile, Enabled
+  Get-Process node | Select-Object -ExpandProperty Path -Unique
+  ```
+
+  （この検証環境は Linux で Windows が無く、この節の PowerShell のコマンドはどれも実機では未確認。
+  Microsoft の docs の `Get-NetFirewallApplicationFilter` も参照。）
+
+- **ネットワークのプロファイル**：LAN の接続が「パブリック」だと、プライベート向けの許可は効かない。
+
+  ```powershell
+  Get-NetConnectionProfile                                                    # NetworkCategory が Private か
+  Set-NetConnectionProfile -InterfaceAlias "Wi-Fi" -NetworkCategory Private   # 管理者権限。InterfaceAlias は上の表示の値
+  ```
+
+  （設定アプリの「ネットワークとインターネット」→ 接続のプロパティ →「ネットワーク プロファイルの種類」でも変えられる。）
+
+## 起動と運用の注意
+
+### 起動時の表示
+
+待ち受けに成功すると、次の形で表示する（design「起動時の表示」・D101〜D103）。**token 付きの URL は token を作った
+初回の起動の 1 回だけ**表示する。
+
+```
+wtm: listening on 0.0.0.0 port 8443 (https)
+wtm: open https://192.168.1.50:8443/#token=…      ← --origin を渡したら、その URL が先頭（例は portproxy の --origin）
+wtm: open https://localhost:8443/#token=…
+wtm: open https://172.29.160.5:8443/#token=…      ← このマシンの LAN の IPv4 ごとに 1 行（仮想ブリッジは除く。手順2）
+wtm: (token 付きの URL は今だけ表示します)
+```
+
+- `wtm: listening on` の行は待ち受けの指定そのもので、URL ではない（`0.0.0.0` はブラウザでは開けない）。開くのは
+  `wtm: open` の行。その前に `{"ts":"…","level":"info","msg":"agent manifests loaded",…}` のようなログの行も出る
+  （`<状態ディレクトリ>/server.log` と同じもの）。
+- 手元用（`--host` を付けない）なら `wtm: listening on 127.0.0.1 port 7780 (http)` と `wtm: open http://127.0.0.1:7780/#token=…`。
+- 2 回目以降の起動は `wtm: open https://…/` を並べ、最後に「token を忘れた場合は「wtm token reset」で作り直せます」。
+- 開ける URL を 1 つも組み立てられないとき（`--host` にゾーン付きの IPv6 `fe80::1%eth0` を渡した等）は、その旨と
+  「ブラウザで開く URL を --origin で渡すと、ここに表示します」を出し、token は `wtm: token（今回作成）: <token>` の形で出す。
+- 起動の途中で失敗・終了した場合も、作った token は `wtm: token（今回作成・この表示が最後）: <token>` で必ず一度表示する。
+- 待ち受けに失敗したら（ポートが使用中・権限の無いポート等）、token を作らずに理由と対処を出して終了コード 2 で終わる。
+
+### 手元用と LAN 用を並行して動かす（`--state-dir` を分ける）
+
+状態ディレクトリ（既定は Linux・WSL2 が `~/.local/state/web-tn-multiplexer`（`$XDG_STATE_HOME` があればその下）、
+Windows が `%LOCALAPPDATA%\web-tn-multiplexer`）を使う `wtm serve` は、**ポートが違っても 1 つしか動かせない**
+（`<状態ディレクトリ>/wtm.lock`。D103）。2 つ目は何も起動せずに止まる（終了コード 2）：
+
+```
+wtm: the state dir /home/you/.local/state/web-tn-multiplexer is already in use by another wtm (pid 12345)
+同じ --state-dir を別の wtm（wtm serve か wtm token reset）が使っています（…）。別のポートで並行して動かすなら、--state-dir に別のディレクトリを指定してください。…
+```
+
+手元用（7780・HTTP）と LAN 用（8443・HTTPS）を並行して動かすなら、状態ディレクトリを分ける：
+
+```sh
+wtm serve                                                   # 手元用：127.0.0.1:7780・既定の状態ディレクトリ
+wtm serve --host 0.0.0.0 --port 8443 --cert wtm.pem --key wtm-key.pem \
+  --state-dir ~/.local/state/wtm-lan                        # LAN 用：別の状態ディレクトリ
+```
+
+状態ディレクトリごとに token と workspace・pane は別になる（別のセッション）。**同じ pane を手元と LAN の両方から
+使いたいなら、1 つの wtm を `--host 0.0.0.0 --cert … --key …` で動かし、手元からも表示される
+`https://localhost:<port>` の URL を開く**。
+
+### token を作り直す（`wtm token reset` は `wtm serve` を止めてから）
+
+```sh
+# 先に、同じ状態ディレクトリの wtm serve を止める（Ctrl+C 等）
+wtm token reset                                   # 既定の状態ディレクトリ
+wtm token reset --state-dir ~/.local/state/wtm-lan
+# → wtm: new token: <新しい token>
+```
+
+動いている `wtm serve` は token をメモリに持ったまま読み直さないので、**`wtm serve` が動いている間は断る**
+（`wtm: cannot reset the token: the state dir … is in use by a running wtm (pid …)`・終了コード 2）。作り直すと、
+ログイン済みのブラウザもすべてログインし直しになる。起動し直した後、ログイン画面に新しい token を入れる
+（2 回目以降の起動なので token 付きの URL は表示されない）。（以前の版では `wtm token reset` 自体が
+`unknown option: reset` で動かなかった。D103 で直した。）
+
+### 端末を閉じると wtm も終わる（SIGHUP。`nohup` でも同じ）
+
+`wtm serve` は Ctrl+C（SIGINT）・SIGTERM・**SIGHUP** を受けると、`session.json` を書いて `wtm.lock` を放し、終了コード 0 で
+終わる（`wtm: received SIGHUP, shutting down`）。**`wtm serve` を起動した端末を閉じると SIGHUP で終わる**。
+`nohup wtm serve …` でも同じ（Node は起動時にシグナルの扱いを既定に戻し、wtm は SIGHUP を受けて閉じる。D103）。
+端末を閉じても動かし続けるなら：
+
+```sh
+# tmux の中で動かす（端末を閉じても tmux ごと残る。token 付きの URL も tmux の画面に残る）
+tmux new -s wtm
+wtm serve --host 0.0.0.0 --port 8443 --cert wtm.pem --key wtm-key.pem
+# Ctrl+B d で tmux から離れる。戻るときは tmux attach -t wtm。止めるときは戻って Ctrl+C
+
+# setsid：新しいセッションで動かし、端末から切り離す（alias は使えないので main.js をフルパスで書く。
+# ~/src/web-tn-multiplexer は clone した場所に置き換える）。出力はファイルへ。token 付きの URL もそこに書かれるので、
+# 他のユーザーに読めないよう umask 077 で作る
+( umask 077; setsid node ~/src/web-tn-multiplexer/packages/server/dist/main.js serve --host 0.0.0.0 --port 8443 \
+    --cert wtm.pem --key wtm-key.pem > ~/wtm-serve.log 2>&1 < /dev/null & )
+# 止めるとき：kill <pid>（SIGTERM で閉じて終わる）。pid は <状態ディレクトリ>/wtm.lock の 1 行目
+```
+
+常駐させるなら systemd のユーザー単位のサービス等も使える（書き方は systemd の docs を参照。WSL2 で systemd を使うには
+`/etc/wsl.conf` で有効にする——Microsoft の docs「WSL で systemd を使う」）。WSL2 では、WSL の端末（`wsl.exe`）を
+すべて閉じると、しばらくして WSL2 自体が止まり、中の wtm も止まることがある（WSL の版・設定による。この検証環境では
+未確認）。その場合は WSL の端末を 1 つ開いたままにする。
+
+### 別のホスト・作り直したコンテナの `wtm.lock` は手で消す
+
+`wtm.lock` には持ち主の pid とホスト名を書く。同じホストで落ちたプロセスの残りなら、次の起動が pid を見て自動で
+取り直す。**ホスト名が違う**（別のマシンと共有しているディレクトリ・作り直してホスト名が変わったコンテナ）と、
+持ち主の生死をこちらから確かめられないので使用中とみなして止まる：
+
+```
+wtm: the state dir … is already in use by another wtm (pid 1 on old-container-host)
+…そちらで wtm が動いていなければ（落ちて残ったロック。コンテナを作り直してホスト名が変わった等）、…/wtm.lock を消してからやり直してください。
+```
+
+その wtm が本当に動いていないことを確かめてから、`<状態ディレクトリ>/wtm.lock` を消して起動し直す。pid が別の
+プロセスに再利用されている（前の wtm が落ちた後、同じ pid の別のプロセスが動いている）場合も同じく手で消す。
+
+### scrollback の行数とメモリ（`--scrollback`）
+
+`--scrollback N` は pane ごとに遡れる行数（既定 5,000。0 以上の整数で、10,000 より大きい値は 10,000 にする）。サーバのミラーと、
+デスクトップのブラウザの端末（xterm.js）が同じ行数を持つ（D107。以前のブラウザは xterm.js の既定の 1,000 行で切っていた）。
+スマートフォン等のモバイルのブラウザは、`--scrollback` にかかわらず 1,000 行（メモリを抑えるため）。
+
+メモリの目安：
+
+- ブラウザ：xterm.js は 1 セル 12 バイトなので、120 列なら 1 行 約 1.4KB、5,000 行で 1 端末 約 7MB。デスクトップのブラウザは
+  最近表示した端末を 24 個まで持つので、全部が埋まると 約 170MB（`--scrollback 10000` なら 約 340MB）。行は出力が溜まった分
+  だけ使うので、出力の少ない pane はそこまで使わない。
+- サーバ：同じ行数を pane ごとのミラーに持つ（design.md「ドメイン固有の考慮」の scrollback のメモリの見込みで、5,000 行なら 1 pane
+  約 12MB・16 pane で 約 200MB）。
+
+減らしたいときは `--scrollback` を下げて起動し直す（ブラウザもサーバも減る）。開いたままのページの端末は前の行数のままなので、
+ページも開き直す。
+
+## リバースプロキシの後ろに置く
+
+TLS をリバースプロキシ（nginx 等）で終端し、wtm はループバックの HTTP で動かす構成。注意点：
+
+- **ルートのパス（`/`）で公開する**。Web の画面は `/api/…`・`/ws`・`/assets/…` を絶対パスで呼び、ログインの Cookie も
+  `Path=/` なので、`https://example.com/wtm/` のようなサブパスには置けない（名前・ポートを分ける）。
+- **`/ws` の WebSocket の Upgrade を転送する**。転送しないと、ログインはできても端末がつながらない。
+- **`--origin` にブラウザが開く Origin を渡す**（手順2。渡さないと `/api/login`・`/ws` が 403。ログイン済みのブラウザには
+  「接続できません（このアドレスは許可されていません）」の枠か、「再接続中…」の下の `--origin` の行が出る——
+  `docs/verification.md`「うまくいかないとき」）。wtm 側は `--host 127.0.0.1` なら証明書は要らない。
+- **`Host` を書き換えない**（D106）。wtm は、ページを開くとき・繋ぎ直すたびの確認 `GET /api/session` を `Host` で確かめる
+  （同じオリジンの GET にブラウザは `Origin` を付けないため。`/api/login`・`/ws` は `Origin` で確かめる）。下の nginx の例のように
+  `proxy_set_header Host` を書かなければ `proxy_pass` の宛先（`127.0.0.1:7780`）が渡り、許可される。`proxy_set_header Host $host;`
+  （`wtm.example.com`）・`proxy_set_header Host $host:$server_port;`（`wtm.example.com:443`）も、`--origin https://wtm.example.com`
+  の名前と一致するので通る。これら以外の名前に書き換える前段では `/api/session` が 403 になり、サーバのログに
+  `origin rejected`（`"path":"/api/session"`）が出る——`/ws` は `Origin` で許されるのでつながるが、`/api/session` は繋ぎ直すたびに
+  拒否される（ログは、同じ接続元・`Origin`・`Host` の組ごとに 60 秒に 1 回まで。その間の件数は次の行の `suppressed`）。
+  `/ws` も断られる構成なら、画面は「接続できません（このアドレスは許可されていません）」で止まる。直すには、プロキシに元の
+  `Host` を渡させるか、書き換え先の名前を `--origin` に足す。
+- **ログインの失敗の回数の制限を、プロキシの後ろの全員で共有する**。wtm は接続元の IP ごとに、token の誤り（401）を
+  **1 分に 5 回、または 1 時間に 20 回**数えると、その IP からのログインをしばらく 429 で断る
+  （`packages/server/src/auth/LoginRateLimiter.ts`）。プロキシ（と WSL2 の portproxy）の後ろでは全員が同じ接続元
+  （プロキシのアドレス）に見えるので、誰かが token を 5 回間違えると、全員が最大 1 分（1 時間に 20 回に達したら最大 1 時間）
+  ログインできなくなる（`X-Forwarded-For` は見ない）。数はメモリにだけ持つので、wtm を再起動すれば数え直しになる。
+- wtm は WebSocket の ping を送らないので、何も出力の無い端末の接続は、プロキシの無通信のタイムアウト（nginx は既定 60 秒）
+  で切られる（ブラウザは自動でつなぎ直すが、その間は入力できない）。タイムアウトを長くする。同じ理由で、接続が黙って切れた
+  ことにブラウザが気づくまでの間に打った文字は消える（`docs/verification.md`「既知の制約」）。
+
+nginx の例（`wtm serve --host 127.0.0.1 --port 7780 --origin https://wtm.example.com` で動かしている場合）：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name wtm.example.com;
+    ssl_certificate     /etc/ssl/wtm.example.com.crt;
+    ssl_certificate_key /etc/ssl/wtm.example.com.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:7780;
+    }
+
+    location = /ws {
+        proxy_pass http://127.0.0.1:7780;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}
+```
+
+## 確認
+
+`docs/verification.md`「別のマシンからの TLS 接続（AC11）」の手順で、Linux・WSL2・Windows ネイティブのそれぞれについて、
+実際に別マシンのブラウザから `https://` でログインし、AC1〜AC9 の操作が一通りできることを確認する
+（スマートフォンは同じく「実機（iOS Safari・Android Chrome。AC12）」）。

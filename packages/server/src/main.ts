@@ -1,0 +1,161 @@
+#!/usr/bin/env node
+import { bindFailureHint, defaultStateDir, ConfigError, stateDirInUseError } from "./config.js";
+import { composeServer } from "./composeServer.js";
+import { FsAuthFile } from "./persist/AuthFile.js";
+import { StateDirInUseError, StateDirLock } from "./persist/StateDirLock.js";
+import { DefaultAuthService } from "./auth/AuthService.js";
+import type { RawServeArgs } from "./config.js";
+import { parseArgs } from "./cliArgs.js";
+import { OsNetworkInfo } from "./infra/OsNetworkInfo.js";
+import { lastChanceTokenLines, startupLines } from "./startupBanner.js";
+import { formatUrlHost } from "./util/net.js";
+
+function printHelp(): void {
+  console.log(
+    [
+      "wtm serve [--host H] [--port P] [--cert FILE] [--key FILE] [--origin ORIGIN]...",
+      "          [--state-dir DIR] [--scrollback N] [--shell PATH]",
+      "wtm token reset [--state-dir DIR]",
+    ].join("\n"),
+  );
+}
+
+async function runServe(args: RawServeArgs): Promise<void> {
+  const server = await composeServer(args);
+  const { host, port } = server.options;
+  // **作った token は必ず一度表示する**（D102・D103）。token は bind の直後に作り auth.json に保存するので、この後に何が
+  // 起きても——`listen()` の後段の失敗（最初のシェルを起動できない等）・成功した後の表示の組み立ての失敗（インタフェースの
+  // 列挙の失敗等）・起動の途中の終了のシグナル——まだ表示していなければ、終わる前に token だけを表示する（次の起動では
+  // 表示されない）。以前は `listen()` の catch の中でしか保証しておらず、成功した後の URL の組み立て（ゾーン付きの IPv6 で
+  // `Invalid URL`）で token を失っていた。
+  let tokenShown = false;
+  const showTokenIfUnshown = (): void => {
+    const token = server.freshToken;
+    if (token === undefined || tokenShown) return;
+    tokenShown = true;
+    for (const line of lastChanceTokenLines(token)) console.error(line);
+  };
+
+  // 終了のシグナル（SIGINT・SIGTERM・SIGHUP）は `listen()` の**前に**受け付ける（D103 の独立点検 #4）。以前は起動の表示の
+  // 後に付けていたため、復元の途中で受けると既定の動作で即座に終わり、作った token を表示せず、ロックも残した。SIGHUP
+  // （端末を閉じた・Windows ではコンソールを閉じた）は、以前はどこでも受けておらず、session.json を書かずロックを残して
+  // 終わっていた——**Node は起動時にシグナルの扱いを既定に戻すので、`nohup` の下でも SIGHUP で終わる**（実測：`nohup` でも
+  // 終了コード 129）ので、受けて閉じて終わる方がよい。起動の途中で受けたら、その段（復元等）を終えてから閉じる（`close()` と
+  // `listen()` を並行させない——ロックを確実に放す）。もう一度受けたら待たずに終わる（残ったロックは次の起動が pid を見て
+  // 取り直す）。
+  let shuttingDown = false;
+  let startup: Promise<void> | undefined;
+  const shutdown = (signal: NodeJS.Signals): void => {
+    showTokenIfUnshown();
+    if (shuttingDown) {
+      console.error(`wtm: received ${signal} again, exiting without waiting`);
+      process.exit(1);
+    }
+    shuttingDown = true;
+    console.log(`wtm: received ${signal}, shutting down`);
+    void (async () => {
+      await startup?.catch(() => undefined);
+      showTokenIfUnshown(); // 起動の途中で作った token（まだ表示していなければ）
+      // close() は session.json を書き終えてから状態ディレクトリのロック（wtm.lock）を放す（失敗しても放す。D103）。
+      await server.close();
+    })().then(
+      () => process.exit(0),
+      (err: unknown) => {
+        console.error("wtm: error during shutdown", err);
+        process.exit(1);
+      },
+    );
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => shutdown(signal));
+
+  let listening = false;
+  try {
+    try {
+      startup = server.listen();
+      await startup;
+    } catch (err) {
+      // 待ち受けの失敗（ポートが使用中・権限の無いポート・このマシンに無いアドレス・解決できない名前）だけを、案内つきの
+      // 終了コード 2 にする（判定は `config.ts` の `bindFailureHint`）。同じ state-dir の wtm が動いている（`wtm.lock`）は
+      // `listen()` が既に `ConfigError` にしている。それ以外（想定外の失敗）はそのまま投げる（終了コード 1。原因を
+      // 握りつぶさない）。
+      const hint = bindFailureHint(err);
+      if (hint === undefined) throw err;
+      throw new ConfigError(`cannot listen on ${formatUrlHost(host)}:${port}: ${(err as Error).message}`, hint);
+    }
+    listening = true;
+    // 起動の途中で終了のシグナルを受けていたら、起動の表示は出さない（`shutdown` が閉じて終わる。token は finally で表示する）。
+    if (shuttingDown) return;
+    // ここまで来たら待ち受けに成功している。token 付きの URL はこの後にだけ表示する（D102）。表示する行は先に全部
+    // 組み立てる（組み立ての失敗で、途中まで表示して終わらない）。`--origin` を先頭に、`0.0.0.0` / `::` のときは開ける
+    // URL（localhost と LAN の IPv4）を並べる（`startupLines`・`accessUrls`。D101・D102）。
+    const lines = startupLines({
+      scheme: server.options.cert && server.options.key ? "https" : "http",
+      host,
+      port,
+      extraOrigins: server.options.extraOrigins,
+      lanAddresses: new OsNetworkInfo().lanAddresses(),
+      freshToken: server.freshToken,
+    });
+    for (const line of lines) console.log(line);
+    tokenShown = true; // `startupLines` は作った token を必ず含む（URL が 1 つも無くても）
+  } catch (err) {
+    showTokenIfUnshown(); // close() を待つ前に表示する
+    // 待ち受けた後の失敗（表示の組み立て等）では、待ち受けたまま・状態ディレクトリのロックを持ったまま終わらないよう
+    // 閉じる（`listen()` 自身の失敗は `listen()` が後始末する）。
+    if (listening && !shuttingDown) await server.close().catch(() => undefined);
+    throw err;
+  } finally {
+    showTokenIfUnshown();
+  }
+}
+
+/**
+ * `wtm token reset`（D103）：`wtm serve` と同じ状態ディレクトリのロック（`wtm.lock`）を取ってから auth.json を書き換える。
+ * 動いている `wtm serve` は token とセッションをメモリに持ったまま auth.json を読み直さないので、動いている間に書き換えると
+ * 新しい token を受け付けず、次のログイン等で auth.json を古い token に書き戻す。だから動いていれば断る（終了コード 2）。
+ */
+async function runTokenReset(stateDir: string | undefined): Promise<void> {
+  const dir = stateDir ?? defaultStateDir();
+  const lock = new StateDirLock(dir);
+  try {
+    await lock.acquire();
+  } catch (err) {
+    if (err instanceof StateDirInUseError) throw stateDirInUseError(err, dir, "token-reset");
+    throw err;
+  }
+  try {
+    const auth = new DefaultAuthService(new FsAuthFile(dir));
+    await auth.initialize();
+    const token = await auth.resetToken();
+    console.log(`wtm: new token: ${token}`);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function main(): Promise<void> {
+  try {
+    // 引数の誤り（未知のオプション・値の無いオプション）も ConfigError として終了コード 2 にする（以前は try の外で
+    // 投げていたため、スタックトレースつきの終了コード 1 になっていた。D102 の実物の CLI の確認で発見）。
+    const parsed = parseArgs(process.argv.slice(2));
+    if (parsed.command === "serve") {
+      await runServe(parsed.serve);
+    } else if (parsed.command === "token-reset") {
+      await runTokenReset(parsed.stateDir);
+    } else {
+      printHelp();
+    }
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      console.error(`wtm: ${err.message}`);
+      console.error(err.hint);
+      process.exit(2);
+    }
+    throw err;
+  }
+}
+
+main().catch((err: unknown) => {
+  console.error(err);
+  process.exit(1);
+});

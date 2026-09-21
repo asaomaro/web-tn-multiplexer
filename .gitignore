@@ -1,0 +1,19 @@
+.aidev/current
+
+# Node / pnpm
+node_modules/
+dist/
+*.tsbuildinfo
+.pnpm-store/
+
+# ログ・状態（開発時にローカルで作られるもの）
+*.log
+.wtm-dev-state/
+
+# Playwright（packages/e2e）の実行結果
+test-results/
+playwright-report/
+blob-report/
+
+# エディタ
+.DS_Store

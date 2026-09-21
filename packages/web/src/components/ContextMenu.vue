@@ -1,0 +1,176 @@
+<script setup lang="ts">
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { ActionDispatcherKey, TerminalRegistryKey } from "../injection.js";
+import { useSessionStore } from "../store/session.js";
+import { useViewStore } from "../store/view.js";
+
+/**
+ * 右クリックのメニュー（M3。APG の Menu。D56 の訂正 10）。`view.contextMenu` が開閉を持つ
+ * （`ui.openContextMenu` で開く。`ActionDispatcher` が `UiPort` として実装）。
+ * Esc・項目の選択で閉じたら、開く前にフォーカスしていた要素（右クリックした端末・tab、キーボードで開いた pane の枠）へ
+ * フォーカスを戻す（APG の Menu。D110：以前は戻さず、閉じるとフォーカスが body に落ちて、端末へ打てなくなっていた）。
+ * 項目の処理がフォーカスを移すもの（ダイアログ・新しい pane）は、戻した後に処理が移し直す。戻す先がもう文書に無ければ
+ * （閉じた pane の端末・枠）、選ばれている pane の端末へ移す（独立点検 #4。戻した先が後で消えるとき——「閉じる」で、選ばれて
+ * いない pane を閉じたとき——は `PaneFrame` が同じように移す）。
+ */
+interface MenuItem {
+  label: string;
+  run: () => void;
+}
+
+const session = useSessionStore();
+const view = useViewStore();
+const actions = inject(ActionDispatcherKey);
+if (!actions) throw new Error("ContextMenu: ActionDispatcherKey が provide されていません");
+/** 戻す先が無いときに、選ばれている pane の端末へフォーカスする（無ければ何もしない）。 */
+const registry = inject(TerminalRegistryKey, undefined);
+
+const menuEl = ref<HTMLElement | null>(null);
+const activeIndex = ref(0);
+
+/** メニューを開く前にフォーカスしていた要素（閉じたら戻す先。D110）。 */
+let returnFocusTo: HTMLElement | null = null;
+
+function close(): void {
+  view.closeContextMenu();
+}
+
+/** 開く前にフォーカスしていた要素へ戻す。もう文書に無ければ（閉じた pane の端末等）、選ばれている pane の端末へ移す。 */
+function restoreFocus(): void {
+  const el = returnFocusTo;
+  returnFocusTo = null;
+  if (el?.isConnected) el.focus();
+  else if (view.focusedPaneId) registry?.focus(view.focusedPaneId);
+}
+
+const items = computed<MenuItem[]>(() => {
+  const target = view.contextMenu?.target;
+  if (!target) return [];
+  if (target.kind === "pane") {
+    const pane = session.panes.get(target.paneId);
+    const list: MenuItem[] = [
+      { label: "名前の変更", run: () => actions.renamePaneById(target.paneId) },
+      ...(pane?.label ? [{ label: "名前の消去", run: () => actions.clearPaneName(target.paneId) }] : []),
+      { label: "右へ分割", run: () => actions.splitPane(target.paneId, "right") },
+      { label: "下へ分割", run: () => actions.splitPane(target.paneId, "down") },
+      { label: "拡大表示", run: () => actions.zoomPane(target.paneId) },
+      { label: pane?.rightClick === "pane" ? "herdr のメニューを使う" : "右クリックを pane に送る", run: () => actions.setRightClickTarget(target.paneId, pane?.rightClick === "pane" ? "herdr" : "pane") },
+      { label: "貼り付け", run: () => actions.pasteIntoPane(target.paneId) },
+      { label: "閉じる", run: () => actions.closePaneById(target.paneId) },
+    ];
+    return list;
+  }
+  if (target.kind === "tab") {
+    const tab = session.tabs.get(target.tabId);
+    return [
+      { label: "新規", run: () => tab && actions.newTabInWorkspace(tab.workspaceId) },
+      { label: "名前の変更", run: () => actions.renameTabById(target.tabId) },
+      { label: "閉じる", run: () => actions.closeTabById(target.tabId) },
+    ];
+  }
+  // workspace：herdr は worktree 対応で 4 パターンあるが、本製品はグルーピングが対象外なので常にこの 2 項目（D56 の訂正 10）。
+  return [
+    { label: "名前の変更", run: () => actions.renameWorkspaceById(target.workspaceId) },
+    { label: "閉じる", run: () => actions.closeWorkspaceById(target.workspaceId) },
+  ];
+});
+
+function activate(index: number): void {
+  const item = items.value[index];
+  if (!item) return;
+  close();
+  restoreFocus();
+  item.run();
+}
+
+function onKeydown(ev: KeyboardEvent): void {
+  if (ev.key === "Escape") {
+    ev.preventDefault();
+    close();
+    restoreFocus();
+    return;
+  }
+  if (ev.key === "ArrowDown") {
+    ev.preventDefault();
+    activeIndex.value = (activeIndex.value + 1) % items.value.length;
+    return;
+  }
+  if (ev.key === "ArrowUp") {
+    ev.preventDefault();
+    activeIndex.value = (activeIndex.value - 1 + items.value.length) % items.value.length;
+    return;
+  }
+  if (ev.key === "Enter" || ev.key === " ") {
+    ev.preventDefault();
+    activate(activeIndex.value);
+  }
+}
+
+function onOutsideClick(ev: MouseEvent): void {
+  if (menuEl.value && !menuEl.value.contains(ev.target as Node)) {
+    // 外側のクリックでは戻さない（フォーカスはクリックした先へ移る）。
+    returnFocusTo = null;
+    close();
+  }
+}
+
+watch(
+  () => view.contextMenu,
+  (menu) => {
+    if (menu) {
+      // 開いたままほかの対象で開き直したとき（フォーカスはメニューの中）は、最初に開く前の要素を戻す先のままにする。
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && !menuEl.value?.contains(active)) returnFocusTo = active;
+      activeIndex.value = 0;
+      void nextTick(() => menuEl.value?.focus());
+    }
+  },
+);
+
+onMounted(() => document.addEventListener("mousedown", onOutsideClick, true));
+onBeforeUnmount(() => document.removeEventListener("mousedown", onOutsideClick, true));
+</script>
+
+<template>
+  <ul
+    v-if="view.contextMenu"
+    ref="menuEl"
+    role="menu"
+    tabindex="-1"
+    class="context-menu"
+    :style="{ left: `${view.contextMenu.at.x}px`, top: `${view.contextMenu.at.y}px` }"
+    @keydown="onKeydown"
+  >
+    <li
+      v-for="(item, index) in items"
+      :key="item.label"
+      role="menuitem"
+      :class="{ 'context-menu-active': index === activeIndex }"
+      @mouseenter="activeIndex = index"
+      @click="activate(index)"
+    >
+      {{ item.label }}
+    </li>
+  </ul>
+</template>
+
+<style scoped>
+.context-menu {
+  position: fixed;
+  list-style: none;
+  margin: 0;
+  padding: 0.25em 0;
+  background: var(--wtm-menu-bg, #282a36);
+  color: var(--wtm-menu-fg, #f8f8f2);
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  min-width: 12em;
+  z-index: 1000;
+}
+.context-menu li {
+  padding: 0.35em 1em;
+  cursor: pointer;
+}
+.context-menu-active {
+  background: var(--wtm-menu-active-bg, #44475a);
+}
+</style>

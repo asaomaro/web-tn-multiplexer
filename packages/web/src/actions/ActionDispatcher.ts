@@ -1,0 +1,492 @@
+import type { Pinia } from "pinia";
+import type { KeyInputController, ActionPort, FocusPort } from "../keys/KeyInputController.js";
+import type { Action, CopyCommand, Dir } from "../keys/actions.js";
+import type { InputHold } from "../net/InputGate.js";
+import type { ConnectionPort } from "../net/ports.js";
+import { useSessionStore } from "../store/session.js";
+import { useViewStore } from "../store/view.js";
+import { depthFirstPaneIds, neighborPaneId } from "../term/layoutOrder.js";
+import type { MenuTarget, UiPort } from "../term/MouseBridge.js";
+import { readClipboard, writeClipboard } from "../term/clipboard.js";
+import type { TerminalRegistry } from "../term/TerminalRegistry.js";
+
+export interface ActionDispatcherOptions {
+  conn: ConnectionPort;
+  pinia: Pinia;
+  registry: TerminalRegistry;
+  keys: KeyInputController;
+  /** 新しい pane へ焦点を移す操作の応答を待つ間の入力を溜める関所（D99。`net/InputGate`）。省略時は溜めない。 */
+  input?: { holdInput(sourcePaneId: string | null): InputHold };
+}
+
+/**
+ * `Action` の実行（architecture.md「actions/ActionDispatcher」）。T17：構造の操作／T18：モード・ダイアログ・
+ * その他（このファイル）。`ActionPort`・`FocusPort`・`UiPort` を実装する。
+ */
+export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
+  private readonly conn: ConnectionPort;
+  private readonly session: ReturnType<typeof useSessionStore>;
+  private readonly view: ReturnType<typeof useViewStore>;
+  private readonly registry: TerminalRegistry;
+  private readonly keys: KeyInputController;
+  private readonly input: ActionDispatcherOptions["input"];
+
+  constructor(opts: ActionDispatcherOptions) {
+    this.conn = opts.conn;
+    this.input = opts.input;
+    this.session = useSessionStore(opts.pinia);
+    this.view = useViewStore(opts.pinia);
+    this.registry = opts.registry;
+    this.keys = opts.keys;
+  }
+
+  focusedPaneId(): string | null {
+    return this.view.focusedPaneId;
+  }
+
+  // --- UiPort --------------------------------------------------------------
+
+  openContextMenu(target: MenuTarget, at: { x: number; y: number }): void {
+    this.view.openContextMenu(target, at);
+  }
+
+  toast(message: string): void {
+    this.view.toast(message);
+  }
+
+  run(action: Action): void {
+    switch (action.type) {
+      case "split":
+        this.split(action.dir);
+        return;
+      case "focusDir":
+        this.focusDir(action.dir);
+        return;
+      case "swap":
+        this.swap(action.dir);
+        return;
+      case "cyclePane":
+        this.cyclePane(action.delta);
+        return;
+      case "closePane":
+        this.closePane();
+        return;
+      case "zoom":
+        this.zoom();
+        return;
+      case "newTab":
+        this.newTab();
+        return;
+      case "tabDelta":
+        this.tabDelta(action.delta);
+        return;
+      case "tabIndex":
+        this.tabIndex(action.index);
+        return;
+      case "closeTab":
+        this.closeTab();
+        return;
+      case "newWorkspace":
+        this.newWorkspace();
+        return;
+      case "closeWorkspace":
+        this.closeWorkspace();
+        return;
+      case "enterMode":
+        if (action.mode === "navigate") this.view.setNavigateSelection(this.view.workspaceId);
+        if (action.mode === "copy") {
+          const paneId = this.view.focusedPaneId;
+          // copy モードに入るたび、カーソルを端末の現在の末尾位置へ合わせ直す（D94。CopyTarget は
+          // pane の acquire 時に一度だけ作られ、位置を自分では追跡し続けないため）。
+          if (paneId) this.registry.get(paneId)?.copy.resetCursor();
+        }
+        return; // モードの実際の遷移は KeyRouter 自身が行う（ModeSink 経由で view.mode に反映済み）
+      case "exitMode":
+        this.keys.setMode("terminal");
+        return;
+      case "help":
+        this.view.openDialogWithContext({ kind: "help" });
+        return;
+      case "goto":
+        this.view.openDialogWithContext({ kind: "goto" });
+        return;
+      case "toggleSidebar":
+        this.view.toggleSidebar();
+        return;
+      case "detach":
+        void this.conn.request("client.detach", {}).catch(() => undefined); // 後始末は Connection 自身が行う（D58）
+        return;
+      case "notYet":
+        this.view.toast(`未対応（後続: ${action.work}）`);
+        return;
+      case "navigate":
+        this.navigate(action.op, action.dir);
+        return;
+      case "resizeBy":
+        this.resizeBy(action.dir, action.amount);
+        return;
+      case "copy":
+        this.copy(action.cmd);
+        return;
+      case "renamePane":
+        this.beginRenamePane();
+        return;
+      case "renameTab":
+        this.beginRenameTab();
+        return;
+      case "renameWorkspace":
+        this.beginRenameWorkspace();
+        return;
+    }
+  }
+
+  /** T23（`NameDialog`）が新規 tab の名前を確定したときに呼ぶ。 */
+  confirmNewTab(label: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "newTab") return;
+    this.view.closeDialog();
+    const trimmed = label.trim();
+    const hold = this.input?.holdInput(this.view.focusedPaneId); // D99：応答までに打った文字は新しい pane へ
+    this.conn
+      .request("tab.create", { workspaceId: ctx.workspaceId, ...(trimmed ? { label: trimmed } : {}) })
+      .then((result) => {
+        this.view.setView(ctx.workspaceId, result.tab.id);
+        this.view.focusPane(result.pane.id);
+        this.releaseHold(hold, result.pane.id);
+      })
+      .catch(() => {
+        hold?.cancel();
+        this.view.toast("tab を作成できませんでした");
+      });
+  }
+
+  /**
+   * 溜めた入力を新しい pane へ流す（D99）。ただし新しい pane が入力を受けられないときは元の pane へ戻す：
+   * もう閉じている（シェルが起動確認の猶予中に終わった等。サーバは応答の前に閉じる）、または zoom 中の別の pane に
+   * 隠れて表示されていない（DOM の焦点が元の pane に残るので、以後の入力と行き先が分かれてしまう）。後者は、サーバの
+   * 処理順では通常起きない（分割を確定するときに zoom を解除し（D100）、応答はその直後に返す）——順序の前提が崩れたときの保険。
+   */
+  private releaseHold(hold: InputHold | undefined, newPaneId: string): void {
+    if (!hold) return;
+    const pane = this.session.panes.get(newPaneId);
+    const tab = pane ? this.session.tabs.get(pane.tabId) : undefined;
+    const hiddenByZoom = !!tab?.zoomedPaneId && tab.zoomedPaneId !== newPaneId;
+    if (pane && !hiddenByZoom) hold.release(newPaneId);
+    else hold.cancel();
+  }
+
+  /** T24（`ConfirmDialog`）が閉じる確認を確定したときに呼ぶ。 */
+  confirmClose(): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "confirmClose") return;
+    this.view.closeDialog();
+    for (const target of ctx.targets) {
+      if (target.type === "pane") void this.conn.request("pane.close", { paneId: target.id }).catch(() => undefined);
+      else if (target.type === "tab") void this.conn.request("tab.close", { tabId: target.id }).catch(() => undefined);
+      else void this.conn.request("workspace.close", { workspaceId: target.id }).catch(() => undefined);
+    }
+  }
+
+  private split(dir: "right" | "down"): void {
+    const paneId = this.view.focusedPaneId;
+    if (paneId) this.splitPane(paneId, dir);
+  }
+
+  /** T22（`ContextMenu`）から任意の pane を対象に呼ぶ（フォーカス中とは限らない）。 */
+  splitPane(paneId: string, dir: "right" | "down"): void {
+    const hold = this.input?.holdInput(this.view.focusedPaneId); // D99：応答までに打った文字は新しい pane へ
+    this.conn
+      .request("pane.split", { paneId, direction: dir })
+      .then((r) => {
+        this.view.focusPane(r.pane.id); // AC-I4：新しい pane へフォーカスを移す
+        this.releaseHold(hold, r.pane.id);
+      })
+      .catch(() => {
+        hold?.cancel();
+        this.view.toast("分割できませんでした");
+      });
+  }
+
+  /**
+   * 移動先はクライアントで求め、焦点を即座に移してからサーバへ知らせる（`cyclePane` と同じ形。D97）。
+   * 以前は `pane.focus_direction` の応答を待ってから移していたため、その往復の間に打った文字が移動前の
+   * 焦点（端末以外の要素なら捨てられ、端末なら移動前の pane）へ届いていた。
+   */
+  private focusDir(dir: Dir): void {
+    const paneId = this.view.focusedPaneId;
+    const tab = this.view.tabId ? this.session.tabs.get(this.view.tabId) : undefined;
+    if (!paneId || !tab) return;
+    const next = neighborPaneId(tab.layout, paneId, dir);
+    if (!next) return; // その方向に pane が無い
+    this.view.focusPane(next);
+    void this.conn.request("pane.focus", { paneId: next }).catch(() => undefined);
+  }
+
+  private swap(dir: Dir): void {
+    const paneId = this.view.focusedPaneId;
+    if (!paneId) return;
+    void this.conn.request("pane.swap", { paneId, direction: dir }).catch(() => undefined);
+  }
+
+  private cyclePane(delta: 1 | -1): void {
+    const tab = this.view.tabId ? this.session.tabs.get(this.view.tabId) : undefined;
+    if (!tab) return;
+    const ids = depthFirstPaneIds(tab.layout);
+    if (ids.length === 0) return;
+    const current = this.view.focusedPaneId ? ids.indexOf(this.view.focusedPaneId) : -1;
+    const next = ids[(current === -1 ? 0 : current + delta + ids.length) % ids.length];
+    if (!next) return;
+    this.view.focusPane(next);
+    void this.conn.request("pane.focus", { paneId: next }).catch(() => undefined);
+  }
+
+  private zoom(): void {
+    const paneId = this.view.focusedPaneId;
+    if (paneId) this.zoomPane(paneId);
+  }
+
+  zoomPane(paneId: string): void {
+    void this.conn.request("pane.zoom", { paneId, mode: "toggle" }).catch(() => undefined);
+  }
+
+  /** herdr の `prompt_new_tab_name`（既定 true）：空欄で開く（design「ダイアログ」）。 */
+  private newTab(): void {
+    const workspaceId = this.view.workspaceId;
+    if (workspaceId) this.newTabInWorkspace(workspaceId);
+  }
+
+  newTabInWorkspace(workspaceId: string): void {
+    this.view.openDialogWithContext({ kind: "newTab", workspaceId });
+  }
+
+  private tabDelta(delta: 1 | -1): void {
+    const tab = this.view.tabId ? this.session.tabs.get(this.view.tabId) : undefined;
+    if (!tab) return;
+    const ws = this.session.workspaces.get(tab.workspaceId);
+    if (!ws || ws.tabIds.length === 0) return;
+    const idx = ws.tabIds.indexOf(tab.id);
+    const nextTabId = ws.tabIds[(idx === -1 ? 0 : idx + delta + ws.tabIds.length) % ws.tabIds.length];
+    if (nextTabId) this.switchToTab(ws.id, nextTabId);
+  }
+
+  private tabIndex(index: number): void {
+    const workspaceId = this.view.workspaceId;
+    if (!workspaceId) return;
+    const ws = this.session.workspaces.get(workspaceId);
+    const tabId = ws?.tabIds[index - 1];
+    if (tabId) this.switchToTab(workspaceId, tabId);
+  }
+
+  private switchToTab(workspaceId: string, tabId: string): void {
+    this.view.setView(workspaceId, tabId);
+    const tab = this.session.tabs.get(tabId);
+    if (tab) this.view.focusPane(tab.focusedPaneId);
+    void this.conn.request("tab.focus", { tabId }).catch(() => undefined);
+  }
+
+  /** closePane/closeTab は対象に busy な pane を含むときだけ確認する（D23。workspace は常に確認）。 */
+  private closePane(): void {
+    const paneId = this.view.focusedPaneId;
+    if (paneId) this.closePaneById(paneId);
+  }
+
+  /** T22（`ContextMenu`）から任意の pane を対象に呼ぶ（フォーカス中とは限らない）。 */
+  closePaneById(paneId: string): void {
+    const pane = this.session.panes.get(paneId);
+    if (pane?.busy) {
+      this.view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "pane", id: paneId }] });
+      return;
+    }
+    void this.conn.request("pane.close", { paneId }).catch(() => undefined);
+  }
+
+  private closeTab(): void {
+    const tabId = this.view.tabId;
+    if (tabId) this.closeTabById(tabId);
+  }
+
+  /** T22 から任意の tab を対象に呼ぶ（表示中の tab とは限らない）。 */
+  closeTabById(tabId: string): void {
+    const panesInTab = [...this.session.panes.values()].filter((p) => p.tabId === tabId);
+    if (panesInTab.some((p) => p.busy)) {
+      this.view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "tab", id: tabId }] });
+      return;
+    }
+    void this.conn.request("tab.close", { tabId }).catch(() => undefined);
+  }
+
+  /** herdr は worktree グループ経由でも busy 以外の追加確認をするが、本製品はグルーピングが対象外（D56 の訂正 2）。 */
+  private closeWorkspace(): void {
+    const workspaceId = this.view.workspaceId;
+    if (workspaceId) this.closeWorkspaceById(workspaceId);
+  }
+
+  /** T22 から任意の workspace を対象に呼ぶ。 */
+  closeWorkspaceById(workspaceId: string): void {
+    this.view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "workspace", id: workspaceId }] });
+  }
+
+  /** herdr の `prompt_new_workspace_name`（既定 false）：名前を尋ねずすぐ作る（design「ダイアログ」）。 */
+  private newWorkspace(): void {
+    const hold = this.input?.holdInput(this.view.focusedPaneId); // D99：応答までに打った文字は新しい pane へ
+    this.conn
+      .request("workspace.create", {})
+      .then((r) => {
+        this.view.setView(r.workspace.id, r.tab.id);
+        this.view.focusPane(r.pane.id);
+        this.releaseHold(hold, r.pane.id);
+      })
+      .catch(() => {
+        hold?.cancel();
+        this.view.toast("workspace を作成できませんでした");
+      });
+  }
+
+  // --- T18: navigate・resize・copy・名前の変更・その他 ----------------------
+
+  private navigate(op: "up" | "down" | "paneDir" | "activate" | "cancel", dir?: Dir): void {
+    switch (op) {
+      case "up":
+      case "down": {
+        const ids = [...this.session.workspaces.keys()];
+        if (ids.length === 0) return;
+        const current = this.view.navigateSelection ? ids.indexOf(this.view.navigateSelection) : -1;
+        const delta = op === "up" ? -1 : 1;
+        const next = ids[(current === -1 ? 0 : current + delta + ids.length) % ids.length];
+        if (next) this.view.setNavigateSelection(next);
+        return;
+      }
+      case "paneDir":
+        if (dir) this.focusDir(dir);
+        return;
+      case "activate":
+        this.activateNavigateSelection();
+        return;
+      case "cancel":
+        this.view.setNavigateSelection(null);
+        return;
+    }
+  }
+
+  private activateNavigateSelection(): void {
+    const workspaceId = this.view.navigateSelection;
+    this.view.setNavigateSelection(null);
+    if (!workspaceId) return;
+    const ws = this.session.workspaces.get(workspaceId);
+    if (ws) {
+      this.view.setView(ws.id, ws.activeTabId);
+      const tab = this.session.tabs.get(ws.activeTabId);
+      if (tab) this.view.focusPane(tab.focusedPaneId);
+    }
+    void this.conn.request("workspace.focus", { workspaceId }).catch(() => undefined);
+  }
+
+  private resizeBy(dir: Dir, amount: number): void {
+    const paneId = this.view.focusedPaneId;
+    if (!paneId) return;
+    void this.conn.request("pane.resize", { paneId, direction: dir, amount }).catch(() => undefined);
+  }
+
+  /** `CopyTarget.apply()` の結果を見て、実際に抜けるかを決める（D63。`Esc` の `clearOrExit` はここで判断する）。 */
+  private copy(cmd: CopyCommand): void {
+    const paneId = this.view.focusedPaneId;
+    if (!paneId) return;
+    const entry = this.registry.get(paneId);
+    if (!entry) return;
+    const result = entry.copy.apply(cmd);
+    if (result.copiedText !== undefined) {
+      void writeClipboard(result.copiedText).then((ok) => this.view.toast(ok ? "コピーしました" : "コピーできませんでした"));
+    }
+    if (result.exited) this.keys.setMode("terminal");
+  }
+
+  private beginRenamePane(): void {
+    const paneId = this.view.focusedPaneId;
+    if (paneId) this.renamePaneById(paneId);
+  }
+
+  /** T22 から任意の pane を対象に呼ぶ。 */
+  renamePaneById(paneId: string): void {
+    const pane = this.session.panes.get(paneId);
+    this.view.openDialogWithContext({ kind: "renamePane", paneId, currentLabel: pane?.label ?? "" });
+  }
+
+  private beginRenameTab(): void {
+    const tabId = this.view.tabId;
+    if (tabId) this.renameTabById(tabId);
+  }
+
+  /** T22 から任意の tab を対象に呼ぶ。 */
+  renameTabById(tabId: string): void {
+    const tab = this.session.tabs.get(tabId);
+    if (!tab) return;
+    this.view.openDialogWithContext({ kind: "renameTab", tabId, currentLabel: tab.label });
+  }
+
+  private beginRenameWorkspace(): void {
+    const workspaceId = this.view.workspaceId;
+    if (workspaceId) this.renameWorkspaceById(workspaceId);
+  }
+
+  /** T22 から任意の workspace を対象に呼ぶ。 */
+  renameWorkspaceById(workspaceId: string): void {
+    const ws = this.session.workspaces.get(workspaceId);
+    if (!ws) return;
+    this.view.openDialogWithContext({ kind: "renameWorkspace", workspaceId, currentLabel: ws.label });
+  }
+
+  /** T23（`NameDialog`）が名前の変更を確定したときに呼ぶ。`pane.rename` は空欄を「名前の消去」として送れる。 */
+  confirmRenamePane(label: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "renamePane") return;
+    this.view.closeDialog();
+    const trimmed = label.trim();
+    void this.conn.request("pane.rename", { paneId: ctx.paneId, label: trimmed || null }).catch(() => this.view.toast("名前を変更できませんでした"));
+  }
+
+  /** `tab.rename`/`workspace.rename` は空欄を受け付けない（サーバの検証）ので、空なら何もせず閉じるだけ。 */
+  confirmRenameTab(label: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "renameTab") return;
+    this.view.closeDialog();
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    void this.conn.request("tab.rename", { tabId: ctx.tabId, label: trimmed }).catch(() => this.view.toast("名前を変更できませんでした"));
+  }
+
+  confirmRenameWorkspace(label: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "renameWorkspace") return;
+    this.view.closeDialog();
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    void this.conn.request("workspace.rename", { workspaceId: ctx.workspaceId, label: trimmed }).catch(() => this.view.toast("名前を変更できませんでした"));
+  }
+
+  // --- メニュー専用の操作（`KeyRouter` を経由しない。D56 の訂正 10） --------
+
+  /** メニューの「貼り付け」（design「マウス操作」）。`Ctrl+Shift+V` と同じ経路（`term.paste`）を使う。 */
+  pasteFromMenu(): void {
+    const paneId = this.view.focusedPaneId;
+    if (paneId) this.pasteIntoPane(paneId);
+  }
+
+  /** T22 から、右クリックした pane（フォーカス中とは限らない）を対象に呼ぶ。 */
+  pasteIntoPane(paneId: string): void {
+    const entry = this.registry.get(paneId);
+    if (!entry) return;
+    void readClipboard().then((text) => {
+      if (text) entry.term.paste(text);
+    });
+  }
+
+  /** 「名前の消去」（名前があるときだけ出す判断は `ContextMenu`＝T22 の側）。 */
+  clearPaneName(paneId: string): void {
+    void this.conn.request("pane.rename", { paneId, label: null }).catch(() => undefined);
+  }
+
+  /** 右クリックの宛先の切替（herdr の同名の方式）。 */
+  setRightClickTarget(paneId: string, target: "herdr" | "pane"): void {
+    void this.conn.request("pane.input.set", { paneId, rightClick: target }).catch(() => undefined);
+  }
+}
