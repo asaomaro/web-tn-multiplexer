@@ -1,4 +1,9 @@
-import { WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceFocusParams, WorkspaceRenameParams } from "@wtm/protocol";
+import {
+  WorkspaceCloseParams,
+  WorkspaceCreateParams,
+  WorkspaceFocusParams,
+  WorkspaceRenameParams,
+} from "@wtm/protocol";
 import type { ControlSurface } from "../ControlSurface.js";
 import type { MethodDeps } from "./deps.js";
 
@@ -11,8 +16,10 @@ export function registerWorkspaceMethods(surface: ControlSurface, deps: MethodDe
 
   surface.register("workspace.rename", {
     schema: WorkspaceRenameParams,
-    handler: (_ctx, params) => {
-      deps.session.renameWorkspace(params.workspaceId, params.label);
+    // `label: null` は自動の名前に戻す（20260921-workspace-auto-label）。**await してから応答する**——await しないと、無い workspace の
+    // `RpcError("not_found")` の拒否が not_found の応答に届かず未処理の拒否になり、応答も `workspace.updated` より先に返る。
+    handler: async (_ctx, params) => {
+      await deps.session.renameWorkspace(params.workspaceId, params.label);
       return {};
     },
   });

@@ -26,6 +26,12 @@ export interface Workspace {
   groupId: string | null;
   /** サイドバーの Space パネルの 2 行目。git 管理外なら null。 */
   git: GitInfo | null;
+  /**
+   * true なら `label` はサーバが開いた場所から決めた**自動の名前**（リポジトリの根のフォルダ名。git の外ならその場所のフォルダ名・ホームなら `~`・
+   * フォルダ名の無い根ならパスそのもの）。false なら付けた名前（利用者が付けた名前と、worktree を開く・作る操作が渡した名前——ブランチ名、
+   * detached ならパスの末尾）。`label` はどちらでも表示の名前（20260921-workspace-auto-label の design D1・D2）。
+   */
+  autoLabel: boolean;
 }
 
 export interface Tab {

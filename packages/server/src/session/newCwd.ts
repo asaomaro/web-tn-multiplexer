@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 import type { NewCwd, Pane, PaneId } from "@wtm/protocol";
 import type { ProcessInspector } from "../platform/ProcessInspector.js";
 import type { TerminalManager } from "../terminal/TerminalManager.js";
+import { withTimeout } from "./withTimeout.js";
 
 /**
  * 新しい workspace・tab・分割を開く場所を決める（20260921-new-terminal-cwd。herdr の `terminal.new_cwd`）。
@@ -99,26 +100,10 @@ async function candidateFor(
 
 /**
  * 上限つきで読み直す。**上限を超えた・reject した**ら null（作成を失敗させない——Windows の部品が読めないと `foreground()` は reject する）。
- * 捨てた Promise が後から reject しても未処理の拒否にしない（`AgentMonitor.foregroundJobWithTimeout` と同じ）。
+ * 待ち方は `withTimeout`（名前を決める処理と共通。20260921-workspace-auto-label の review ラウンド 1）。
  */
-async function liveCwdWithin(paneId: PaneId, deps: NewCwdDeps): Promise<string | null> {
-  let real: Promise<string | null>;
-  try {
-    real = deps.liveCwd(paneId);
-  } catch {
-    return null;
-  }
-  real.catch(() => undefined);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), deps.liveCwdTimeoutMs ?? LIVE_CWD_TIMEOUT_MS);
-    timer.unref?.();
-  });
-  try {
-    return await Promise.race([real.catch(() => null), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
+function liveCwdWithin(paneId: PaneId, deps: NewCwdDeps): Promise<string | null> {
+  return withTimeout(() => deps.liveCwd(paneId), deps.liveCwdTimeoutMs ?? LIVE_CWD_TIMEOUT_MS);
 }
 
 /** ディレクトリで、入れる（`chdir` に要る検索＝実行の権限がある）か。どこかで失敗したら false。 */

@@ -17,7 +17,7 @@ function makeTab(overrides: Partial<Tab> = {}): Tab {
 }
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
-  return { id: "w1", label: "ws-A", cwd: "/", tabIds: ["t1"], activeTabId: "t1", groupId: null, git: null, ...overrides };
+  return { id: "w1", label: "ws-A", cwd: "/", tabIds: ["t1"], activeTabId: "t1", groupId: null, git: null, autoLabel: false, ...overrides };
 }
 
 function makeLookup(overrides: Partial<TargetLookup> = {}): TargetLookup {

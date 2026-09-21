@@ -53,6 +53,17 @@ describe("FsSessionFile", () => {
     expect(result).toEqual({ kind: "ok", data });
   });
 
+  // 20260921-workspace-auto-label：名前が自動かの印は任意の項目。以前の版の保存（印が無い）も読める。
+  it("workspace の autoLabel は有っても無くても読め、そのまま往復する", async () => {
+    const file = new FsSessionFile(dir);
+    const data = sample();
+    const withFlag: SessionFileData = { ...data, workspaces: [{ ...data.workspaces[0]!, autoLabel: true }] };
+    await file.save(withFlag);
+    expect(await file.load()).toEqual({ kind: "ok", data: withFlag });
+    await file.save(data); // 以前の版の形（印が無い）
+    expect(await file.load()).toEqual({ kind: "ok", data });
+  });
+
   it("reports corrupt for an unsupported schema version", async () => {
     const file = new FsSessionFile(dir);
     // 直接壊れたスキーマを書き込む（将来のバージョンからの読み込みなど）。

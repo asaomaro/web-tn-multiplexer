@@ -26,6 +26,11 @@ export interface SessionFileTab {
 export interface SessionFileWorkspace {
   id: string;
   label: string;
+  /**
+   * `label` が自動の名前か（20260921-workspace-auto-label）。**以前の版の保存には無い**——無ければ `label` が `"1"`（以前の既定の名前）なら自動と
+   * みなす（design D6）。古い版は知らない項目を捨てて読むので、足しても壊れたファイルにはならない。
+   */
+  autoLabel?: boolean | undefined;
   cwd: string;
   activeTabId: string;
   tabs: SessionFileTab[];
@@ -78,6 +83,7 @@ const SessionFileTabSchema: z.ZodType<SessionFileTab> = z.object({
 const SessionFileWorkspaceSchema: z.ZodType<SessionFileWorkspace> = z.object({
   id: z.string(),
   label: z.string(),
+  autoLabel: z.boolean().optional(),
   cwd: z.string(),
   activeTabId: z.string(),
   tabs: z.array(SessionFileTabSchema),

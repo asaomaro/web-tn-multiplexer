@@ -29,7 +29,7 @@ function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] 
 }
 
 function makeWorkspace(id: string, tabIds: string[], overrides: Partial<Workspace> = {}): Workspace {
-  return { id, label: id, cwd: "/", tabIds, activeTabId: tabIds[0] ?? "", groupId: null, git: null, ...overrides };
+  return { id, label: id, cwd: "/", tabIds, activeTabId: tabIds[0] ?? "", groupId: null, git: null, autoLabel: false, ...overrides };
 }
 function makeTab(id: string, workspaceId: string, paneId: string, overrides: Partial<Tab> = {}): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId }, focusedPaneId: paneId, zoomedPaneId: null, sizeOwnerClientId: null, ...overrides };

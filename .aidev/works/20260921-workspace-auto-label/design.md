@@ -30,8 +30,10 @@ git の外ならフォルダ名・ホームなら `~`・根ならパス）で、
     上限 < 猶予を構成で保証する案も、テストでは猶予を 5ms・上限を差し替えるので成り立たない。
   - 起動を同期で進める不変条件（`SessionService.ts:93-98` の注記）が前提にしているのは**分割**の孤児のテスト（前の work で実測）で、workspace の作成を
     通る既存のテスト（D24 の作り直し・`ensureNotEmpty`・名前の無い作成）はどれも結果を await しているので、予約の前の await では落ちない（coding で確かめる）。
-  - 待ちが増えるのは名前を決める時間だけ（ふつうは stat が数回で数 ms、上限 200ms）。「引き継ぐ」の読み直し（上限 200ms）の後に続くので、最悪は
-    両方の上限の和（400ms）＋起動の猶予。
+  - 待ちが増えるのは名前を決める時間だけ（ふつうは stat が数回で数 ms、上限 200ms）。「引き継ぐ」の読み直し（上限 200ms）の後に続くので、
+    上限の分は両方の和（400ms）＋起動の猶予。**ただし前の work の `resolveNewCwd` の `isUsableDir`（場所そのものの stat と access。上限なし）は
+    その間に最大 2 回走るので、場所そのものの stat が止まるファイルシステムでは 400ms で止まらない**（cross の点検）。名前の上限が効くのは、
+    場所そのものは読めて祖先の stat だけが遅い場合。
   - `recreateIfEmpty` の「空か」の確かめから commit までの間には、以前から起動の猶予（await）があるので、この await で新しい競走は生まれない。
 - **D5: 自動に戻すのは `workspace.rename { label: null }`**。pane の `pane.rename { label: null }` と同じ形（research F8）。別の方式（`workspace.reset_label`）
   は入口を増やすので退けた。空文字は今までどおり拒む（`min(1)`）——空と null の 2 通りの「無い」を作らない。
@@ -54,7 +56,7 @@ git の外ならフォルダ名・ホームなら `~`・根ならパス）で、
 - server：`packages/server/src/session/workspaceLabel.ts`（新規。規則）、`SessionModel.ts`（`reserveWorkspace`・一括版 `createWorkspace`・`renameWorkspace`・
   `restoreWorkspace` が `autoLabel` を扱う）、`SessionService.ts`（作成・名前変更・復元で名前を決める）、`persist/SessionFile.ts`（`autoLabel?`）、
   `composeServer.ts`（保存に `autoLabel`）、`surface/methods/workspace.ts`（**ハンドラを async にして `renameWorkspace` を await する**——`Promise` になるので、
-  await しないと `NotFoundError` が `ControlSurface` の not_found への変換（`ControlSurface.ts:39-45`）に届かず未処理の拒否になり、応答も
+  await しないと `RpcError("not_found")` の拒否が `ControlSurface` の not_found への変換（`ControlSurface.ts:39-45`）に届かず未処理の拒否になり、応答も
   `workspace.updated` より先に返る）
 - web：`store/view.ts:138`（`DialogContext` の `renameWorkspace` に `currentAutoLabel`）、`actions/ActionDispatcher.ts`（`renameWorkspaceById`・
   `confirmRenameWorkspace`。既存の `ActionDispatcher.test.ts:757` は context を `toEqual` で丸ごと比べているので直す）、`components/NameDialog.vue`（手掛かり）
@@ -148,7 +150,7 @@ restoreWorkspace(data: SessionFileWorkspace, autoLabel: boolean)  // 呼ぶ側�
 
 ```ts
 createWorkspace(cwd, label, newCwd?)   // label（trim して空でない）があれば付けた名前。無ければ場所を決めた後に autoWorkspaceLabel を await してから予約・起動（D4b）
-renameWorkspace(id, label: string | null): Promise<void>  // 要求の時点で workspace が無ければ NotFoundError（同期で）。世代を進める（D9）。
+renameWorkspace(id, label: string | null): Promise<void>  // 要求の時点で workspace が無ければ RpcError("not_found") で拒否（待つ前に確かめる）。世代を進める（D9）。
                                                           // null なら ws.cwd から自動の名前を決め直し、世代が同じなら入れて autoLabel: true
 restore(data)   // 各 workspace：autoLabel = data.autoLabel ?? (data.label === "1")。自動なら cwd から決め直す。付けた名前はそのまま
 ```
@@ -174,7 +176,17 @@ restore(data)   // 各 workspace：autoLabel = data.autoLabel ?? (data.label ===
 - 名前変更（付けた名前）：世代を 1 進め、`label` を入れ、`autoLabel: false`。`workspace.updated`。
 - 名前変更（null）：世代を 1 進め、`autoWorkspaceLabel(ws.cwd)` を await。戻ったとき、workspace がまだあり世代が同じなら、`label` を入れて
   `autoLabel: true`・`workspace.updated`。違えば何もしない。surface のハンドラはこれを await してから応答する。
-- 復元：`restore` の中で、自動の workspace の名前を先に（並べて）決めてから `restoreWorkspace` に渡す。付けた名前は決め直さない。
+- 復元：`restore` の中で、自動の workspace の名前を**1 つずつ**先に決めてから `restoreWorkspace` に渡す。付けた名前は決め直さない（review ラウンド 1。
+  一度に始めると上限のタイマーも一斉に始まって workspace が多いと全部が上限に達し——T6 の点検——、応答しないマウントの上に並んでいると止まった stat が
+  libuv のスレッドを塞ぎ合う）。**合計の期限（1 秒。`RESTORE_LABEL_BUDGET_MS`。単調な時計で測る）を過ぎたら、残りは根を探さずフォルダ名**（review ラウンド 2。
+  1 つずつだと遅いだけの fs でも数に比例して遅れる）。`/ws` の受け付けが遅れるのは最悪で期限と 1 回分の上限の和（1.2 秒）。
+- **上限を超えた後**（review ラウンド 1・2）：待つのをやめても出した stat は取り消されず、応答しないファイルシステムでは libuv のスレッド（既定 4 本）を塞ぐ。
+  そこで ① 上限を超えたらそのたどりはそれ以上 fs に問い合わせない（`findGitRoot` の `signal`）、② `SessionService` は、上限を超えた問い合わせが**まだ返って
+  いない間だけ**（`labelLookupsStuck`。`withTimeout` が渡す `settled` で数える）新しく根を探さずフォルダ名にする（作成・名前変更・復元のすべて）。
+  遅いだけなら返った時点で元に戻り、止まったままなら問い合わせを重ねない——塞がるスレッドは、止まったと分かった時点で出ていた問い合わせの数まで
+  （作成は 1 つずつ進むので、ふつうは 1 本）。時計は使わない（ラウンド 1 の 60 秒の冷却は、遅いだけの fs でも全部の場所をフォルダ名にしたので退けた）。
+  止まっている間はほかの場所もフォルダ名になること・復元の合計の期限は、requirements の非機能要件の例外（その場所のフォルダ名）より広い、受け入れた
+  割り切り（decisions D4）。
 - 同じリポジトリの workspace は同じ名前になる（requirements の対象外）。
 
 ## ドメイン固有の考慮
@@ -198,6 +210,8 @@ restore(data)   // 各 workspace：autoLabel = data.autoLabel ?? (data.label ===
 | 自動に戻す間に workspace が閉じられた | 何もしない（`renameWorkspace` は not_found にしない。要求の時点ではあった） |
 | 自動に戻す間に別の名前変更が来た | 後から来たほうが勝つ（D9） |
 | 復元のときに cwd が無い | 規則 1 のとおり親から探す（親がリポジトリの中なら根の名前、そうでなければ無い場所の末尾の名前）。復元は続ける |
+| 復元で自動の workspace が多い・fs が遅い | 1 つずつ決める（それぞれに上限）。合計 1 秒を過ぎたら残りはフォルダ名。警告を 1 度だけログへ（review ラウンド 3） |
+| 上限を超えた（応答しないマウント・遅い fs 等） | そのたどりは以後 fs に問い合わせない。その問い合わせが返るまで、作成・名前変更・復元の自動の名前は根を探さずフォルダ名。警告をログへ |
 
 ## テストの置き方
 

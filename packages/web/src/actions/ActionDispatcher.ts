@@ -254,10 +254,10 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
 
   /**
    * その場所を cwd に workspace を作って表示を移す（作成と一覧の共通の後半）。
-   * **label にブランチ名を渡す**（review ラウンド1）。渡さないとサーバの既定が `"1"` になり
-   * （`SessionService.createWorkspace`）、サイドバーは `workspace.label` しか出さないので
-   * **worktree を 2 つ作ると `1` が並んでどれがどれか分からなくなる**。2 行目のブランチ表示は
-   * `ahead > 0 || behind > 0` のときだけなので、**上流の無い新しい worktree は構造上そこに出ない**。
+   * **label にブランチ名を渡す**（review ラウンド1）。渡さなければサーバが worktree の根のフォルダ名を自動の名前にする
+   * （20260921-workspace-auto-label。以前は一律に `"1"` で、worktree を 2 つ作ると `1` が並んだ）が、ダイアログで選んだブランチ名のほうが
+   * 情報が多い（`feature/x` の `/` はフォルダ名では消える）ので渡す——herdr（名前を渡さない）との違い（`docs/herdr-parity.md` の H01b ④）。
+   * 2 行目のブランチ表示は `ahead > 0 || behind > 0` のときだけなので、**上流の無い新しい worktree は構造上そこに出ない**。
    */
   private openWorkspaceAt(cwd: string, label: string, hold: InputHold | undefined): void {
     // **場所を明示する経路なので `newCwd` を載せない**——方針に関わらず worktree の場所で開く（AC11・design D5）。
@@ -576,7 +576,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   renameWorkspaceById(workspaceId: string): void {
     const ws = this.session.workspaces.get(workspaceId);
     if (!ws) return;
-    this.view.openDialogWithContext({ kind: "renameWorkspace", workspaceId, currentLabel: ws.label });
+    this.view.openDialogWithContext({ kind: "renameWorkspace", workspaceId, currentLabel: ws.label, currentAutoLabel: ws.autoLabel });
   }
 
   /** T23（`NameDialog`）が名前の変更を確定したときに呼ぶ。`pane.rename` は空欄を「名前の消去」として送れる。 */
@@ -588,7 +588,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     void this.conn.request("pane.rename", { paneId: ctx.paneId, label: trimmed || null }).catch(() => this.view.toast("名前を変更できませんでした"));
   }
 
-  /** `tab.rename`/`workspace.rename` は空欄を受け付けない（サーバの検証）ので、空なら何もせず閉じるだけ。 */
+  /** `tab.rename` は空欄を受け付けない（サーバの検証）ので、空なら何もせず閉じるだけ。 */
   confirmRenameTab(label: string): void {
     const ctx = this.view.dialogContext;
     if (ctx?.kind !== "renameTab") return;
@@ -598,13 +598,20 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     void this.conn.request("tab.rename", { tabId: ctx.tabId, label: trimmed }).catch(() => this.view.toast("名前を変更できませんでした"));
   }
 
+  /**
+   * 空（空白だけ）なら `label: null`＝自動の名前に戻す。**自動の名前のまま変えずに確定したら送らない**——ダイアログは今の名前を全選択で開くので、
+   * Enter だけで自動の名前が付けた名前として固定され、以後追従しなくなるのを防ぐ（20260921-workspace-auto-label の design D7。新しい tab の D75 と同じ考え）。
+   * 自動かどうかは開いた時点の値で見る（開いている間にほかのブラウザで変わっても、変えずに確定したことに変わりはない）。
+   */
   confirmRenameWorkspace(label: string): void {
     const ctx = this.view.dialogContext;
     if (ctx?.kind !== "renameWorkspace") return;
     this.view.closeDialog();
     const trimmed = label.trim();
-    if (!trimmed) return;
-    void this.conn.request("workspace.rename", { workspaceId: ctx.workspaceId, label: trimmed }).catch(() => this.view.toast("名前を変更できませんでした"));
+    if (trimmed && ctx.currentAutoLabel && trimmed === ctx.currentLabel.trim()) return;
+    void this.conn
+      .request("workspace.rename", { workspaceId: ctx.workspaceId, label: trimmed || null })
+      .catch(() => this.view.toast("名前を変更できませんでした"));
   }
 
   // --- メニュー専用の操作（`KeyRouter` を経由しない。D56 の訂正 10） --------

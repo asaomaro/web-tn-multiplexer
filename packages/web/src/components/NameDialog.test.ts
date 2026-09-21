@@ -32,7 +32,7 @@ describe("NameDialog — 表示と入力初期値", () => {
   it("newTab は tab の数＋1 を入力済みにする（D55 の 12）", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted({ id: "w1", label: "w1", cwd: "/", tabIds: ["t1", "t2"], activeTabId: "t1", groupId: null, git: null });
+    session.workspaceUpserted({ id: "w1", label: "w1", cwd: "/", tabIds: ["t1", "t2"], activeTabId: "t1", groupId: null, git: null, autoLabel: false });
     const wrapper = mountDialog(makeActions());
     view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
     await wrapper.vm.$nextTick();
@@ -75,7 +75,7 @@ describe("NameDialog — 確定・取り消し", () => {
   it("Enter（submit）で該当する confirm* を呼ぶ（newTab）", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted({ id: "w1", label: "w1", cwd: "/", tabIds: [], activeTabId: "", groupId: null, git: null });
+    session.workspaceUpserted({ id: "w1", label: "w1", cwd: "/", tabIds: [], activeTabId: "", groupId: null, git: null, autoLabel: false });
     const actions = makeActions();
     const wrapper = mountDialog(actions);
     view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
@@ -89,7 +89,7 @@ describe("NameDialog — 確定・取り消し", () => {
   it("newTab はプリフィルのまま変更せず確定すると、confirmNewTab に空文字を渡す（herdr overlay_input.rs 971 行。D75）", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted({ id: "w1", label: "w1", cwd: "/", tabIds: ["t1", "t2"], activeTabId: "t1", groupId: null, git: null });
+    session.workspaceUpserted({ id: "w1", label: "w1", cwd: "/", tabIds: ["t1", "t2"], activeTabId: "t1", groupId: null, git: null, autoLabel: false });
     const actions = makeActions();
     const wrapper = mountDialog(actions);
     view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
@@ -117,7 +117,7 @@ describe("NameDialog — 確定・取り消し", () => {
     await wrapper.get("form").trigger("submit");
     expect(actions.confirmRenameTab).toHaveBeenCalledWith("new-tab-name");
 
-    view.openDialogWithContext({ kind: "renameWorkspace", workspaceId: "w1", currentLabel: "x" });
+    view.openDialogWithContext({ kind: "renameWorkspace", workspaceId: "w1", currentLabel: "x", currentAutoLabel: false });
     await wrapper.vm.$nextTick();
     await wrapper.get("input").setValue("new-ws-name");
     await wrapper.get("form").trigger("submit");
@@ -158,5 +158,36 @@ describe("NameDialog — 確定・取り消し", () => {
     await wrapper.get("dialog").trigger("click"); // dialog 要素自身へのクリック＝backdrop クリック相当
     expect(actions.confirmRenamePane).not.toHaveBeenCalled();
     expect(view.dialogContext).toBeNull();
+  });
+});
+
+// 20260921-workspace-auto-label：手掛かりは workspace の名前を変えるときだけ（tab・pane の見た目は変えない。design D8）。
+describe("NameDialog — workspace の自動の名前の手掛かり", () => {
+  it("workspace のときだけ、空で確定すると自動の名前に戻ることを入力欄に結んで示す。自動の名前ならそれも添える", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "renameWorkspace", workspaceId: "w1", currentLabel: "my-repo", currentAutoLabel: true });
+    await wrapper.vm.$nextTick();
+    const hint = wrapper.get("#name-dialog-hint");
+    expect(hint.text()).toContain("空にして確定すると、自動の名前");
+    expect(hint.text()).toContain("いまは自動の名前です");
+    expect(wrapper.get("input").attributes("aria-describedby")).toBe("name-dialog-hint");
+
+    view.closeDialog();
+    view.openDialogWithContext({ kind: "renameWorkspace", workspaceId: "w1", currentLabel: "mine", currentAutoLabel: false });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get("#name-dialog-hint").text()).not.toContain("いまは自動の名前です");
+
+    for (const ctx of [
+      { kind: "renameTab" as const, tabId: "t1", currentLabel: "1" },
+      { kind: "renamePane" as const, paneId: "p1", currentLabel: "" },
+      { kind: "newTab" as const, workspaceId: "w1" },
+    ]) {
+      view.closeDialog();
+      view.openDialogWithContext(ctx);
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find("#name-dialog-hint").exists(), `${ctx.kind} には出さない`).toBe(false);
+      expect(wrapper.get("input").attributes("aria-describedby")).toBeUndefined();
+    }
   });
 });

@@ -10,7 +10,7 @@ beforeEach(() => {
 });
 
 function makeWorkspace(id: string): Workspace {
-  return { id, label: id, cwd: "/", tabIds: [], activeTabId: "", groupId: null, git: null };
+  return { id, label: id, cwd: "/", tabIds: [], activeTabId: "", groupId: null, git: null, autoLabel: false };
 }
 function makeTab(id: string, workspaceId: string): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId: "p1" }, focusedPaneId: "p1", zoomedPaneId: null, sizeOwnerClientId: null };

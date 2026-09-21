@@ -100,7 +100,8 @@ export interface WorkspaceCreateResult extends CwdFallbackResult {
   pane: Pane;
 }
 
-export const WorkspaceRenameParams = z.object({ workspaceId, label: z.string().min(1) });
+/** `label: null` で自動の名前に戻す（pane の名前と同じ形。20260921-workspace-auto-label の design D5）。 */
+export const WorkspaceRenameParams = z.object({ workspaceId, label: z.string().min(1).nullable() });
 export type WorkspaceRenameParams = z.infer<typeof WorkspaceRenameParams>;
 
 export const WorkspaceFocusParams = z.object({ workspaceId });

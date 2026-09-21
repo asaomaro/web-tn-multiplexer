@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { repairView, type SessionLike, type ViewTarget } from "./viewRepair.js";
 
 function ws(id: string, tabIds: string[], activeTabId = tabIds[0] ?? ""): Workspace {
-  return { id, label: id, cwd: "/", tabIds, activeTabId, groupId: null, git: null };
+  return { id, label: id, cwd: "/", tabIds, activeTabId, groupId: null, git: null, autoLabel: false };
 }
 function tab(id: string, workspaceId: string, layout: LayoutNode, focusedPaneId: string): Tab {
   return { id, workspaceId, label: id, layout, focusedPaneId, zoomedPaneId: null, sizeOwnerClientId: null };

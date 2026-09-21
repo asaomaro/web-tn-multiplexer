@@ -159,7 +159,7 @@ export class SessionModel {
    * （呼び出し側が PTY の起動を確認してから `commitWorkspace` で入れる。D37「成功を確認してから
    * モデルを更新する順にする」——`splitPane` の `reserveNextPaneId` と同じ考え方を workspace/tab にも揃えた）。
    */
-  reserveWorkspace(cwd: string, label: string, init: NewPaneInit): CreateWorkspaceResult {
+  reserveWorkspace(cwd: string, label: string, autoLabel: boolean, init: NewPaneInit): CreateWorkspaceResult {
     const workspaceId = this.nextId("w");
     const tabId = this.nextId("t");
     const paneId = this.nextId("p");
@@ -182,6 +182,7 @@ export class SessionModel {
       activeTabId: tabId,
       groupId: null,
       git: null,
+      autoLabel,
     };
     return { workspace, tab, pane };
   }
@@ -195,16 +196,18 @@ export class SessionModel {
   }
 
   /** workspace を、最初の tab・pane ごと作る（`workspace.create`）。PTY の起動確認が要らない
-   *  呼び出し元（テスト等）向けの一括版。実運用の `SessionService` は `reserveWorkspace`/`commitWorkspace` を使う。 */
-  createWorkspace(cwd: string, label: string, init: NewPaneInit): CreateWorkspaceResult {
-    const result = this.reserveWorkspace(cwd, label, init);
+   *  呼び出し元（テスト等）向けの一括版。実運用の `SessionService` は `reserveWorkspace`/`commitWorkspace` を使う。
+   *  名前は既定で付けた名前（`autoLabel: false`。テストが名前を渡して作るため）。 */
+  createWorkspace(cwd: string, label: string, init: NewPaneInit, autoLabel = false): CreateWorkspaceResult {
+    const result = this.reserveWorkspace(cwd, label, autoLabel, init);
     this.commitWorkspace(result);
     return result;
   }
 
-  renameWorkspace(id: WorkspaceId, label: string): Workspace {
+  /** `autoLabel` は省略できない——入れ忘れると自動の名前が付けた名前として固定される（20260921-workspace-auto-label の design D2）。 */
+  renameWorkspace(id: WorkspaceId, label: string, autoLabel: boolean): Workspace {
     const ws = this.requireWorkspace(id);
-    const updated = { ...ws, label };
+    const updated = { ...ws, label, autoLabel };
     this.workspaces.set(id, updated);
     return updated;
   }
@@ -522,7 +525,7 @@ export class SessionModel {
    * pane は既定で `status: 'running'` とし、実際にシェルを起動できたかどうかは `SessionService` が
    * `markPaneFailed` で反映する（design「再起動後の復元」）。
    */
-  restoreWorkspace(data: SessionFileWorkspace): void {
+  restoreWorkspace(data: SessionFileWorkspace, autoLabel: boolean): void {
     const workspace: Workspace = {
       id: data.id,
       label: data.label,
@@ -531,6 +534,7 @@ export class SessionModel {
       activeTabId: data.activeTabId,
       groupId: null,
       git: null,
+      autoLabel, // 呼ぶ側（`SessionService.restore`）が決める
     };
     this.workspaces.set(workspace.id, workspace);
     for (const tabData of data.tabs) {
