@@ -1,0 +1,12 @@
+schema: 11
+slug: herdr-settings-gaps
+current: tasks
+approved: [requirements, research, design, tasks]
+mode: autonomous
+profile: full
+humanGates: []
+maxSendBacks: 3
+dependsOn: []
+harnessRev: unknown
+backlog: product-roadmap.md
+backlogItem: サイドバー幅・折りたたみ状態を保存する: UI は既にある（ドラッグで変えられる・prefix+b で畳める）のに ref() に置いているだけで、再読み込みのたびに 240px・展開に戻る
