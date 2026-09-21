@@ -11,6 +11,7 @@ import { RendererPool, type WebglAddonLike } from "../term/RendererPool.js";
 import { TerminalRegistry } from "../term/TerminalRegistry.js";
 import { MouseBridge } from "../term/MouseBridge.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import { InputGate } from "../net/InputGate.js";
 import { ActionDispatcher } from "./ActionDispatcher.js";
@@ -105,7 +106,8 @@ describe("ActionDispatcher — 分割・フォーカス移動・入れ替え", (
     const { dispatcher } = makeDispatcher(conn);
     dispatcher.run({ type: "split", dir: "right" });
     await flush();
-    expect(conn.requests).toEqual([["pane.split", { paneId: "p1", direction: "right" }]]);
+    // 既定の方針は「引き継ぐ」。分割の元の pane は `paneId` そのものなので `sourcePaneId` は載せない（20260921-new-terminal-cwd）。
+    expect(conn.requests).toEqual([["pane.split", { paneId: "p1", direction: "right", newCwd: { policy: "follow" } }]]);
     expect(view.focusedPaneId).toBe("p2");
   });
 
@@ -324,7 +326,7 @@ describe("ActionDispatcher — newTab（ダイアログを開く。herdr の pro
     const { dispatcher } = makeDispatcher(conn);
     dispatcher.run({ type: "newTab" });
     dispatcher.confirmNewTab("my tab");
-    expect(conn.requests).toEqual([["tab.create", { workspaceId: "w1", label: "my tab" }]]);
+    expect(conn.requests).toEqual([["tab.create", { workspaceId: "w1", label: "my tab", newCwd: { policy: "follow" } }]]);
     await flush();
     expect(view.tabId).toBe("t9");
     expect(view.focusedPaneId).toBe("p9");
@@ -338,7 +340,7 @@ describe("ActionDispatcher — newTab（ダイアログを開く。herdr の pro
     const { dispatcher } = makeDispatcher(conn);
     dispatcher.run({ type: "newTab" });
     dispatcher.confirmNewTab("   ");
-    expect(conn.requests).toEqual([["tab.create", { workspaceId: "w1" }]]);
+    expect(conn.requests).toEqual([["tab.create", { workspaceId: "w1", newCwd: { policy: "follow" } }]]);
   });
 });
 
@@ -348,7 +350,7 @@ describe("ActionDispatcher — newWorkspace（名前を尋ねず直接作る。h
     conn.resolveWith["workspace.create"] = { workspace: { id: "w9" }, tab: { id: "t9" }, pane: { id: "p9" } };
     const view = useViewStore(pinia);
     makeDispatcher(conn).dispatcher.run({ type: "newWorkspace" });
-    expect(conn.requests).toEqual([["workspace.create", {}]]);
+    expect(conn.requests).toEqual([["workspace.create", { newCwd: { policy: "follow" } }]]); // 焦点の pane が無い → 元の pane を載せない
     await flush();
     expect(view.workspaceId).toBe("w9");
     expect(view.tabId).toBe("t9");
@@ -712,7 +714,7 @@ describe("ActionDispatcher — T22 向けの「任意の対象」メソッド（
 
     dispatcher.splitPane("p2", "right");
     await flush();
-    expect(conn.requests).toContainEqual(["pane.split", { paneId: "p2", direction: "right" }]);
+    expect(conn.requests).toContainEqual(["pane.split", { paneId: "p2", direction: "right", newCwd: { policy: "follow" } }]);
     expect(view.focusedPaneId).toBe("p9"); // 新しい pane にはフォーカスする（AC-I4 は維持）
 
     dispatcher.zoomPane("p2");
@@ -921,5 +923,125 @@ describe("ActionDispatcher — 通知", () => {
   it("通知を繋いでいなくても落ちない（テスト・古い呼び出し元）", () => {
     const { dispatcher } = makeDispatcher(makeConnection());
     expect(() => dispatcher.run({ type: "nextNotification" })).not.toThrow();
+  });
+});
+
+// 新しく開く場所（20260921-new-terminal-cwd）。方針はこのブラウザの設定、「引き継ぐ」の元の pane は design D7。
+describe("ActionDispatcher — 新しく開く場所（newCwd）", () => {
+  const FALLBACK_TOAST = "新しく開く場所が使えないため、代わりの場所で開きました（設定の「端末」で確かめてください）";
+
+  /** w1（t1: p1）と w2（t2: p2）。焦点は p1。 */
+  function twoWorkspaces(): { session: ReturnType<typeof useSessionStore>; view: ReturnType<typeof useViewStore> } {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w2", ["t2"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.tabUpserted(makeTab("t2", "w2", "p2"));
+    session.paneUpserted(makePane("p1", "t1"));
+    session.paneUpserted(makePane("p2", "t2"));
+    view.setView("w1", "t1");
+    view.focusPane("p1");
+    return { session, view };
+  }
+
+  it("引き継ぐ：新しい workspace はこのブラウザの焦点の pane を元の pane として載せる（AC1）", () => {
+    const conn = makeConnection();
+    twoWorkspaces();
+    makeDispatcher(conn).dispatcher.run({ type: "newWorkspace" });
+    expect(conn.requests).toEqual([["workspace.create", { newCwd: { policy: "follow", sourcePaneId: "p1" } }]]);
+  });
+
+  it("引き継ぐ：新しい tab は、焦点の pane が作る先の workspace にあるときだけ元の pane を載せる（AC2・design D7）", () => {
+    const conn = makeConnection();
+    const { view } = twoWorkspaces();
+    const { dispatcher } = makeDispatcher(conn);
+    view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
+    dispatcher.confirmNewTab("");
+    view.openDialogWithContext({ kind: "newTab", workspaceId: "w2" }); // 焦点の p1 は w1 の pane
+    dispatcher.confirmNewTab("");
+    expect(conn.requests).toEqual([
+      ["tab.create", { workspaceId: "w1", newCwd: { policy: "follow", sourcePaneId: "p1" } }],
+      ["tab.create", { workspaceId: "w2", newCwd: { policy: "follow" } }],
+    ]);
+  });
+
+  // 焦点はダイアログを閉じた**後**で読む——開いている間に焦点の pane が閉じられると、閉じたときに戻す先（残った pane）へ
+  // 差し替わる（D97）。閉じる前に読むと、閉じた pane を拾って元の pane が無いことになり、workspace の場所で開いてしまう。
+  it("引き継ぐ：ダイアログの間に焦点の pane が閉じられたら、戻った先の pane を元の pane にする（design D7）", () => {
+    const conn = makeConnection();
+    const { session, view } = twoWorkspaces();
+    session.paneUpserted(makePane("p3", "t1"));
+    const { dispatcher } = makeDispatcher(conn);
+    view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
+    session.paneClosed("p1");
+    view.retargetPreDialogFocus("p3"); // StoreAdapter が閉じた pane の代わりに差し替える（store/StoreAdapter.ts）
+    dispatcher.confirmNewTab("");
+    expect(conn.requests).toEqual([["tab.create", { workspaceId: "w1", newCwd: { policy: "follow", sourcePaneId: "p3" } }]]);
+  });
+
+  it("引き継ぐ：分割は元の pane を載せない（サーバが分割する pane を元にする。AC3）", () => {
+    const conn = makeConnection();
+    twoWorkspaces();
+    makeDispatcher(conn).dispatcher.splitPane("p2", "down"); // 焦点（p1）とは別の pane
+    expect(conn.requests).toEqual([["pane.split", { paneId: "p2", direction: "down", newCwd: { policy: "follow" } }]]);
+  });
+
+  it("方針を変えると、次に作る workspace・tab・分割から効き、既に開いている pane には何も送らない（AC6〜AC8・AC10）", () => {
+    const conn = makeConnection();
+    const { view } = twoWorkspaces();
+    const settings = useSettingsStore(pinia);
+    const { dispatcher } = makeDispatcher(conn);
+    settings.setNewCwdPolicy("home");
+    settings.setNewCwdPath("~/work");
+    expect(conn.requests, "設定を変えただけでは何も送らない").toEqual([]);
+    dispatcher.run({ type: "newWorkspace" });
+    settings.setNewCwdPolicy("path");
+    view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
+    dispatcher.confirmNewTab("");
+    settings.setNewCwdPolicy("current");
+    dispatcher.splitPane("p1", "right");
+    expect(conn.requests.map(([, params]) => (params as { newCwd?: unknown }).newCwd)).toEqual([
+      { policy: "home" },
+      { policy: "path", path: "~/work" },
+      { policy: "current" },
+    ]);
+  });
+
+  // AC11：worktree を開く経路は場所を明示するので、方針が何でも `newCwd` を載せない（サーバでは `cwd` が勝つ）。
+  it("worktree を開く経路は、方針に関わらず cwd だけを送る（AC11）", () => {
+    const conn = makeConnection();
+    const settings = useSettingsStore(pinia);
+    settings.setNewCwdPolicy("path");
+    settings.setNewCwdPath("/elsewhere");
+    const { dispatcher } = makeDispatcher(conn);
+    useViewStore(pinia).openDialogWithContext({ kind: "worktreeOpen", workspaceId: "w1", entries: [{ path: "/w/a", branch: "a" }] });
+    dispatcher.confirmWorktreeOpen("/w/a");
+    expect(conn.requests).toEqual([["workspace.create", { cwd: "/w/a", label: "a" }]]);
+  });
+
+  it("応答に cwdFallback があれば知らせ、無ければ知らせない（AC9・AC5）", async () => {
+    const conn = makeConnection();
+    const { view } = twoWorkspaces();
+    const { dispatcher } = makeDispatcher(conn);
+    conn.resolveWith["workspace.create"] = { workspace: { id: "w9" }, tab: { id: "t9" }, pane: { id: "p9" } };
+    conn.resolveWith["tab.create"] = { tab: { id: "t8" }, pane: { id: "p8" } };
+    conn.resolveWith["pane.split"] = { pane: { id: "p7" } };
+    dispatcher.run({ type: "newWorkspace" });
+    view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
+    dispatcher.confirmNewTab("");
+    dispatcher.splitPane("p1", "right");
+    await flush();
+    expect(view.toasts.filter((t) => t.message === FALLBACK_TOAST), "cwdFallback が無ければ知らせない").toHaveLength(0);
+
+    conn.resolveWith["workspace.create"] = { workspace: { id: "w9" }, tab: { id: "t9" }, pane: { id: "p9" }, cwdFallback: true };
+    conn.resolveWith["tab.create"] = { tab: { id: "t8" }, pane: { id: "p8" }, cwdFallback: true };
+    conn.resolveWith["pane.split"] = { pane: { id: "p7" }, cwdFallback: true };
+    dispatcher.run({ type: "newWorkspace" });
+    view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
+    dispatcher.confirmNewTab("");
+    dispatcher.splitPane("p1", "right");
+    await flush();
+    expect(view.toasts.filter((t) => t.message === FALLBACK_TOAST), "3 つの作成それぞれで知らせる").toHaveLength(3);
   });
 });

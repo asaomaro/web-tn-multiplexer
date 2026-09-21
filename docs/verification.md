@@ -52,6 +52,14 @@ pnpm --filter @wtm/e2e test
   スマートフォン等のモバイルのブラウザが 1,000 行**。ブラウザごとに設定（`prefix+s` の「端末」、モバイルは上のバーの「設定」）で
   選べ、数を選んだときは `--scrollback` の値で頭を押さえる（サーバのミラーは `--scrollback` の行数を持つ。メモリの目安は `docs/tls-setup.md`
   「scrollback の行数とメモリ（`--scrollback`）」）。
+- **新しい workspace・tab・分割は、既定で「いま見ている pane の、いまの場所」で開く**（herdr の `terminal.new_cwd` の `follow`。
+  20260921-new-terminal-cwd）。pane で `cd` してから作ると、その `cd` した先で開く。ブラウザごとの設定（`prefix+s` の「端末」の
+  「新しく開く場所」）で、ホーム・サーバを起動した場所・指定した場所（絶対パスか `~/` で始まるパス。`~` だけならホーム。`~user` は
+  使えない）に変えられる。選んだ場所が使えない（無い・ディレクトリでない・入れない。「指定した場所」が空・相対パスのときも）ときは
+  以前と同じ場所（workspace はサーバを起動した場所、tab はその workspace の場所、分割は元の pane の場所。そこも使えなければサーバを
+  起動した場所）で開いてトーストで知らせる。「引き継ぐ」で元の pane の場所が分からない・消えていたときは知らせない（利用者の誤りでは
+  ないので）。worktree を開く操作は、方針に関わらず worktree の場所で開く。「いまの場所」の分かり方は OS で違う（Linux は前面の
+  プロセスの cwd を読む。macOS と Windows ネイティブはシェルが OSC 7 で知らせた場所だけ——「既知の制約」）。
 
 ## Linux（CI・手元）
 
@@ -104,6 +112,14 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       もう一度 `seq 1 6000` を実行する。期待：先頭が 4000 の少し手前（例 `3951`）。ブラウザの端末の行数は端末を作ったときに
       決まり、pane の id は起動し直しても同じなので、開いたままのページの端末は 5,000 行のまま（`docs/tls-setup.md`
       「scrollback の行数とメモリ（`--scrollback`）」）。
+- [ ] 新しく開く場所（20260921-new-terminal-cwd）：設定の「端末」の「新しく開く場所」が「引き継ぐ」（既定）のまま、pane で
+      `mkdir -p /tmp/wtm-a && cd /tmp/wtm-a` を実行してから `Ctrl+B c`（名前を尋ねるので Enter）で新しい tab を開き、`pwd` を実行する。
+      期待：`/tmp/wtm-a`。元の pane に戻り、`Ctrl+B v`（分割）と `Ctrl+B N`（新しい workspace）でも同じく `pwd` が `/tmp/wtm-a`。
+      pane の中で `bash` を入れ子に起動して `cd /tmp` してから作っても `/tmp`（いちばん外側のシェルではなく、前面のプロセスの場所を読む）。
+      次に設定で「ホーム」「サーバを起動した場所」を選び、それぞれ新しい tab で `pwd` がホーム・`wtm serve` を起動した場所になる
+      （既に開いている pane の場所は変わらない）。「指定した場所」を選び、入力欄に `~/` を入れて Enter（保存されるだけでダイアログは
+      閉じない）→ Esc で閉じて新しい tab を開く。期待：`pwd` がホーム。入力欄を `/nope` にして同じように新しい tab を開く。期待：
+      「新しく開く場所が使えないため、代わりの場所で開きました（設定の「端末」で確かめてください）」のトーストが出て、その workspace の場所で開く。最後に「引き継ぐ」に戻す。worktree を開く操作（workspace のメニュー）は、どの方針でも worktree の場所で開く。
 - [ ] claude・codex 以外のエージェント（AC6。実物で確かめたのは Claude Code と Codex だけ）：`wtm serve` の起動時のログの行
       `{"ts":"…","level":"info","msg":"agent manifests loaded","ok":22,"total":22}` で、判定のルールが 22 種すべて読めている
       ことを確かめる。手元で使っているエージェントがあれば 2〜3 種（例：`gemini`（Gemini CLI）・`opencode`（OpenCode）・
@@ -142,11 +158,13 @@ WSL2 を経由せず、Windows 上で直接 `node.exe` を実行して `wtm serv
 - [ ] `wtm serve` を起動し、表示された `wtm: open http://127.0.0.1:7780/…` の URL でログインし（token の扱いは「Linux」の
       最初の項目と同じ）、シェル（既定は `powershell.exe`。`--shell` で変えられる。design「起動オプション（`wtm serve`）」）が
       実際に起動して入出力できる。
-- [ ] pane の cwd 追従を確認する：design「再起動後の復元」の「pane の cwd」のとおり、**Windows は `/proc` が無いため
-      起動時の cwd と、シェルが OSC 7 で知らせた cwd にしか追従できない**（herdr も部分対応。
-      `[H]windows-beta.mdx:62-70`）——シェルを `cd` した後、新しい pane・tab を作ったときの cwd が
-      「追従していない（起動時のままか、直前の OSC 7 の値）」ことを**むしろ既知の制約として確認する**
-      （追従しないこと自体は不具合ではない）。
+- [ ] pane の cwd 追従と、新しく開く場所の「引き継ぐ」（20260921-new-terminal-cwd）を確認する：**Windows は前面のプロセスの cwd を
+      読めない**ので、「いまの場所」は**シェルが OSC 7 で知らせた場所**だけ（herdr も部分対応。`[H]windows-beta.mdx:62-70`）。
+      既定の `powershell.exe` は OSC 7 を出さないので、pane で `cd C:\Windows` してから `Ctrl+B c` で新しい tab を開き `Get-Location`
+      を実行すると、**元の pane を開いた場所**になる（`cd` した先ではない）。これは既知の制約で、不具合ではない（以前の新しい tab は
+      workspace を作った場所、新しい workspace はサーバを起動した場所で開いていた）。プロンプトで OSC 7 を出すようにしたシェルでは
+      `cd` した先で開くはず（`file://host/C:/…` の形を `C:\…` に直して使う。20260921-new-terminal-cwd の decisions D7。**実機では未検証**——確かめたらここを更新する）。
+      設定を「ホーム」にした新しい tab が `%USERPROFILE%` で開くことも確かめる。
 - [ ] node-pty の既知の不具合（research.md F8.1）が実害として出ないか確認する：
       シェル終了ごとに `conhost.exe` が残らないか（#965）、pane を閉じた直後に不具合が起きないか
       （kill の競合 #952・#967）、閉じた pane の resize で例外にならないか（#827）。
@@ -646,9 +664,19 @@ pnpm --filter @wtm/e2e exec playwright test performance agent-detection --headed
   その pane のメニューを開けない（PC のブラウザから同じ pane のメニューを開いて「右クリックを herdr に戻す」を選ぶか、アプリを
   終える）。
 
-ほかに、各節に書いた制約：Windows ネイティブの pane の cwd の追従（「Windows ネイティブ（WSL2 の母艦の Windows で直接）」）・
-xterm.js のモバイルの未解決課題（「実機（iOS Safari・Android Chrome。AC12）」の「既知の未解決課題」）・リバースプロキシの
-無通信のタイムアウト（`docs/tls-setup.md`「リバースプロキシの後ろに置く」）。
+- **macOS と Windows ネイティブでは、新しく開く場所の「引き継ぐ」が `cd` に追従しない（シェルが OSC 7 で知らせない限り）**
+  （20260921-new-terminal-cwd の design D2・D4）。前面のプロセスの cwd を読めるのは Linux（WSL2 を含む）だけで、ほかの OS では
+  シェルが OSC 7 で知らせた場所を使い、知らせなければ**元の pane を開いた場所**で開く（以前より元の pane に近い）。Windows の既定の
+  `powershell.exe` は OSC 7 を出さない。macOS の zsh が出すかは `wtm serve` の起動のしかたによる（pane は `wtm serve` の環境変数を
+  引き継ぐので、ターミナル.app から起動すると `TERM_PROGRAM` が渡り、`/etc/zshrc_Apple_Terminal` が出す。未検証）。`cd` した先で
+  開きたければ、プロンプトで OSC 7 を出すようにするか、設定の「新しく開く場所」を「指定した場所」にする。確かめ方は「Windows ネイティブ
+  （WSL2 の母艦の Windows で直接）」の cwd の項目。
+- **Linux（WSL2 を含む）では、前面でプログラムが動いている間の「引き継ぐ」は、そのプログラムの場所になる**（エージェントならそれを
+  起動した場所。前面のプロセスの cwd を読むため。20260921-new-terminal-cwd の design「ドメイン固有の考慮」）。シェルの場所で開きたければ、
+  プログラムを終えてから作る。
+
+ほかに、各節に書いた制約：xterm.js のモバイルの未解決課題（「実機（iOS Safari・Android Chrome。AC12）」の「既知の未解決課題」）・
+リバースプロキシの無通信のタイムアウト（`docs/tls-setup.md`「リバースプロキシの後ろに置く」）。
 
 ## 未検証のまま見送った項目（`docs/herdr-parity.md` の対象外一覧とあわせて参照）
 

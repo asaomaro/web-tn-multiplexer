@@ -4,7 +4,7 @@ import { DeviceKindKey, NotificationControllerKey } from "../injection.js";
 import type { DesktopPermission } from "../notify/ports.js";
 import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
-import { useSettingsStore } from "../store/settings.js";
+import { useSettingsStore, type NewCwdPolicy } from "../store/settings.js";
 import { DISPLAY_STATES, stateGlyph, stateLabel } from "../store/stateIndicator.js";
 import { useViewStore } from "../store/view.js";
 import { effectiveScrollback, scrollbackChoices, type ScrollbackPref } from "../term/scrollback.js";
@@ -40,6 +40,11 @@ const kind = inject(DeviceKindKey, "desktop");
 
 const dialogEl = ref<HTMLDialogElement | null>(null);
 const firstSwitch = ref<HTMLButtonElement | null>(null);
+/**
+ * 「指定した場所」の入力欄の下書き（`NameDialog` と同じく ref と v-model で持つ）。`:value` を保存値へ一方向に結ぶと、ほかの状態
+ * （通知の可否・サーバの上限）で描き直されるたびに、打ちかけの文字が保存値で上書きされる（Vue は描き直しのたびに value を当て直す）。
+ */
+const pathDraft = ref(settings.newCwdPath);
 
 /**
  * 許可の状態は**明示的に読み直す**（`Notification.permission` は reactive ではないので、
@@ -84,6 +89,7 @@ watch(
   (ctx) => {
     if (ctx?.kind === "settings") {
       refreshPermission(); // 開くたびに読み直す（前回開いてから外で変わっているかもしれない）
+      pathDraft.value = settings.newCwdPath; // 開くたびに保存値から始める
       void nextTick(() => {
         dialogEl.value?.showModal();
         firstSwitch.value?.focus();
@@ -152,7 +158,39 @@ function chooseScrollback(v: ScrollbackPref): void {
   settings.setScrollback(v);
 }
 
+/**
+ * 新しく開く場所（20260921-new-terminal-cwd の design D8。herdr の `terminal.new_cwd`）。方針は**選んだ時点で保存**し、
+ * 効くのは次に開く workspace・tab・分割から（AC10）。
+ */
+const newCwdChoices: readonly { value: NewCwdPolicy; label: string }[] = [
+  { value: "follow", label: "引き継ぐ（いま見ている pane の場所）" },
+  { value: "home", label: "ホーム" },
+  { value: "current", label: "サーバを起動した場所" },
+  { value: "path", label: "指定した場所" },
+];
+
+function chooseNewCwd(v: NewCwdPolicy): void {
+  settings.setNewCwdPolicy(v);
+}
+
+/**
+ * パスは**入れ終えた時点**で保存し、打ちかけの途中（`input`）では保存しない——途中の値で開いてしまわない（AC-I2）。
+ * 入れ終えた時点は、入力欄を離れたとき（`change`）・Enter・**ダイアログを閉じたとき**（design D8 の「離れたとき」。decisions D8）。
+ * 閉じる操作（Esc・閉じる・背景）は取り消しではない——ほかの設定と同じく、閉じても入れた結果は残る（AC-I1）。閉じると入力欄から
+ * フォーカスが外れて Chromium は `change` を立てるが、立つかどうかをブラウザに任せず、閉じる側で確定する（同じ値なら何もしない）。
+ */
+function commitNewCwdPath(): void {
+  if (pathDraft.value !== settings.newCwdPath) settings.setNewCwdPath(pathDraft.value);
+}
+
+/** Enter で確定する。**IME の変換を確定する Enter では保存しない**（Safari は確定の keydown で isComposing が false なので keyCode も見る。`KeyInputController` と同じ）。 */
+function onPathEnter(ev: KeyboardEvent): void {
+  if (ev.isComposing || ev.keyCode === 229) return;
+  commitNewCwdPath();
+}
+
 function cancel(): void {
+  commitNewCwdPath(); // 「指定した場所」以外では入力欄が使えず、下書きは保存値のまま（開くたびに戻す）なので何もしない
   view.closeDialog();
 }
 
@@ -233,6 +271,35 @@ function onNativeCancel(ev: Event): void {
           <input type="radio" name="settings-scrollback" :value="n" :checked="selectedScrollback === n" @change="chooseScrollback(n)" />
           <span>{{ formatLines(n) }} 行</span>
         </label>
+      </fieldset>
+      <fieldset class="settings-fieldset">
+        <legend class="settings-legend">新しく開く場所（workspace・tab・分割）</legend>
+        <label v-for="c in newCwdChoices" :key="c.value" class="settings-radio">
+          <input
+            type="radio"
+            name="settings-new-cwd"
+            :value="c.value"
+            :checked="settings.newCwdPolicy === c.value"
+            @change="chooseNewCwd(c.value)"
+          />
+          <span>{{ c.label }}</span>
+        </label>
+        <input
+          v-model="pathDraft"
+          type="text"
+          class="settings-path"
+          aria-label="指定した場所のパス"
+          aria-describedby="settings-path-note"
+          placeholder="~/work"
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          :disabled="settings.newCwdPolicy !== 'path'"
+          @change="commitNewCwdPath"
+          @keydown.enter="onPathEnter"
+        />
+        <p id="settings-path-note" class="settings-note">絶対パスか ~/ で始まるパス（~ だけならホーム）。使えない場所なら、代わりの場所で開いて知らせます。</p>
       </fieldset>
     </section>
     <p class="settings-hint">この設定はこのブラウザにだけ効きます。Esc か「閉じる」で閉じます。</p>
@@ -353,6 +420,17 @@ function onNativeCancel(ev: Event): void {
 .settings-legend {
   padding: 0;
   margin-bottom: 0.4em;
+}
+.settings-fieldset + .settings-fieldset {
+  margin-top: 1em;
+}
+/* 見た目は UA の既定のまま（ほかの入力欄——`NameDialog` 等——と同じ）。背景を透かして枠を薄くすると、値が入って placeholder が
+   消えたとき欄であることを示すのが薄い枠だけになる（WCAG 1.4.11）。 */
+.settings-path {
+  box-sizing: border-box;
+  width: 100%;
+  font: inherit;
+  padding: 0.3em 0.5em;
 }
 .settings-radio {
   display: flex;

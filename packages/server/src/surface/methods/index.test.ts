@@ -14,6 +14,7 @@ import { DefaultSizeAuthority } from "../../clients/SizeAuthority.js";
 import { ControlSurface } from "../ControlSurface.js";
 import { registerAllMethods } from "./index.js";
 import type { WorktreeService } from "../../git/WorktreeService.js";
+import type { NewCwdDeps } from "../../session/newCwd.js";
 
 class FakeFanout implements OutputFanout {
   readonly subscribed: string[] = [];
@@ -90,7 +91,7 @@ class NoopPersist implements PersistScheduler {
 const HOST_INFO: HostInfo = { os: "linux", windowsBuild: null, hostname: "test" };
 const fakeSink = (clientId: string): ClientSink => ({ clientId, sendOutput: () => undefined, sendSnapshot: () => undefined, bufferedAmount: 0 });
 
-function makeContext() {
+function makeContext(newCwdDeps?: NewCwdDeps) {
   const terminals = new FakeTerminalManager();
   const session = new SessionService({
     model: new SessionModel(),
@@ -102,6 +103,7 @@ function makeContext() {
     scrollbackLines: 1000,
     spawnGraceMs: 1,
     defaultCwd: "/home/u",
+    newCwdDeps,
     logger: new MemoryLogger(),
   });
   const clients = new DefaultClientRegistry();
@@ -230,6 +232,51 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
     expect(closeResult).toEqual({ ok: true, result: {} });
     expect(ctx.session.snapshot().workspaces.length).toBe(1);
     expect(ctx.session.snapshot().workspaces[0]!.id).not.toBe(workspace.id);
+  });
+});
+
+// 入口が `newCwd` を落とさず `SessionService` へ渡すこと（20260921-new-terminal-cwd の T4）。場所を決める規則そのものは
+// `session/newCwd.test.ts`、作成との結び付きは `session/SessionService.test.ts` が見るので、ここは 3 つの入口の結線だけ。
+describe("registerAllMethods — 新しく開く場所（newCwd）", () => {
+  const deps: NewCwdDeps = {
+    liveCwd: async () => null,
+    hintCwd: () => null,
+    recordedCwd: () => undefined,
+    home: () => "/home/me",
+    currentDir: "/srv/start",
+    isUsableDir: async (path) => path !== "/nope",
+  };
+
+  it("3 つの入口が newCwd の場所で開き、使えない場所なら cwdFallback を返す", async () => {
+    const ctx = makeContext(deps);
+    const clientId = ctx.clients.register();
+    const c = { clientId, sink: fakeSink(clientId) };
+    const home = { policy: "home" } as const;
+
+    const wsResult = await ctx.surface.invoke(c, "workspace.create", { label: "a", newCwd: home });
+    if (!wsResult.ok) throw new Error(JSON.stringify(wsResult.error));
+    const created = wsResult.result as {
+      workspace: { id: string; cwd: string };
+      pane: { id: string; cwd: string };
+    };
+    expect(created.pane.cwd).toBe("/home/me");
+    expect(created.workspace.cwd).toBe("/home/me");
+
+    const tabResult = await ctx.surface.invoke(c, "tab.create", {
+      workspaceId: created.workspace.id,
+      newCwd: { policy: "current" },
+    });
+    if (!tabResult.ok) throw new Error(JSON.stringify(tabResult.error));
+    expect((tabResult.result as { pane: { cwd: string } }).pane.cwd).toBe("/srv/start");
+
+    const splitResult = await ctx.surface.invoke(c, "pane.split", {
+      paneId: created.pane.id,
+      direction: "right",
+      newCwd: { policy: "path", path: "/nope" },
+    });
+    if (!splitResult.ok) throw new Error(JSON.stringify(splitResult.error));
+    // 使えない場所は分割の以前の場所（元の pane の記録された場所）で開き、知らせる印を返す（AC9）。
+    expect(splitResult.result).toMatchObject({ pane: { cwd: "/home/me" }, cwdFallback: true });
   });
 });
 

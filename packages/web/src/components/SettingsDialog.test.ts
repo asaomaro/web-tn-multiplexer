@@ -387,3 +387,147 @@ describe("SettingsDialog — 閉じても押した結果は残る（AC-I1）", (
     expect(useSettingsStore(pinia).scrollback).toBe(1000);
   });
 });
+
+// 新しく開く場所（20260921-new-terminal-cwd の design D8）。
+describe("SettingsDialog — 端末の節 — 新しく開く場所（AC4・AC10・AC-I1・AC-I2）", () => {
+  const cwdRadios = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    w.findAll('input[type="radio"][name="settings-new-cwd"]');
+  const checkedCwd = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    cwdRadios(w)
+      .filter((r) => (r.element as HTMLInputElement).checked)
+      .map(radioLabel);
+  const pathField = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    w.get<HTMLInputElement>('input[type="text"][aria-label="指定した場所のパス"]');
+
+  it("端末の節に 4 つの方針が並び、既定は「引き継ぐ」（AC4）", async () => {
+    const { wrapper } = await openDialog();
+    const section = wrapper.get('section[aria-labelledby="settings-terminal"]');
+    expect(section.findAll('input[name="settings-new-cwd"]')).toHaveLength(4);
+    expect(cwdRadios(wrapper).map(radioLabel)).toEqual([
+      "引き継ぐ（いま見ている pane の場所）",
+      "ホーム",
+      "サーバを起動した場所",
+      "指定した場所",
+    ]);
+    expect(checkedCwd(wrapper)).toEqual(["引き継ぐ（いま見ている pane の場所）"]);
+  });
+
+  it("方針は選んだ時点で保存され、その行が選ばれる（確定ボタンは無い）", async () => {
+    const { wrapper } = await openDialog();
+    await cwdRadios(wrapper)[1]!.trigger("change");
+    expect(useSettingsStore(pinia).newCwdPolicy).toBe("home");
+    expect(useSettingsStore(createPinia()).newCwdPolicy, "再読み込みしても残る").toBe("home");
+    expect(checkedCwd(wrapper)).toEqual(["ホーム"]);
+  });
+
+  it("パスの入力欄は「指定した場所」を選んでいる間だけ使える", async () => {
+    const { wrapper } = await openDialog();
+    expect(pathField(wrapper).element.disabled).toBe(true);
+    await cwdRadios(wrapper)[3]!.trigger("change");
+    expect(pathField(wrapper).element.disabled).toBe(false);
+    await cwdRadios(wrapper)[2]!.trigger("change");
+    expect(pathField(wrapper).element.disabled).toBe(true);
+  });
+
+  /** 打つ（`input` だけを起こす）。`setValue` は `change` も起こすので、打っている途中の再現には使わない。 */
+  async function typeInto(field: ReturnType<typeof pathField>, value: string): Promise<void> {
+    field.element.value = value;
+    await field.trigger("input");
+  }
+
+  // AC-I2：打ちかけの途中の値で開いてしまわない。
+  it("パスは打っている途中（input・Enter 以外のキー）では保存せず、入れ終えたとき（change）に保存する", async () => {
+    useSettingsStore(pinia).setNewCwdPolicy("path");
+    const { wrapper } = await openDialog();
+    const field = pathField(wrapper);
+    await typeInto(field, "~/wo");
+    await field.trigger("keydown", { key: "o" });
+    expect(useSettingsStore(pinia).newCwdPath, "打っている途中").toBe("");
+    await typeInto(field, "~/work");
+    await field.trigger("change");
+    expect(useSettingsStore(pinia).newCwdPath).toBe("~/work");
+    expect(useSettingsStore(createPinia()).newCwdPath, "再読み込みしても残る").toBe("~/work");
+  });
+
+  it("Enter でも保存する。ただし IME の変換を確定する Enter では保存しない", async () => {
+    useSettingsStore(pinia).setNewCwdPolicy("path");
+    const { wrapper } = await openDialog();
+    const field = pathField(wrapper);
+    await typeInto(field, "~/ドキュメント");
+    await field.trigger("keydown", { key: "Enter", isComposing: true });
+    await field.trigger("keydown", { key: "Enter", keyCode: 229 }); // Safari は確定の keydown で isComposing が false
+    expect(useSettingsStore(pinia).newCwdPath, "変換の確定では保存しない").toBe("");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(useSettingsStore(pinia).newCwdPath).toBe("~/ドキュメント");
+  });
+
+  it("同じ値なら保存し直さない", async () => {
+    const store = useSettingsStore(pinia);
+    store.setNewCwdPolicy("path");
+    store.setNewCwdPath("~/same");
+    const saved: unknown[] = [];
+    store.$onAction(({ name, args }) => {
+      if (name === "setNewCwdPath") saved.push(args[0]);
+    });
+    const { wrapper } = await openDialog();
+    await pathField(wrapper).trigger("change");
+    await pathField(wrapper).trigger("keydown", { key: "Enter" });
+    expect(saved).toEqual([]);
+  });
+
+  // 閉じる操作は取り消しではない（design D8 の「離れたとき」。decisions D8）。Chromium は閉じてフォーカスが外れると `change` を立てるが、
+  // happy-dom は立てないので、ここで通るのは閉じる側で確定しているから。
+  it.each([
+    ["Esc", (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get("dialog").trigger("cancel")],
+    ["閉じる", (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.findAll("button").find((b) => b.text() === "閉じる")!.trigger("click")],
+    ["背景", (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get("dialog").trigger("click")],
+  ])("打ちかけのまま閉じても（%s）、入れた値は保存される（AC-I1）", async (_label, close) => {
+    useSettingsStore(pinia).setNewCwdPolicy("path");
+    useSettingsStore(pinia).setNewCwdPath("~/saved");
+    const { wrapper, view } = await openDialog();
+    await typeInto(pathField(wrapper), "~/typed");
+    await close(wrapper);
+    expect(view.dialogContext).toBeNull();
+    expect(useSettingsStore(pinia).newCwdPath).toBe("~/typed");
+  });
+
+  // 開いている間にほかの状態で描き直されても、打ちかけの文字を保存値で上書きしない（`:value` の一方向の結び付けだと上書きされる）。
+  it("開いている間に描き直されても、打ちかけの文字は消えない", async () => {
+    useSettingsStore(pinia).setNewCwdPolicy("path");
+    useSettingsStore(pinia).setNewCwdPath("~/saved");
+    const { wrapper } = await openDialog();
+    await typeInto(pathField(wrapper), "~/half");
+    useNotificationsStore(pinia).soundBlocked = true; // 通知の節の注記が変わる＝ダイアログが描き直される
+    await wrapper.vm.$nextTick();
+    expect(pathField(wrapper).element.value).toBe("~/half");
+  });
+
+  it("開き直すと、入力欄は保存した値から始まる", async () => {
+    useSettingsStore(pinia).setNewCwdPolicy("path");
+    const { wrapper, view } = await openDialog();
+    await typeInto(pathField(wrapper), "~/one");
+    await wrapper.get("dialog").trigger("cancel");
+    useSettingsStore(pinia).setNewCwdPath("~/changed-elsewhere");
+    view.openDialogWithContext({ kind: "settings" });
+    await wrapper.vm.$nextTick();
+    expect(pathField(wrapper).element.value).toBe("~/changed-elsewhere");
+  });
+
+  it("入力欄に名前と注記が付いている（読み上げでパスの欄と分かる）", async () => {
+    const { wrapper } = await openDialog();
+    const field = pathField(wrapper);
+    const noteId = field.attributes("aria-describedby")!;
+    expect(wrapper.get(`#${noteId}`).text()).toContain("絶対パスか ~/ で始まるパス");
+  });
+
+  it("閉じても選んだ方針と入れたパスは残る（AC-I1）", async () => {
+    const { wrapper, view } = await openDialog();
+    await cwdRadios(wrapper)[3]!.trigger("change");
+    await typeInto(pathField(wrapper), "~/p");
+    await pathField(wrapper).trigger("change");
+    await wrapper.findAll("button").find((b) => b.text() === "閉じる")!.trigger("click");
+    expect(view.dialogContext).toBeNull();
+    expect(useSettingsStore(pinia).newCwdPolicy).toBe("path");
+    expect(useSettingsStore(pinia).newCwdPath).toBe("~/p");
+  });
+});

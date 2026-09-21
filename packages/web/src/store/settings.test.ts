@@ -1,6 +1,12 @@
 import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadStatusSymbols, useSettingsStore } from "./settings.js";
+import {
+  buildNewCwd,
+  loadNewCwdPath,
+  loadNewCwdPolicy,
+  loadStatusSymbols,
+  useSettingsStore,
+} from "./settings.js";
 import { readPrefs, writePrefs } from "./view.js";
 
 let pinia: Pinia;
@@ -74,5 +80,81 @@ describe("useSettingsStore", () => {
     const store = useSettingsStore(createPinia());
     expect(store.statusSymbols).toBe(true);
     expect(store.scrollback).toBe("auto");
+  });
+});
+
+// 新しく開く場所（20260921-new-terminal-cwd）。
+describe("loadNewCwdPolicy・loadNewCwdPath（AC4）", () => {
+  it("4 つの方針はそのまま", () => {
+    for (const p of ["follow", "home", "current", "path"] as const) {
+      expect(loadNewCwdPolicy(p)).toBe(p);
+    }
+  });
+
+  // 何も設定していない利用者は「引き継ぐ」（herdr の既定と同じ）。壊れた値でも起動できる。
+  it("4 つのどれかでなければ既定の「引き継ぐ」", () => {
+    for (const raw of [undefined, null, "", "Follow", "cwd", 0, true, {}, []]) {
+      expect(loadNewCwdPolicy(raw), String(raw)).toBe("follow");
+    }
+  });
+
+  it("パスは文字列ならそのまま、そうでなければ空", () => {
+    expect(loadNewCwdPath("~/work")).toBe("~/work");
+    expect(loadNewCwdPath("")).toBe("");
+    for (const raw of [undefined, null, 1, {}, ["~/work"]]) {
+      expect(loadNewCwdPath(raw), String(raw)).toBe("");
+    }
+  });
+});
+
+describe("buildNewCwd", () => {
+  it("引き継ぐは元の pane を載せ、元の pane が無ければ載せない（design D7）", () => {
+    expect(buildNewCwd("follow", "", "p3")).toEqual({ policy: "follow", sourcePaneId: "p3" });
+    expect(buildNewCwd("follow", "", null)).toEqual({ policy: "follow" });
+  });
+
+  // 元の pane を見るのは「引き継ぐ」だけ（ほかの方針に余計な値を載せない）。
+  it("ホーム・起動した場所は方針だけ、指定した場所はパスを入れたまま載せる", () => {
+    expect(buildNewCwd("home", "/x", "p3")).toEqual({ policy: "home" });
+    expect(buildNewCwd("current", "/x", "p3")).toEqual({ policy: "current" });
+    expect(buildNewCwd("path", "~/work", "p3")).toEqual({ policy: "path", path: "~/work" });
+    expect(buildNewCwd("path", "", null)).toEqual({ policy: "path", path: "" });
+  });
+});
+
+describe("useSettingsStore — 新しく開く場所", () => {
+  it("何も保存されていなければ「引き継ぐ」、パスは空（AC4）", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.newCwdPolicy).toBe("follow");
+    expect(store.newCwdPath).toBe("");
+  });
+
+  it("方針とパスは同じストアに反映され、保存され、新しいストアが読み戻す（AC-I1）", () => {
+    const store = useSettingsStore(pinia);
+    store.setNewCwdPolicy("path");
+    store.setNewCwdPath("~/work");
+    expect(store.newCwdPolicy, "選んだ時点で反映").toBe("path");
+    expect(store.newCwdPath).toBe("~/work");
+    expect(readPrefs()).toMatchObject({ newCwdPolicy: "path", newCwdPath: "~/work" });
+    const reloaded = useSettingsStore(createPinia());
+    expect(reloaded.newCwdPolicy).toBe("path");
+    expect(reloaded.newCwdPath).toBe("~/work");
+  });
+
+  it("保存しても他の好みは消えない", () => {
+    writePrefs({ statusSymbols: false, scrollback: 5000 });
+    useSettingsStore(pinia).setNewCwdPolicy("home");
+    expect(readPrefs()).toMatchObject({
+      statusSymbols: false,
+      scrollback: 5000,
+      newCwdPolicy: "home",
+    });
+  });
+
+  it("保存された値が壊れていれば既定で起動する", () => {
+    writePrefs({ newCwdPolicy: "somewhere", newCwdPath: 42 });
+    const store = useSettingsStore(createPinia());
+    expect(store.newCwdPolicy).toBe("follow");
+    expect(store.newCwdPath).toBe("");
   });
 });

@@ -56,14 +56,45 @@ export interface PaneSubscribeResult {
 export const PaneUnsubscribeParams = z.object({ paneId });
 export type PaneUnsubscribeParams = z.infer<typeof PaneUnsubscribeParams>;
 
+// --- 新しく開く場所（20260921-new-terminal-cwd。herdr の `terminal.new_cwd`） ----------------
+
+/**
+ * 新しい workspace・tab・分割を**どこで開くかの方針**（ブラウザごとの設定。design D1）。場所を決めるのはサーバ（design D2）。
+ * - `follow`: 元の pane の「いまの場所」を引き継ぐ（**ブラウザの設定の既定**）。`sourcePaneId` は元の pane（分割では `pane.split` の
+ *   `paneId` が元なので付けない）。
+ * - `home`: ホームディレクトリ。 `current`: サーバを起動した場所。 `path`: 指定した場所（`~` はホーム）。
+ *   **空文字・相対パスもスキーマは通す**——サーバが「使えない場所」として扱い、代わりの場所で開いて知らせる（design の異常系）。
+ *   ここで弾くと、「指定した場所」を選んだまま何も入れていないブラウザの作成が失敗してしまう。
+ *
+ * **`newCwd` が無い要求は `follow` ではなく「今までどおり」**（古いクライアント・テストのクライアント。design D5）。
+ * **場所を明示する `cwd`（worktree を開く）とは別物**——`cwd` があればこちらは見ない（design D5）。
+ */
+export const NewCwd = z.discriminatedUnion("policy", [
+  z.object({ policy: z.literal("follow"), sourcePaneId: paneId.optional() }),
+  z.object({ policy: z.literal("home") }),
+  z.object({ policy: z.literal("current") }),
+  z.object({ policy: z.literal("path"), path: z.string() }),
+]);
+export type NewCwd = z.infer<typeof NewCwd>;
+
+/**
+ * 作成の結果に載る。**「引き継ぐ」以外の方針で決めた場所が使えず、代わりの場所で開いたときだけ `true`**（知らせるかどうかは
+ * サーバが決める。design D9）。それ以外のときは載らない。
+ */
+export interface CwdFallbackResult {
+  cwdFallback?: true;
+}
+
 // --- workspace ----------------------------------------------------------
 
 export const WorkspaceCreateParams = z.object({
+  /** 場所を明示する（worktree を開く）。**`newCwd` に勝ち、代わりの場所へは回さない**（使えなければ失敗する）。 */
   cwd: z.string().optional(),
   label: z.string().optional(),
+  newCwd: NewCwd.optional(),
 });
 export type WorkspaceCreateParams = z.infer<typeof WorkspaceCreateParams>;
-export interface WorkspaceCreateResult {
+export interface WorkspaceCreateResult extends CwdFallbackResult {
   workspace: Workspace;
   tab: Tab;
   pane: Pane;
@@ -83,9 +114,10 @@ export type WorkspaceCloseParams = z.infer<typeof WorkspaceCloseParams>;
 export const TabCreateParams = z.object({
   workspaceId: workspaceId.optional(),
   label: z.string().optional(),
+  newCwd: NewCwd.optional(),
 });
 export type TabCreateParams = z.infer<typeof TabCreateParams>;
-export interface TabCreateResult {
+export interface TabCreateResult extends CwdFallbackResult {
   tab: Tab;
   pane: Pane;
 }
@@ -105,9 +137,10 @@ export const PaneSplitParams = z.object({
   paneId,
   direction: splitDirection,
   ratio: z.number().min(0.05).max(0.95).optional(),
+  newCwd: NewCwd.optional(),
 });
 export type PaneSplitParams = z.infer<typeof PaneSplitParams>;
-export interface PaneSplitResult {
+export interface PaneSplitResult extends CwdFallbackResult {
   pane: Pane;
 }
 

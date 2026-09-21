@@ -5,7 +5,8 @@ import type { MethodDeps } from "./deps.js";
 export function registerTabMethods(surface: ControlSurface, deps: MethodDeps): void {
   surface.register("tab.create", {
     schema: TabCreateParams,
-    handler: (_ctx, params) => deps.session.createTab(params.workspaceId, params.label),
+    handler: (_ctx, params) =>
+      deps.session.createTab(params.workspaceId, params.label, params.newCwd),
   });
 
   surface.register("tab.rename", {

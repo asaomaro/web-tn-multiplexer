@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chmod, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -296,6 +296,37 @@ describe("composeServer (integration)", () => {
     await server.listen();
     expect(server.session.snapshot().workspaces.length).toBe(1);
   });
+
+  // 新しく開く場所の「引き継ぐ」の本番のつなぎ方（20260921-new-terminal-cwd。`makeNewCwdDeps` に渡す `terminals`・`inspector`・
+  // `getPane`）。E2E ではエージェントの監視が `Pane.cwd` を追従させてしまい、読み直しを外しても記録の側で通る——ここでは
+  // `listen()` を呼ばず（監視が動かない）、記録を開いた場所のままにして、前面プロセスの cwd を読み直すことだけを見る。
+  // `/proc` を読むのは Linux だけ（macOS・Windows の前面の cwd は null。design D2）。
+  it.runIf(process.platform === "linux")(
+    "「引き継ぐ」は元の pane の前面プロセスの cwd を読み直して開く（記録された場所ではなく）",
+    async () => {
+      const stateDir = await makeTempDir("wtm-compose-");
+      const work = await realpath(await makeTempDir("wtm-newcwd-"));
+      const sub = join(work, "sub");
+      await mkdir(sub);
+      // シェルの代わりに、`cd` してから印を置いて待つだけのスクリプト（OSC 7 は出さない）。
+      const shell = join(work, "cd-and-wait.sh");
+      await writeFile(shell, `#!/bin/sh\ncd "${sub}" && : > ready && exec sleep 30\n`, { mode: 0o755 });
+      const port = await getFreePort();
+      const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [], shell });
+      cleanups.push(() => server.close());
+      cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+      cleanups.push(() => rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+
+      const { pane } = await server.session.createWorkspace(work, "src");
+      await expect.poll(() => existsSync(join(sub, "ready")), { timeout: 5000 }).toBe(true);
+      expect(server.session.getPane(pane.id)?.cwd, "記録は開いた場所のまま（監視が動いていない）").toBe(work);
+
+      const r = await server.session.createWorkspace(undefined, undefined, { policy: "follow", sourcePaneId: pane.id });
+      expect(r.workspace.cwd).toBe(sub);
+      expect(r.cwdFallback).toBeUndefined();
+    },
+    10000,
+  );
 
   it("persists and restores the session across two composeServer instances (AC18)", async () => {
     const stateDir = await makeTempDir("wtm-compose-");

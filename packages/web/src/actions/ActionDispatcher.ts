@@ -1,9 +1,11 @@
+import type { NewCwd } from "@wtm/protocol";
 import type { Pinia } from "pinia";
 import type { KeyInputController, ActionPort, FocusPort } from "../keys/KeyInputController.js";
 import type { Action, CopyCommand, Dir } from "../keys/actions.js";
 import type { InputHold } from "../net/InputGate.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
+import { buildNewCwd, useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import { clientErrorMessage, errorCodeOf } from "../net/clientError.js";
 import { depthFirstPaneIds, neighborPaneId } from "../term/layoutOrder.js";
@@ -34,6 +36,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   private readonly conn: ConnectionPort;
   private readonly session: ReturnType<typeof useSessionStore>;
   private readonly view: ReturnType<typeof useViewStore>;
+  private readonly settings: ReturnType<typeof useSettingsStore>;
   private readonly registry: TerminalRegistry;
   private readonly keys: KeyInputController;
   private readonly input: ActionDispatcherOptions["input"];
@@ -45,6 +48,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     this.notifications = opts.notifications;
     this.session = useSessionStore(opts.pinia);
     this.view = useViewStore(opts.pinia);
+    this.settings = useSettingsStore(opts.pinia);
     this.registry = opts.registry;
     this.keys = opts.keys;
   }
@@ -171,12 +175,16 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     this.view.closeDialog();
     const trimmed = label.trim();
     const hold = this.input?.holdInput(this.view.focusedPaneId); // D99：応答までに打った文字は新しい pane へ
+    // 元の pane は焦点の pane が**作る先の workspace にあるときだけ**（無ければ載せない → その workspace の場所。design D7）。
+    // **ダイアログを閉じた後に読む**——開いている間に焦点の pane が閉じられたら、閉じたときに戻す先へ差し替わっている（D97）。
+    const newCwd = this.newCwdFor(this.focusedPaneIn(ctx.workspaceId));
     this.conn
-      .request("tab.create", { workspaceId: ctx.workspaceId, ...(trimmed ? { label: trimmed } : {}) })
+      .request("tab.create", { workspaceId: ctx.workspaceId, ...(trimmed ? { label: trimmed } : {}), newCwd })
       .then((result) => {
         this.view.setView(ctx.workspaceId, result.tab.id);
         this.view.focusPane(result.pane.id);
         this.releaseHold(hold, result.pane.id);
+        this.noteCwdFallback(result);
       })
       .catch(() => {
         hold?.cancel();
@@ -252,6 +260,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
    * `ahead > 0 || behind > 0` のときだけなので、**上流の無い新しい worktree は構造上そこに出ない**。
    */
   private openWorkspaceAt(cwd: string, label: string, hold: InputHold | undefined): void {
+    // **場所を明示する経路なので `newCwd` を載せない**——方針に関わらず worktree の場所で開く（AC11・design D5）。
     this.conn
       .request("workspace.create", { cwd, label })
       .then((result) => {
@@ -263,6 +272,32 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
         hold?.cancel();
         this.view.toast(worktreeErrorMessage(err));
       });
+  }
+
+  /**
+   * 新しく開く場所（20260921-new-terminal-cwd）。方針はこのブラウザの設定から、その時点の値で作る——設定を変えても
+   * 既に開いている pane には何も送らない（AC10）。「引き継ぐ」の元の pane は呼ぶ側が決める（design D7）。
+   */
+  private newCwdFor(sourcePaneId: string | null): NewCwd {
+    return buildNewCwd(this.settings.newCwdPolicy, this.settings.newCwdPath, sourcePaneId);
+  }
+
+  /** 焦点の pane が `workspaceId` の中にあればその id、無ければ null。 */
+  private focusedPaneIn(workspaceId: string): string | null {
+    const paneId = this.view.focusedPaneId;
+    const pane = paneId ? this.session.panes.get(paneId) : undefined;
+    const tab = pane ? this.session.tabs.get(pane.tabId) : undefined;
+    return tab?.workspaceId === workspaceId ? paneId : null;
+  }
+
+  /**
+   * 選んだ方針の場所が使えず、代わりの場所で開いたことを知らせる（AC9）。**知らせるかどうかはサーバが決める**
+   * （「引き継ぐ」では立たない。design D9）ので、ここで方針を見直さない。
+   */
+  private noteCwdFallback(result: { cwdFallback?: true }): void {
+    if (result.cwdFallback) {
+      this.view.toast("新しく開く場所が使えないため、代わりの場所で開きました（設定の「端末」で確かめてください）");
+    }
   }
 
   /**
@@ -300,11 +335,13 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   /** T22（`ContextMenu`）から任意の pane を対象に呼ぶ（フォーカス中とは限らない）。 */
   splitPane(paneId: string, dir: "right" | "down"): void {
     const hold = this.input?.holdInput(this.view.focusedPaneId); // D99：応答までに打った文字は新しい pane へ
+    // 「引き継ぐ」の元は分割する pane そのもの（`paneId`）なので、元の pane は載せない（design D7）。
     this.conn
-      .request("pane.split", { paneId, direction: dir })
+      .request("pane.split", { paneId, direction: dir, newCwd: this.newCwdFor(null) })
       .then((r) => {
         this.view.focusPane(r.pane.id); // AC-I4：新しい pane へフォーカスを移す
         this.releaseHold(hold, r.pane.id);
+        this.noteCwdFallback(r);
       })
       .catch(() => {
         hold?.cancel();
@@ -434,12 +471,14 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   /** herdr の `prompt_new_workspace_name`（既定 false）：名前を尋ねずすぐ作る（design「ダイアログ」）。 */
   private newWorkspace(): void {
     const hold = this.input?.holdInput(this.view.focusedPaneId); // D99：応答までに打った文字は新しい pane へ
+    // 「引き継ぐ」の元は**このブラウザの焦点の pane**（サーバはクライアントごとの焦点を知らない。design D7）。
     this.conn
-      .request("workspace.create", {})
+      .request("workspace.create", { newCwd: this.newCwdFor(this.view.focusedPaneId) })
       .then((r) => {
         this.view.setView(r.workspace.id, r.tab.id);
         this.view.focusPane(r.pane.id);
         this.releaseHold(hold, r.pane.id);
+        this.noteCwdFallback(r);
       })
       .catch(() => {
         hold?.cancel();

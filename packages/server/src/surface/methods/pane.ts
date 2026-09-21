@@ -16,7 +16,12 @@ export function registerPaneMethods(surface: ControlSurface, deps: MethodDeps): 
   surface.register("pane.split", {
     schema: PaneSplitParams,
     handler: async (ctx, params) => {
-      const result = await deps.session.splitPane(params.paneId, params.direction, params.ratio);
+      const result = await deps.session.splitPane(
+        params.paneId,
+        params.direction,
+        params.ratio,
+        params.newCwd,
+      );
       deps.sizeAuthority.noteInteraction(ctx.clientId, result.pane.id);
       return result;
     },
