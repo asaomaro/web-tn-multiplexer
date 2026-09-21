@@ -1,3 +1,4 @@
+import { THEME_NAMES } from "@wtm/protocol";
 import { mount } from "@vue/test-utils";
 import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +8,7 @@ import type { DesktopPermission } from "../notify/ports.js";
 import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore } from "../store/settings.js";
-import { useViewStore } from "../store/view.js";
+import { readPrefs, useViewStore } from "../store/view.js";
 import SettingsDialog from "./SettingsDialog.vue";
 
 let pinia: Pinia;
@@ -253,17 +254,17 @@ describe("SettingsDialog — 通知の節 — 開閉とフォーカス（AC-I1�
 });
 
 // ---------------------------------------------------------------------------------------------------------------
-// 20260921-herdr-settings-gaps：通知だけのダイアログを、見出しで 3 節（通知・表示・端末）に分けた「設定」に広げた。
+// 20260921-herdr-settings-gaps：通知だけのダイアログを、見出しで節に分けた「設定」に広げた（20260921-theme-settings で「テーマ」を足して 4 節）。
 
 const radios = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.findAll('input[type="radio"][name="settings-scrollback"]');
 const checkedRadio = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
   radios(w).filter((r) => (r.element as HTMLInputElement).checked);
 const radioLabel = (r: ReturnType<typeof radios>[number]) => r.element.parentElement!.textContent!.trim();
 
-describe("SettingsDialog — 3 つの節（AC12）", () => {
-  it("見出し「通知」「表示」「端末」の 3 節が、この順で 1 枚に並ぶ", async () => {
+describe("SettingsDialog — 4 つの節（AC12）", () => {
+  it("見出し「通知」「テーマ」「表示」「端末」の 4 節が、この順で 1 枚に並ぶ（テーマは 20260921-theme-settings で足した）", async () => {
     const { wrapper } = await openDialog();
-    expect(wrapper.findAll("section h3").map((h) => h.text())).toEqual(["通知", "表示", "端末"]);
+    expect(wrapper.findAll("section h3").map((h) => h.text())).toEqual(["通知", "テーマ", "表示", "端末"]);
     // 節は見出しで名前が付いている（読み上げで節の名前が分かる）。
     for (const sec of wrapper.findAll("section")) {
       const id = sec.attributes("aria-labelledby")!;
@@ -529,5 +530,123 @@ describe("SettingsDialog — 端末の節 — 新しく開く場所（AC4・AC10
     expect(view.dialogContext).toBeNull();
     expect(useSettingsStore(pinia).newCwdPolicy).toBe("path");
     expect(useSettingsStore(pinia).newCwdPath).toBe("~/p");
+  });
+});
+
+// 20260921-theme-settings：テーマの節（design D4・decisions D11。AC1・AC5〜AC7・AC-I2・AC-I4）。
+describe("SettingsDialog — テーマの節", () => {
+  const themeSection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get('section[aria-labelledby="settings-theme"]');
+  const selects = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => themeSection(w).findAll("select");
+
+  it("「テーマ」の選択肢は 17 個（暗い 10・明るい 7 の 2 群）で、dracula に「（既定）」。いまの値が選ばれている", async () => {
+    const { wrapper } = await openDialog();
+    const [main] = selects(wrapper);
+    const groups = main!.findAll("optgroup");
+    expect(groups.map((g) => g.attributes("label"))).toEqual(["暗いテーマ", "明るいテーマ"]);
+    expect(groups.map((g) => g.findAll("option").length)).toEqual([10, 7]);
+    expect(main!.findAll("option").map((o) => o.attributes("value")).sort()).toEqual([...THEME_NAMES].sort());
+    expect(main!.find('option[value="dracula"]').text()).toBe("Dracula（既定）");
+    expect((main!.element as HTMLSelectElement).value).toBe("dracula");
+    // 自動の切替が切の間は、明るいとき・暗いときの欄は出さない。
+    expect(selects(wrapper)).toHaveLength(1);
+    expect(themeSection(wrapper).get("#settings-theme-note").text()).toBe("いま使っているテーマ：Dracula");
+  });
+
+  it("選んだ時点で反映・保存し（確定ボタンは無い）、フォーカスは選んだ部品に残る（AC-I2・AC-I4）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const main = selects(wrapper)[0]!;
+    (main.element as HTMLSelectElement).focus();
+    await main.setValue("gruvbox-light");
+    expect(settings.theme).toBe("gruvbox-light");
+    expect(readPrefs()["theme"]).toBe("gruvbox-light");
+    expect(document.activeElement).toBe(main.element);
+    expect(themeSection(wrapper).get("#settings-theme-note").text()).toBe("いま使っているテーマ：Gruvbox Light");
+  });
+
+  it("「OS の明暗に合わせる」を入れると明るいとき・暗いときが出て、既定は 1 つのテーマの対（AC5・AC6・AC7）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.setTheme("tokyo-night");
+    await wrapper.vm.$nextTick();
+    const sw = themeSection(wrapper).get('[role="switch"]');
+    expect(sw.attributes("aria-checked")).toBe("false");
+    await sw.trigger("click");
+    expect(settings.themeAuto).toBe(true);
+    expect(sw.attributes("aria-checked")).toBe("true");
+    const [, light, dark] = selects(wrapper);
+    expect(light!.find('option[value=""]').text()).toBe("既定（Tokyo Night Day）");
+    expect(dark!.find('option[value=""]').text()).toBe("既定（Tokyo Night）");
+    expect((light!.element as HTMLSelectElement).value).toBe("");
+    // 明るいとき・暗いときは 17 のどれからでも選べる（明るいときに暗いテーマも）。
+    expect(light!.findAll("option[value]").filter((o) => o.attributes("value") !== "")).toHaveLength(17);
+    settings.systemDark = false;
+    await wrapper.vm.$nextTick();
+    expect(themeSection(wrapper).get("#settings-theme-note").text()).toBe("いま使っているテーマ：Tokyo Night Day（OS の設定が明るいため）");
+    expect(themeSection(wrapper).text()).toContain("「テーマ」でほかのテーマを選ぶと、合わせるのをやめてそのテーマにします");
+  });
+
+  it("明るいとき・暗いときを選ぶと保存し、「既定」を選ぶと null に戻る。自動の切替中に 1 つのテーマを選ぶと切れる（AC6・AC7）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    await themeSection(wrapper).get('[role="switch"]').trigger("click");
+    const [, light, dark] = selects(wrapper);
+    await light!.setValue("one-light");
+    expect(settings.themeLight).toBe("one-light");
+    expect(readPrefs()["themeLight"]).toBe("one-light");
+    await dark!.setValue("vesper");
+    expect(settings.themeDark).toBe("vesper");
+    await light!.setValue("");
+    expect(settings.themeLight).toBeNull();
+    expect(readPrefs()["themeLight"]).toBeNull();
+    await selects(wrapper)[0]!.setValue("nord");
+    expect(settings.theme).toBe("nord");
+    expect(settings.themeAuto).toBe(false);
+    await wrapper.vm.$nextTick();
+    expect(selects(wrapper)).toHaveLength(1);
+  });
+});
+
+describe("SettingsDialog — テーマの節（名前付けと値の束縛）", () => {
+  const themeSection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get('section[aria-labelledby="settings-theme"]');
+  const selects = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => themeSection(w).findAll("select");
+
+  it("3 つの選択肢は <label> で名前が付き、「テーマ」は自動の切替の注記といまのテーマの注記に結び付く", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.setThemeAuto(true);
+    await wrapper.vm.$nextTick();
+    const names = selects(wrapper).map((sel) => sel.element.closest("label")?.querySelector("span")?.textContent);
+    expect(names).toEqual(["テーマ", "明るいとき", "暗いとき"]);
+    const describedBy = selects(wrapper)[0]!.attributes("aria-describedby")!.split(" ");
+    expect(describedBy).toEqual(["settings-theme-auto-note", "settings-theme-note"]);
+    for (const id of describedBy) expect(themeSection(wrapper).find(`#${id}`).exists(), id).toBe(true);
+    expect(themeSection(wrapper).get("#settings-theme-note").attributes("aria-live")).toBe("polite");
+  });
+
+  it("自動の切替の注記と欄は切り替えの下に出る（押した切り替えの位置がずれない）。押してもフォーカスは切り替えに残る", async () => {
+    const { wrapper } = await openDialog();
+    const sw = themeSection(wrapper).get('[role="switch"]');
+    (sw.element as HTMLButtonElement).focus();
+    await sw.trigger("click");
+    const note = themeSection(wrapper).get("#settings-theme-auto-note");
+    // 切り替えより後ろ（DOM の順）にある。
+    expect(sw.element.compareDocumentPosition(note.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.activeElement).toBe(sw.element);
+  });
+
+  it("明るいとき・暗いときの選ばれた値は store に追従する（保存値・null に戻したとき）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.setThemeLight("one-light");
+    settings.setThemeDark("vesper");
+    settings.setThemeAuto(true);
+    await wrapper.vm.$nextTick();
+    const [, light, dark] = selects(wrapper);
+    expect((light!.element as HTMLSelectElement).value).toBe("one-light");
+    expect((dark!.element as HTMLSelectElement).value).toBe("vesper");
+    settings.setThemeLight(null);
+    await wrapper.vm.$nextTick();
+    expect((light!.element as HTMLSelectElement).value).toBe("");
   });
 });

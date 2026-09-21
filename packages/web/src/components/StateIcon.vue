@@ -61,18 +61,20 @@ const glyph = computed(() => (settings.statusSymbols ? stateGlyph(props.state) :
  * WCAG 1.4.11（非テキストのコントラスト 3:1）を下回った。いまの値は通常 #282a36・hover #343746・選択 #44475a・モバイルの #1e1f29 の
  * どれでも 3:1 以上（選択の行で blocked 3.36・idle 3.32）
  * （review ラウンド1 の指摘。decisions D6）。
+ * 色はテーマの CSS 変数から取る（20260921-theme-settings）。予備の値は dracula の値で、ほかのテーマの値は `theme/uiTokens.ts` が同じ
+ * 条件（背景・hover・選択の行・モバイルの背景の上で 3:1）で寄せ、`uiTokens.test.ts` が全テーマで確かめる。
  */
 .state-icon[data-state="blocked"] {
-  color: #ff6e6e;
+  color: var(--wtm-state-blocked, #ff6e6e);
 }
 .state-icon[data-state="working"] {
-  color: #f1fa8c;
+  color: var(--wtm-state-working, #f1fa8c);
 }
 .state-icon[data-state="done"] {
-  color: #50fa7b;
+  color: var(--wtm-state-done, #50fa7b);
 }
 .state-icon[data-state="idle"] {
-  color: #8a9ad0;
+  color: var(--wtm-state-idle, #8a9ad0);
 }
 /* 丸：記号「切」、またはエージェントが居ない行（以前の見た目。状態の無い丸は薄く）。 */
 .state-icon[data-symbols="off"]::before,

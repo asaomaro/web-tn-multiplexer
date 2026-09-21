@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Pane, SessionSnapshot, Tab, Workspace, WorktreeEntry } from "./model.js";
+import { THEME_NAMES } from "./theme.js";
 
 /**
  * 方式（method）の定義。design.md「WebSocket の通信」の表と、architecture.md「方式の追加と変更」
@@ -37,6 +38,13 @@ export type ClientViewParams = z.infer<typeof ClientViewParams>;
 
 export const ClientFitParams = z.object({ enabled: z.boolean() });
 export type ClientFitParams = z.infer<typeof ClientFitParams>;
+
+/**
+ * このブラウザがいま表示しているテーマ（20260921-theme-settings の design D1）。サーバは色の問い合わせ（OSC 4/10/11/12）の答えに使う
+ * だけで、保存もほかのクライアントへの配布もしない。名前を送る（配色は protocol の `TERMINAL_PALETTES` から引く）。
+ */
+export const ClientThemeParams = z.object({ theme: z.enum(THEME_NAMES) });
+export type ClientThemeParams = z.infer<typeof ClientThemeParams>;
 
 export const ClientDetachParams = z.object({});
 export type ClientDetachParams = z.infer<typeof ClientDetachParams>;
@@ -216,6 +224,7 @@ export const METHOD_SCHEMAS = {
   "client.hello": ClientHelloParams,
   "client.view": ClientViewParams,
   "client.fit": ClientFitParams,
+  "client.theme": ClientThemeParams,
   "client.detach": ClientDetachParams,
   "pane.subscribe": PaneSubscribeParams,
   "pane.unsubscribe": PaneUnsubscribeParams,
@@ -247,6 +256,7 @@ export interface MethodResultMap {
   "client.hello": ClientHelloResult;
   "client.view": Record<string, never>;
   "client.fit": Record<string, never>;
+  "client.theme": Record<string, never>;
   "client.detach": Record<string, never>;
   "pane.subscribe": PaneSubscribeResult;
   "pane.unsubscribe": Record<string, never>;

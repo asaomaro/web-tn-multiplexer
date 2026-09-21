@@ -257,7 +257,7 @@ const onDialogKeydown = (ev: KeyboardEvent): void => {
   gap: 0.75em;
 }
 .help-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--wtm-backdrop, rgba(0, 0, 0, 0.4));
 }
 .help-dialog-search input {
   width: 100%;

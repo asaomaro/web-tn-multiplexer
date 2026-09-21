@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { DEFAULT_THEME_NAME, isThemeName, THEME_APPEARANCE, THEME_NAMES, type ThemeName } from "@wtm/protocol";
 import { computed, inject, nextTick, ref, watch } from "vue";
 import { DeviceKindKey, NotificationControllerKey } from "../injection.js";
 import type { DesktopPermission } from "../notify/ports.js";
@@ -8,14 +9,16 @@ import { useSettingsStore, type NewCwdPolicy } from "../store/settings.js";
 import { DISPLAY_STATES, stateGlyph, stateLabel } from "../store/stateIndicator.js";
 import { useViewStore } from "../store/view.js";
 import { effectiveScrollback, scrollbackChoices, type ScrollbackPref } from "../term/scrollback.js";
+import { siblingThemes, THEME_LABELS } from "../theme/themes.js";
 
 /**
- * 設定（20260921-herdr-settings-gaps の D7）。**見出しで 3 節（通知・表示・端末）に分けた 1 枚**。
+ * 設定（20260921-herdr-settings-gaps の D7）。**見出しで 4 節（通知・テーマ・表示・端末）に分けた 1 枚**（テーマは 20260921-theme-settings の
+ * decisions D11 で足した）。
  * 以前は通知だけのダイアログ（`NotificationSettingsDialog.vue`。20260920-agent-notifications の AC6〜AC8・AC12・AC13）で、
  * 通知の節はその実装をそのまま移した。`view.dialogContext.kind === "settings"` を扱う。形は `ConfirmDialog` と同じ
  * （ネイティブ `<dialog>` ＋ `showModal()` ＋ `@cancel` の抑止）。
  *
- * **節は Tabs にも Accordion にもしない**（5 項目なら全部見えてよい。見出し付きのグループは Tab で順に進むだけで
+ * **節は Tabs にも Accordion にもしない**（10 項目ほどなら全部見えてよい。見出し付きのグループは Tab で順に進むだけで
  * キー処理が要らない。先例は `HelpDialog.vue`）。
  *
  * **切り替えは `role="switch"`**（decisions D2）——APG は switch を「on/off を表し、**操作が即座に効く**もの」
@@ -189,6 +192,41 @@ function onPathEnter(ev: KeyboardEvent): void {
   commitNewCwdPath();
 }
 
+/**
+ * テーマ（20260921-theme-settings の design D4・decisions D11）。**選んだ時点で反映と保存**（確定ボタンを置かない。ほかの節と同じ）。取り消しは
+ * 選び直し。部品はネイティブの `<select>`——Windows・Linux の Chrome では閉じたまま上下キーで値が変わり、そのたびに反映される（試し見のように
+ * 働く）。自動の切替は VS Code・GitHub の形（切り替え 1 つ＋明るいとき・暗いとき）。
+ */
+const darkThemes = THEME_NAMES.filter((n) => THEME_APPEARANCE[n] === "dark");
+const lightThemes = THEME_NAMES.filter((n) => THEME_APPEARANCE[n] === "light");
+const themeLabel = (n: ThemeName): string => (n === DEFAULT_THEME_NAME ? `${THEME_LABELS[n]}（既定）` : THEME_LABELS[n]);
+/** 明るいとき・暗いときの「既定」（まだ選んでいない間の値＝1 つのテーマの対。design D7）。 */
+const themeSiblings = computed(() => siblingThemes(settings.theme));
+/** いま使っているテーマ（AC7）。自動の切替が入っていれば、どちらの明暗で選んだかを添える。 */
+const themeNowNote = computed(() => {
+  const name = THEME_LABELS[settings.effectiveTheme];
+  if (!settings.themeAuto) return `いま使っているテーマ：${name}`;
+  return `いま使っているテーマ：${name}（OS の設定が${settings.systemDark ? "暗い" : "明るい"}ため）`;
+});
+
+/** 1 つのテーマを選ぶ。自動の切替が入っていれば切る（herdr と同じ。AC7）。 */
+function chooseTheme(ev: Event): void {
+  const v = (ev.target as HTMLSelectElement).value;
+  if (isThemeName(v)) settings.setTheme(v);
+}
+
+function toggleThemeAuto(): void {
+  settings.setThemeAuto(!settings.themeAuto);
+}
+
+/** 明るいとき・暗いときを選ぶ。先頭の「既定」（値は空）は null——1 つのテーマの対に戻り、また追従する。 */
+function chooseThemeFor(which: "light" | "dark", ev: Event): void {
+  const v = (ev.target as HTMLSelectElement).value;
+  const name = isThemeName(v) ? v : null;
+  if (which === "light") settings.setThemeLight(name);
+  else settings.setThemeDark(name);
+}
+
 function cancel(): void {
   commitNewCwdPath(); // 「指定した場所」以外では入力欄が使えず、下書きは保存値のまま（開くたびに戻す）なので何もしない
   view.closeDialog();
@@ -247,6 +285,62 @@ function onNativeCancel(ev: Event): void {
         </li>
       </ul>
     </section>
+    <section class="settings-section" aria-labelledby="settings-theme">
+      <h3 id="settings-theme" class="settings-heading">テーマ</h3>
+      <div class="settings-theme">
+        <label class="settings-select-row">
+          <span>テーマ</span>
+          <select
+            class="settings-select"
+            :value="settings.theme"
+            aria-describedby="settings-theme-auto-note settings-theme-note"
+            @change="chooseTheme"
+          >
+            <optgroup label="暗いテーマ">
+              <option v-for="n in darkThemes" :key="n" :value="n">{{ themeLabel(n) }}</option>
+            </optgroup>
+            <optgroup label="明るいテーマ">
+              <option v-for="n in lightThemes" :key="n" :value="n">{{ themeLabel(n) }}</option>
+            </optgroup>
+          </select>
+        </label>
+        <button type="button" role="switch" class="settings-switch" :aria-checked="settings.themeAuto" @click="toggleThemeAuto">
+          <span class="settings-mark">{{ settings.themeAuto ? "入" : "切" }}</span>
+          <span>OS の明暗に合わせる</span>
+        </button>
+        <!-- 入れて出す欄は切り替えの**下**に置く（上に差し込むと、押した切り替え自身が下へずれて押し直しが外れる）。 -->
+        <template v-if="settings.themeAuto">
+          <p id="settings-theme-auto-note" class="settings-note">
+            入れている間は「テーマ」を使いません。「テーマ」でほかのテーマを選ぶと、合わせるのをやめてそのテーマにします。
+          </p>
+          <label class="settings-select-row">
+            <span>明るいとき</span>
+            <select class="settings-select" :value="settings.themeLight ?? ''" @change="chooseThemeFor('light', $event)">
+              <option value="">既定（{{ THEME_LABELS[themeSiblings.light] }}）</option>
+              <optgroup label="明るいテーマ">
+                <option v-for="n in lightThemes" :key="n" :value="n">{{ THEME_LABELS[n] }}</option>
+              </optgroup>
+              <optgroup label="暗いテーマ">
+                <option v-for="n in darkThemes" :key="n" :value="n">{{ THEME_LABELS[n] }}</option>
+              </optgroup>
+            </select>
+          </label>
+          <label class="settings-select-row">
+            <span>暗いとき</span>
+            <select class="settings-select" :value="settings.themeDark ?? ''" @change="chooseThemeFor('dark', $event)">
+              <option value="">既定（{{ THEME_LABELS[themeSiblings.dark] }}）</option>
+              <optgroup label="暗いテーマ">
+                <option v-for="n in darkThemes" :key="n" :value="n">{{ THEME_LABELS[n] }}</option>
+              </optgroup>
+              <optgroup label="明るいテーマ">
+                <option v-for="n in lightThemes" :key="n" :value="n">{{ THEME_LABELS[n] }}</option>
+              </optgroup>
+            </select>
+          </label>
+        </template>
+        <p id="settings-theme-note" class="settings-note" aria-live="polite">{{ themeNowNote }}</p>
+      </div>
+    </section>
     <section class="settings-section" aria-labelledby="settings-display">
       <h3 id="settings-display" class="settings-heading">表示</h3>
       <ul class="settings-list">
@@ -302,14 +396,16 @@ function onNativeCancel(ev: Event): void {
         <p id="settings-path-note" class="settings-note">絶対パスか ~/ で始まるパス（~ だけならホーム）。使えない場所なら、代わりの場所で開いて知らせます。</p>
       </fieldset>
     </section>
-    <p class="settings-hint">この設定はこのブラウザにだけ効きます。Esc か「閉じる」で閉じます。</p>
+    <p class="settings-hint">
+      この設定はこのブラウザにだけ残ります（テーマは、このブラウザが操作している pane の色の問い合わせの答えにも使います）。Esc か「閉じる」で閉じます。
+    </p>
   </dialog>
 </template>
 
 <style scoped>
 .settings-dialog {
   /* 狭い画面（幅 320〜385px の携帯）でもはみ出さない。以前の `min-width: 22em` は content-box で、枠と padding を含めて 386px になっていた。
-     背が高くなった（3 節）ので、画面の高さも越えないようにして中をスクロールさせる（`overflow` は UA の `dialog:modal` の既定が auto）。
+     背が高くなった（いまは 4 節）ので、画面の高さも越えないようにして中をスクロールさせる（`overflow` は UA の `dialog:modal` の既定が auto）。
      **`100vh` ではなく `100%`**（モーダルの `<dialog>` の包含ブロックは見えている領域）——iOS Safari の `100vh` はツールバーを畳んだときの
      高さなので、ツールバーが出ている間はダイアログが画面から切れる。 */
   box-sizing: border-box;
@@ -327,7 +423,7 @@ function onNativeCancel(ev: Event): void {
   border-radius: 6px;
 }
 .settings-dialog::backdrop {
-  background: rgb(0 0 0 / 40%);
+  background: var(--wtm-backdrop, rgba(0, 0, 0, 0.4));
 }
 /* 題名の行（「閉じる」）は、ダイアログを下までスクロールしても見えるようにする——小さい画面では端末の節まで下げると流れてしまう。 */
 .settings-header {
@@ -439,6 +535,28 @@ function onNativeCancel(ev: Event): void {
   /* 押せる大きさ（WCAG 2.5.8 の最小 24px）。押し間違えると隣の値がその場で保存されるので、携帯では特に要る。 */
   min-height: 1.75rem;
   cursor: pointer;
+}
+.settings-theme {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+/* 狭い画面では選択肢が次の行へ回り、全幅を使う（「既定（〈対の名前〉）」が切れない）。 */
+.settings-select-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3em 0.8em;
+}
+.settings-select-row > span {
+  flex: none;
+}
+/* 見た目は UA の既定のまま（入力欄と同じ。color-scheme で明暗に合う）。押せる大きさは WCAG 2.5.8 の 24px 以上。 */
+.settings-select {
+  font: inherit;
+  min-height: 1.75rem;
+  max-width: 100%;
 }
 .settings-hint {
   margin: 1em 0 0;

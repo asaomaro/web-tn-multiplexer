@@ -1,4 +1,4 @@
-import type { PaneId } from "@wtm/protocol";
+import type { PaneId, TerminalPalette } from "@wtm/protocol";
 import type { PtyBackend } from "../pty/PtyBackend.js";
 import type { ProcessInspector } from "../platform/ProcessInspector.js";
 import { DefaultTerminalHost, type TerminalHost } from "./TerminalHost.js";
@@ -26,6 +26,11 @@ export class DefaultTerminalManager implements TerminalManager {
     private readonly ptyBackend: PtyBackend,
     private readonly processInspector: ProcessInspector,
     private readonly scrollbackLines: number,
+    /**
+     * pane ごとに、色の問い合わせに答える配色を引く（20260921-theme-settings の design D6。`composeServer.ts` が `createPaletteSource` を渡す）。
+     * 省けば今までどおり dracula。
+     */
+    private readonly paletteFor?: (paneId: PaneId) => TerminalPalette,
   ) {}
 
   get(paneId: PaneId): TerminalHost | undefined {
@@ -49,7 +54,15 @@ export class DefaultTerminalManager implements TerminalManager {
       cols: opts.cols,
       rows: opts.rows,
     });
-    const host = new DefaultTerminalHost(paneId, proc, opts.cols, opts.rows, this.scrollbackLines);
+    const paletteFor = this.paletteFor;
+    const host = new DefaultTerminalHost(
+      paneId,
+      proc,
+      opts.cols,
+      opts.rows,
+      this.scrollbackLines,
+      paletteFor ? () => paletteFor(paneId) : undefined,
+    );
     this.hosts.set(paneId, host);
     // シェルが自分で終了したとき、`SessionService` が明示的に `dispose(paneId)` を呼ぶ前に
     // このリスナー（`create` 時点で真っ先に登録される）が `hosts` から消してしまうと、

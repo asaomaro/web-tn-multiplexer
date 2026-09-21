@@ -143,7 +143,8 @@ function onKeydown(ev: KeyboardEvent): void {
  * `inset: 0` の絶対配置なので border は内側に収まり、`.pane-frame-enabled` の 4px は変わらない
  * ——外寸が変わると PTY の行・列が変わってしまう。 */
 .pane-frame-edge-current {
-  border: 2px solid var(--wtm-menu-border, #44475a);
+  /* 選ばれている pane の枠はテーマごとに背景から 3:1 に寄せた色（20260921-theme-settings の decisions D15。dracula は今と同じ #44475a）。 */
+  border: 2px solid var(--wtm-pane-current, #44475a);
 }
 .pane-frame-edge:focus-visible {
   outline: 1px solid var(--wtm-fg, #f8f8f2);

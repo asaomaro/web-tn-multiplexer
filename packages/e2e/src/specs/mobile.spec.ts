@@ -247,9 +247,13 @@ test("「この端末に合わせる」を有効にしたまま繋ぎ直すと�
 
   // 新しい接続でページが送った順：hello → client.view → client.fit（有効）→ pane.subscribe（fit で決まった大きさで SNAPSHOT を取る）。
   // `expect.soft`：落ちても、下の PTY の大きさまで見る（送らなかったとき、PTY がどうなるかも 1 回の失敗で分かるように）。
+  // `client.theme`（表示しているテーマ。20260921-theme-settings の design D6）も接続ごとに送り直すが、fit の並びとは関わらないので除いて見る。
   await expect.soft
-    .poll(() => ws.sent(1).map((r) => r.method).slice(0, 4), { message: "新しい接続で client.view → client.fit → pane.subscribe の順に送る" })
+    .poll(() => ws.sent(1).map((r) => r.method).filter((m) => m !== "client.theme").slice(0, 4), {
+      message: "新しい接続で client.view → client.fit → pane.subscribe の順に送る",
+    })
     .toEqual(["client.hello", "client.view", "client.fit", "pane.subscribe"]);
+  expect.soft(ws.sent(1).map((r) => r.method), "新しい接続でもテーマを送り直す（20260921-theme-settings）").toContain("client.theme");
   expect.soft(ws.sent(1).find((r) => r.method === "client.fit")?.params, "送り直す client.fit は有効").toEqual({ enabled: true });
 
   // サーバの PTY がスマートフォンの大きさ（新しい接続の申告。表示領域は変わっていないので切断の前と同じ）に戻る。

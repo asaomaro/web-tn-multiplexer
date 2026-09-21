@@ -125,7 +125,7 @@ function onKeydown(ev: KeyboardEvent): void {
   padding: 1em;
 }
 .worktree-open-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--wtm-backdrop, rgba(0, 0, 0, 0.4));
 }
 .worktree-open-dialog-title {
   margin: 0 0 0.6em;

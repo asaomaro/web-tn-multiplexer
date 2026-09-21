@@ -1,5 +1,5 @@
-import type { HostInfo } from "@wtm/protocol";
-import { beforeEach, describe, expect, it } from "vitest";
+import { TERMINAL_PALETTES, type HostInfo } from "@wtm/protocol";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Disposable } from "../util/Disposable.js";
 import { MemoryLogger } from "../log/Logger.js";
 import { EventBus } from "../bus/EventBus.js";
@@ -10,6 +10,7 @@ import { SessionModel } from "../session/SessionModel.js";
 import { SessionService } from "../session/SessionService.js";
 import { DefaultClientRegistry } from "./ClientRegistry.js";
 import { DefaultSizeAuthority } from "./SizeAuthority.js";
+import { answerPaletteFor } from "./answerPalette.js";
 
 /** 常に成功する、必要最小限の偽の PTY（SizeAuthority の権限ロジックだけを見る）。 */
 class AlwaysUpHost implements TerminalHost {
@@ -224,6 +225,34 @@ describe("DefaultSizeAuthority — モバイルは既定でサイズを決めな
     expect(session.getTab(tab.id)?.sizeOwnerClientId).toBeNull();
     expect(session.getPane(pane.id)).toMatchObject(sizeBefore);
     expect(terminals.hosts.get(pane.id)?.resized).toBeNull(); // PTY へ resize を一度も送っていない
+  });
+
+  it("fit していないモバイルの入力でも操作の時刻は進み（権限は取らない）、色の問い合わせには後から入力したモバイルの配色で答える（20260921-theme-settings の decisions D7）", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000);
+      const { session, clients, authority } = makeContext();
+      const { tab, pane } = await session.createWorkspace("/home/u", "api");
+      const first = clients.register("mobile");
+      vi.setSystemTime(2_000);
+      const second = clients.register("mobile"); // 後から接続した
+      for (const [c, theme] of [
+        [first, "nord"],
+        [second, "one-light"],
+      ] as const) {
+        clients.setView(c, { workspaceId: tab.workspaceId, tabId: tab.id, visible: [{ paneId: pane.id, cols: 40, rows: 20 }] });
+        clients.setTheme(c, theme);
+      }
+      vi.setSystemTime(3_000);
+      authority.noteInteraction(first, pane.id); // 先に接続したほうが後から入力した
+
+      expect(session.getTab(tab.id)?.sizeOwnerClientId).toBeNull();
+      expect(clients.get(first)?.lastInteractionAt).toBe(3_000);
+      const deps = { getPane: (id: string) => session.getPane(id), getTab: (id: string) => session.getTab(id), clients };
+      expect(answerPaletteFor(pane.id, deps)).toBe(TERMINAL_PALETTES.nord);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("デスクトップを閉じた後にモバイル（fit なし）だけが見ている tab：権限は無いまま、大きさはデスクトップのときのまま", async () => {

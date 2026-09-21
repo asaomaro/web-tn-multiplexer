@@ -1,4 +1,4 @@
-import { ClientDetachParams, ClientFitParams, ClientHelloParams, ClientViewParams } from "@wtm/protocol";
+import { ClientDetachParams, ClientFitParams, ClientHelloParams, ClientThemeParams, ClientViewParams } from "@wtm/protocol";
 import type { ControlSurface } from "../ControlSurface.js";
 import type { MethodDeps } from "./deps.js";
 
@@ -29,6 +29,15 @@ export function registerClientMethods(surface: ControlSurface, deps: MethodDeps)
       // 有効にしたら表示中の tab の権限を取り、無効にしたら持っている権限を手放す（D13・D106。以前は `onViewChanged` を
       // 呼ぶだけで、他のクライアントが持つ tab では取れず、無効にしても権限を持ち続けた）。
       deps.sizeAuthority.onFitChanged(ctx.clientId);
+      return {};
+    },
+  });
+
+  surface.register("client.theme", {
+    schema: ClientThemeParams,
+    // 覚えるだけ（保存も配布もしない）。色の問い合わせに答える瞬間に `answerPalette.ts` が引く（20260921-theme-settings の design D6）。
+    handler: (ctx, params) => {
+      deps.clients.setTheme(ctx.clientId, params.theme);
       return {};
     },
   });

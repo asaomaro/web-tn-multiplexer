@@ -158,3 +158,88 @@ describe("useSettingsStore — 新しく開く場所", () => {
     expect(store.newCwdPath).toBe("");
   });
 });
+
+describe("useSettingsStore — テーマ（20260921-theme-settings）", () => {
+  it("何も保存されていなければ dracula・切・対の既定で、いま使うのは dracula（AC4）", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.theme).toBe("dracula");
+    expect(store.themeAuto).toBe(false);
+    expect(store.themeLight).toBeNull();
+    expect(store.themeDark).toBeNull();
+    expect(store.effectiveTheme).toBe("dracula");
+  });
+
+  it("保存した値を値ごとに読み戻す（壊れた値だけを落とす。AC3・AC4）", () => {
+    writePrefs({ theme: "gruvbox", themeAuto: true, themeLight: "lattee", themeDark: "vesper" });
+    const store = useSettingsStore(pinia);
+    expect(store.theme).toBe("gruvbox");
+    expect(store.themeAuto).toBe(true);
+    expect(store.themeLight).toBeNull();
+    expect(store.themeDark).toBe("vesper");
+  });
+
+  it("1 つのテーマを選ぶと反映・保存され、自動の切替が入っていたら切る（AC7）", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeAuto(true);
+    store.setTheme("nord");
+    expect(store.theme).toBe("nord");
+    expect(store.themeAuto).toBe(false);
+    expect(store.effectiveTheme).toBe("nord");
+    expect(readPrefs()).toMatchObject({ theme: "nord", themeAuto: false });
+    const again = useSettingsStore(createPinia());
+    expect(again.theme).toBe("nord");
+    expect(again.themeAuto).toBe(false);
+  });
+
+  it("自動の切替が入っていれば、OS の明暗（systemDark）でいま使うテーマが替わる。切ると 1 つのテーマに戻る（AC5・AC7）", () => {
+    const store = useSettingsStore(pinia);
+    store.setTheme("tokyo-night");
+    store.setThemeAuto(true);
+    expect(readPrefs()["themeAuto"]).toBe(true); // 入を保存する（AC3）
+    expect(useSettingsStore(createPinia()).themeAuto).toBe(true);
+    store.systemDark = true;
+    expect(store.effectiveTheme).toBe("tokyo-night");
+    store.systemDark = false;
+    expect(store.effectiveTheme).toBe("tokyo-night-day");
+    store.setThemeAuto(false);
+    expect(store.effectiveTheme).toBe("tokyo-night");
+    expect(readPrefs()["themeAuto"]).toBe(false);
+  });
+
+  it("明るいとき・暗いときを選ぶと保存され、null を入れると対の既定に戻り、1 つのテーマの変更に追従する（AC6）", () => {
+    const store = useSettingsStore(pinia);
+    store.setTheme("gruvbox");
+    store.setThemeAuto(true);
+    store.systemDark = false;
+    store.setThemeLight("one-light");
+    expect(store.effectiveTheme).toBe("one-light");
+    expect(readPrefs()["themeLight"]).toBe("one-light");
+    // 選んだ後は、1 つのテーマを変えても追従しない（setTheme は自動を切るので、入れ直す）。
+    store.setTheme("kanagawa");
+    store.setThemeAuto(true);
+    expect(store.effectiveTheme).toBe("one-light");
+    // null で既定（対）に戻ると、また追従する。
+    store.setThemeLight(null);
+    expect(store.themeLight).toBeNull();
+    expect(readPrefs()["themeLight"]).toBeNull();
+    expect(store.effectiveTheme).toBe("kanagawa-lotus");
+    store.setThemeDark("vesper");
+    expect(readPrefs()["themeDark"]).toBe("vesper");
+    store.systemDark = true;
+    expect(store.effectiveTheme).toBe("vesper");
+    // 新しいストアで読み直しても、null（対の既定）と選んだ値がそのまま戻る。
+    const again = useSettingsStore(createPinia());
+    expect(again.themeLight).toBeNull();
+    expect(again.themeDark).toBe("vesper");
+    again.systemDark = false;
+    expect(again.effectiveTheme).toBe("kanagawa-lotus");
+  });
+
+  it("テーマを保存しても他の好みは消えない", () => {
+    writePrefs({ statusSymbols: false, newCwdPolicy: "home" });
+    const store = useSettingsStore(pinia);
+    store.setTheme("one-dark");
+    store.setThemeLight("solarized-light");
+    expect(readPrefs()).toMatchObject({ statusSymbols: false, newCwdPolicy: "home", theme: "one-dark", themeLight: "solarized-light" });
+  });
+});

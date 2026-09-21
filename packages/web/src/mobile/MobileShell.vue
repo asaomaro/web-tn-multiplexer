@@ -151,7 +151,8 @@ onBeforeUnmount(() => touchScroll?.dispose());
   border-radius: 4px;
 }
 .mobile-shell-fit-btn[aria-pressed="true"] {
-  background: var(--wtm-accent, #6272a4);
+  color: var(--wtm-accent-fg, #f8f8f2);
+  background: var(--wtm-accent, #6070a1);
 }
 .mobile-shell-keyboard-btn {
   flex: none;

@@ -1,3 +1,4 @@
+import { TERMINAL_PALETTES } from "@wtm/protocol";
 import type { ITerminalOptions } from "@xterm/xterm";
 // xterm.js の必須の CSS（canvas の重ね方・入力用 textarea の隠し方）。無いと描画用の canvas が端末の下へ
 // 押し出され、端末の中身が一切見えない（親の統合 test で発見。D96）。
@@ -30,6 +31,8 @@ import { MouseBridge } from "./term/MouseBridge.js";
 import { RendererPool } from "./term/RendererPool.js";
 import { TerminalRegistry } from "./term/TerminalRegistry.js";
 import { effectiveScrollback } from "./term/scrollback.js";
+import { toXtermTheme } from "./term/theme.js";
+import { ThemeController } from "./theme/ThemeController.js";
 import { ViewSync } from "./term/ViewSync.js";
 
 /**
@@ -140,13 +143,38 @@ const registry = new TerminalRegistry({
   },
   terminalOptions,
   getScrollbackLines,
+  // 作る端末は、いま使っているテーマの配色（20260921-theme-settings）。開いている端末は ThemeController が入れ替える。
+  getTheme: () => toXtermTheme(TERMINAL_PALETTES[settings.effectiveTheme]),
 });
 registryBox.current = registry;
+
+/**
+ * テーマ（20260921-theme-settings の design D5）。**ここで当てる**——`app.mount` より前、接続より前。`public/theme-boot.js` が控えから
+ * 先に当てた値も、ここで設定から当て直す。サーバへの `client.theme` は接続が無ければ捨て、新しい接続ごとに送り直す（下の `onOpened`）。
+ */
+const themeController = new ThemeController({
+  settings,
+  root: document.documentElement,
+  media: typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null,
+  setTerminalTheme: (palette) => registry.setTheme(toXtermTheme(palette)),
+  sendTheme: (theme) => void conn.request("client.theme", { theme }).catch(() => undefined),
+  storage: (() => {
+    try {
+      return window.localStorage; // 取得そのものが投げる環境がある（サンドボックスの iframe 等）
+    } catch {
+      return null;
+    }
+  })(),
+});
+themeController.start();
 
 const viewSync = new ViewSync({ conn, registry, getScrollbackLines });
 // 新しい接続の `client.hello` が通るたび（初回・自動の再接続・503 等からの再試行・再ログイン・「再接続」ボタン）に、表示と
 // 購読を張り直す（D107）。サーバは接続ごとに新しい clientId を振り、前の接続の購読・表示・fit を引き継がない。
 connection.onOpened(() => viewSync.onConnectionOpened());
+// サーバは接続ごとに新しい clientId を振り、前の接続のテーマを持たない（色の問い合わせの答えに使う。20260921-theme-settings の design D6）。
+// 起動の直後の `start()` は接続より前で送れないので、接続の直後に今のテーマを届ける経路はここだけ（接続中の変化は `apply` が送る）。
+connection.onOpened(() => themeController.resend());
 // 閉じてから次の hello が通るまでは、`client.view`・`pane.subscribe` を送らない（D107）。
 connection.onClosed(() => viewSync.onConnectionClosed());
 

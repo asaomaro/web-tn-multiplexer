@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ClientThemeParams,
   METHOD_SCHEMAS,
   NewCwd,
   PaneSplitParams,
@@ -7,6 +8,7 @@ import {
   WorkspaceCreateParams,
   WorkspaceRenameParams,
 } from "./messages.js";
+import { THEME_NAMES } from "./theme.js";
 
 describe("messages", () => {
   it("validates pane.split params", () => {
@@ -101,5 +103,20 @@ describe("WorkspaceRenameParams", () => {
   it("空文字と、label の無い形は弾く", () => {
     expect(() => WorkspaceRenameParams.parse({ workspaceId: "w1", label: "" })).toThrow();
     expect(() => WorkspaceRenameParams.parse({ workspaceId: "w1" })).toThrow();
+  });
+});
+
+// 20260921-theme-settings：ブラウザが表示しているテーマの名前をサーバへ伝える（design D1）。
+describe("ClientThemeParams", () => {
+  it("17 のテーマの名前だけを受ける", () => {
+    expect(THEME_NAMES).toHaveLength(17);
+    for (const theme of THEME_NAMES) expect(ClientThemeParams.parse({ theme })).toEqual({ theme });
+    expect(() => ClientThemeParams.parse({ theme: "terminal" })).toThrow();
+    expect(() => ClientThemeParams.parse({ theme: "Dracula" })).toThrow();
+    expect(() => ClientThemeParams.parse({})).toThrow();
+  });
+
+  it("方式の表に client.theme がある", () => {
+    expect(METHOD_SCHEMAS["client.theme"]).toBe(ClientThemeParams);
   });
 });

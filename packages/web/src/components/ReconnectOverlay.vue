@@ -74,7 +74,7 @@ const retry = (): void => {
   gap: 0.4em;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--wtm-backdrop-strong, rgba(0, 0, 0, 0.5));
   color: var(--wtm-fg, #f8f8f2);
   z-index: 900;
   pointer-events: none;
@@ -101,11 +101,11 @@ const retry = (): void => {
 }
 .reconnect-overlay-rejected .reconnect-overlay-title {
   font-weight: bold;
-  color: #ff5555;
+  color: var(--wtm-error-fg, #ff5555);
 }
 /* `--origin <Origin>` をそのまま写せるように、選択しやすく・折り返せる形で出す（ログイン画面の 403 と同じ。D105）。 */
 .reconnect-overlay-command {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--wtm-subtle-bg, rgba(255, 255, 255, 0.08));
   padding: 0.3em 0.5em;
   border-radius: 3px;
   overflow-wrap: anywhere;

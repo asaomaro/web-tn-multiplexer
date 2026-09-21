@@ -1,4 +1,4 @@
-import type { PaneId } from "@wtm/protocol";
+import type { PaneId, TerminalPalette } from "@wtm/protocol";
 import type { PtyProcess } from "../pty/PtyBackend.js";
 import type { Disposable } from "../util/Disposable.js";
 import { DefaultOutputFanout, type OutputFanout } from "./OutputFanout.js";
@@ -35,8 +35,10 @@ export class DefaultTerminalHost implements TerminalHost {
     cols: number,
     rows: number,
     scrollbackLines: number,
+    /** 色の問い合わせに答える配色（20260921-theme-settings の design D6）。省けば今までどおり dracula。 */
+    palette?: () => TerminalPalette,
   ) {
-    this.mirror = new XtermMirror(cols, rows, scrollbackLines);
+    this.mirror = new XtermMirror(cols, rows, scrollbackLines, palette);
     this.fanout = new DefaultOutputFanout(paneId, this.mirror);
 
     // PTY の出力は、同じ呼び出しの中で Mirror と OutputFanout の両方に渡す（design「流量制御と文字列の変換」）。

@@ -1,0 +1,13 @@
+schema: 11
+slug: theme-settings
+current: deliver
+approved: [requirements, research, design, tasks, coding, test, review, deliver]
+mode: autonomous
+profile: full
+humanGates: []
+maxSendBacks: 3
+dependsOn: []
+harnessRev: unknown
+backlog: product-roadmap.md
+backlogItem: 外観と設定: テーマと明暗の切替
+harnessRevDelivered: unknown
