@@ -50,3 +50,43 @@
 - 決定: T10 は coding の承認時に未チェックのまま残し、test 工程で単体一式と影響を受ける E2E の spec を走らせて記録する。
   E2E の一式は deliver の直前に 1 回（利用者の指示「少しの修正ですべて回すのは時間とみあいません」）。
 - 理由: `aidev-30-tasks` 手順6。前の work（`20260921-herdr-settings-gaps` の decisions D4）と同じ扱い。
+
+## D7: OSC 7 のドライブ付きパスを、サーバが Windows のときだけ Windows の形に直す（`Mirror.ts` の `parseOsc7`）
+
+- 背景: T2 の独立点検が、`parseOsc7` は URL の pathname をそのまま返すので、Windows では `file://host/C:/Users/u` が
+  `/C:/Users/u` になり、`isUsableDir` が必ず false を返すと指摘した。design D2 の「前面の cwd が読めなければ OSC 7」と、
+  文書に書く「OSC 7 を出すシェルなら追従する」が Windows では成り立たない（Windows は前面の cwd を読めないので、OSC 7 が唯一の手掛かり）。
+- 決定: `parseOsc7` に `platform` を足し（既定は `process.platform`）、`win32` で pathname が `/<ドライブ>:` で始まるときだけ
+  `C:\Users\u` の形に直す。POSIX では今までどおり。
+- 理由 / 代替案: 直すのは OSC 7 を読む 1 か所にした——`AgentMonitor` が `Pane.cwd` に入れる値も同じ関数を通るので、
+  分割の 1 段目の代わり（元の pane の記録された場所）も同時に正しくなる。退けた案: `makeNewCwdDeps` の中だけで直す——
+  `Pane.cwd` には崩れた形が残り、代わりの 1 段目が必ず使えない場所になる。
+- 影響: tasks の T2 の対象の外（`packages/server/src/terminal/Mirror.ts`）に触った。実機の Windows では確かめていない
+  （単体で `platform` を渡して確かめた）。文書（T8）の Windows の項目は「OSC 7 を出すシェルなら追従する（未検証）」と書く。
+
+## D8: 「指定した場所」の入力欄は、ダイアログを閉じたときも確定する（Esc は取り消しではない）
+
+- 背景: T7 の独立点検が、実物の Chromium では Esc でダイアログを閉じると入力欄からフォーカスが外れて `change` が立ち、打ちかけの値が
+  保存されると指摘した（happy-dom は立てないので、「閉じたら捨てる」という単体テストは実際には起きない振る舞いを守っていた）。
+- 決定: 閉じる操作（Esc・閉じる・背景）でも、その時点の入力欄の値を確定する。ブラウザが `change` を立てるかに任せず、閉じる側で
+  明示的に確定する（同じ値なら何もしない）。入力欄は下書きの ref と v-model で持ち、開くたびに保存値から始める。
+- 理由 / 代替案: design D8 は「入れ終えた時点（`change`＝Enter か入力欄を離れたとき）で保存」で、閉じることは入力欄を離れることに
+  当たる。ほかの設定も閉じても結果が残る（AC-I1）。AC-I2 の「打ちかけの途中の値で開いてしまわない」は、ダイアログはモーダルで
+  開いている間に作成は起きないので、閉じたときに確定しても守られる。requirements の AC-I2 は取り消しを「選び直す・入れ直す」と
+  定めており、Esc を取り消しにはしていない。退けた案: Esc では捨てる——ブラウザの `change` を打ち消す処理が要り、背景・閉じるとの
+  違いも説明しにくい。
+- 影響: `SettingsDialog.vue` の `cancel`・`commitNewCwdPath`。単体テストは閉じる 3 通りで確定することを見る。
+
+## D9: 読み直しの上限は前面プロセスの cwd にだけ掛け、OSC 7 は上限を超えても待った後に読む
+
+- 背景: cross の点検が、`resolveNewCwd` は `deps.liveCwd`（前面プロセスの cwd、無ければ OSC 7）の全体を 200ms と競わせるので、Windows で
+  プロセスの走査が 200ms を超えると、同期で読めるはずの OSC 7 まで捨てて記録された `Pane.cwd`（監視が最大およそ 1 秒遅れで追従させる値）に
+  落ちると指摘した。Windows の `foreground()` は `cwd: null` しか返さないのに走査は待たされるので、design D2 の「OSC 7 を出していれば
+  遅れ無し」と decisions D7 の狙いが、`cd` の直後には成り立たない。
+- 決定: 依存を 2 つに分けた——`liveCwd`（前面プロセスの cwd だけ。上限はこれにだけ掛ける）と `hintCwd`（OSC 7。同期）。「引き継ぐ」は
+  `(上限つきの liveCwd) ?? hintCwd ?? 記録された場所` の順で、OSC 7 は待った後に読む（調べている間に届いた分も拾う）。
+- 理由 / 代替案: 前面プロセスの cwd が OSC 7 に勝つ（入れ子のシェル・OSC 7 を出さない子）という design D2 の優先は変えない。
+  退けた案: 上限切れのときだけ `makeNewCwdDeps` の中で OSC 7 を読む——上限を `resolveNewCwd` で掛けている（design D6。単体で確かめるため）
+  ので、上限切れを `makeNewCwdDeps` は知らない。
+- 影響: design「インターフェース」の `NewCwdDeps` に `hintCwd` が加わった（`liveCwd` の意味が「前面プロセスの cwd だけ」に狭まった）。
+  テストの偽の deps 3 か所に `hintCwd` を足した。

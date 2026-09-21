@@ -1,3 +1,4 @@
+import type { NewCwd } from "@wtm/protocol";
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
@@ -20,12 +21,52 @@ export function loadStatusSymbols(raw: unknown): boolean {
   return typeof raw === "boolean" ? raw : true;
 }
 
+/**
+ * 新しく開く場所の方針（20260921-new-terminal-cwd。herdr の `terminal.new_cwd`）。**ブラウザごと**に持ち、作成の要求に載せる
+ * （サーバは方針を持たない。design D1）。
+ */
+export type NewCwdPolicy = NewCwd["policy"];
+const NEW_CWD_POLICIES: readonly NewCwdPolicy[] = ["follow", "home", "current", "path"];
+
+/** 保存された方針を読む。**4 つのどれかでなければ既定の「引き継ぐ」**（herdr の既定と同じ。AC4）。 */
+export function loadNewCwdPolicy(raw: unknown): NewCwdPolicy {
+  return NEW_CWD_POLICIES.includes(raw as NewCwdPolicy) ? (raw as NewCwdPolicy) : "follow";
+}
+
+/** 保存された「指定した場所」を読む。文字列でなければ空（検証はサーバ。空なら使えない場所として知らされる）。 */
+export function loadNewCwdPath(raw: unknown): string {
+  return typeof raw === "string" ? raw : "";
+}
+
+/**
+ * 作成の要求に載せる形を作る。**`sourcePaneId` は「引き継ぐ」のときだけ**、null なら載せない（元の pane が無い →
+ * サーバが以前と同じ場所で開く。design D7）。「指定した場所」は入れたままの文字列を送る（`~` の展開と検証はサーバ）。
+ */
+export function buildNewCwd(
+  policy: NewCwdPolicy,
+  path: string,
+  sourcePaneId: string | null,
+): NewCwd {
+  switch (policy) {
+    case "follow":
+      return sourcePaneId === null ? { policy } : { policy, sourcePaneId };
+    case "home":
+    case "current":
+      return { policy };
+    case "path":
+      return { policy, path };
+  }
+}
+
 export const useSettingsStore = defineStore("settings", () => {
   const initial = readPrefs();
   /** 状態を色に加えて記号でも示すか（`StateIcon.vue` が読む）。 */
   const statusSymbols = ref(loadStatusSymbols(initial["statusSymbols"]));
   /** このブラウザの scrollback の設定。使う行数は `term/scrollback.ts` の `effectiveScrollback` が決める。 */
   const scrollback = ref<ScrollbackPref>(loadScrollbackPref(initial["scrollback"]));
+  /** 新しい workspace・tab・分割を開く場所の方針と、「指定した場所」のパス（方針が `path` のときだけ使う）。 */
+  const newCwdPolicy = ref<NewCwdPolicy>(loadNewCwdPolicy(initial["newCwdPolicy"]));
+  const newCwdPath = ref(loadNewCwdPath(initial["newCwdPath"]));
 
   /** 反映と保存を同時に行う（確定ボタンを置かない。AC-I2）。 */
   function setStatusSymbols(v: boolean): void {
@@ -39,5 +80,26 @@ export const useSettingsStore = defineStore("settings", () => {
     writePrefs({ scrollback: v });
   }
 
-  return { statusSymbols, scrollback, setStatusSymbols, setScrollback };
+  /** 反映と保存を同時に行う。**効くのは次に開く workspace・tab・分割から**（既に開いている pane は変えない。AC10）。 */
+  function setNewCwdPolicy(v: NewCwdPolicy): void {
+    newCwdPolicy.value = v;
+    writePrefs({ newCwdPolicy: v });
+  }
+
+  /** 反映と保存を同時に行う。呼ぶのは入れ終えたとき（入力欄の `change`）だけ——打ちかけの値で開かない（AC-I2）。 */
+  function setNewCwdPath(v: string): void {
+    newCwdPath.value = v;
+    writePrefs({ newCwdPath: v });
+  }
+
+  return {
+    statusSymbols,
+    scrollback,
+    newCwdPolicy,
+    newCwdPath,
+    setStatusSymbols,
+    setScrollback,
+    setNewCwdPolicy,
+    setNewCwdPath,
+  };
 });

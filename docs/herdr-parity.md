@@ -58,7 +58,8 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 | H33 | 名前付き session | 新規後続(提案):セッション永続化の拡張 | — |
 | H34 | 複数クライアントの同時接続とサイズの決め方 | MVP | AC9 |
 | H35 | モバイル向けの1列表示と移動用メニュー | MVP | AC12 |
-| H36 | 新規 pane の既定シェル・起動モード・cwd の方針 | MVP（既定の挙動だけ） | AC3（分割時の cwd 引き継ぎ） |
+| H36 | 新規 pane の既定シェル・起動モード | MVP（既定の挙動だけ。シェルは `--shell`。herdr の `terminal.shell_mode`（ログインシェルにするか）に当たる設定は無い） | AC3・AC16（分割した pane・Windows ネイティブの pane が既定のシェルで起動する） |
+| H36b | 新しく開く場所の方針（`terminal.new_cwd`：引き継ぐ・ホーム・起動した場所・指定した場所） | 20260921-new-terminal-cwd（**置き場所が herdr と違う**：herdr はサーバの設定ファイル、本製品は**ブラウザごと**の設定（`prefix+s` の「端末」）で、作成の要求に載せる。既定は herdr と同じ「引き継ぐ」で、新しい workspace・tab・分割のすべてに効く。**元の pane が無いときの代わりも違う**：herdr は `$HOME`、本製品は以前と同じ場所（新しい workspace ならサーバを起動した場所、tab ならその workspace の場所）。worktree を開く操作は herdr の `--cwd` と同じく明示した場所が勝つ） | AC1〜AC11（同 work） |
 | H37 | Git worktree の作成と一覧（workspace のメニュー・`prefix+G`） | 20260920-git-worktree-actions | AC1〜AC6（同 work） |
 | H37b | Git worktree の削除とグループ化 | 後続:workspace のグルーピング | — |
 | H38 | CLI / socket API（workspace・tab・pane・agent の操作） | 後続:外部操作 API / CLI | — |

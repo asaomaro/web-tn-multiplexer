@@ -5,7 +5,8 @@ import type { MethodDeps } from "./deps.js";
 export function registerWorkspaceMethods(surface: ControlSurface, deps: MethodDeps): void {
   surface.register("workspace.create", {
     schema: WorkspaceCreateParams,
-    handler: (_ctx, params) => deps.session.createWorkspace(params.cwd, params.label),
+    handler: (_ctx, params) =>
+      deps.session.createWorkspace(params.cwd, params.label, params.newCwd),
   });
 
   surface.register("workspace.rename", {

@@ -171,8 +171,10 @@ WorkspaceCreateResult / TabCreateResult / PaneSplitResult に  cwdFallback?: tru
 ```ts
 // session/newCwd.ts
 export interface NewCwdDeps {
-  /** 元の pane の前面プロセスの cwd（`ProcessInspector.foreground(host.pid)?.cwd`）。読めなければ null。 */
+  /** 元の pane の前面プロセスの cwd（`ProcessInspector.foreground(host.pid)?.cwd`）。読めなければ null。上限はこれにだけ掛ける。 */
   liveCwd: (paneId: PaneId) => Promise<string | null>;
+  /** 元の pane のシェルが OSC 7 で知らせた場所（`mirror.cwdHint()`）。同期。decisions D9 で分けた。 */
+  hintCwd: (paneId: PaneId) => string | null;
   /** 元の pane の記録された cwd（`Pane.cwd`）。pane が無ければ undefined。 */
   recordedCwd: (paneId: PaneId) => string | undefined;
   home: () => string;                                   // os.homedir()
@@ -194,10 +196,11 @@ export async function resolveNewCwd(
 規則（ここが正典）:
 
 1. 方針ごとの候補:
-   - `follow`: 元の pane が無ければ候補なし。あれば `liveCwd(src)`（上限 `liveCwdTimeoutMs`。**超えた・reject した**ら `null`）→ `null` なら `recordedCwd(src)`。
+   - `follow`: 元の pane が無ければ候補なし。あれば `liveCwd(src)`（上限 `liveCwdTimeoutMs`。**超えた・reject した**ら `null`）→ `null` なら
+     `hintCwd(src)`（**待った後に読む**。上限を超えても捨てない——decisions D9）→ `null` なら `recordedCwd(src)`。
    - `home`: `home()`。 `current`: `currentDir`。
    - `path`: `expandHome(path, home())`。**絶対パスでなければ使えない**（相対パスはサーバのプロセスの cwd から解決され、`Workspace.cwd` に
-     相対のまま入ってしまう）。
+     相対のまま入ってしまう）。絶対パスなら `path.resolve` で正規化する（末尾の `/`・`..` を残さない。review ラウンド 1）。
 2. 候補が `isUsableDir` なら それ（`fellBack: false`）。
 3. 候補が無い・使えないなら、`fallback` が使えれば `fallback`、使えなければ `currentDir`（D3 の 2 段目）。
    **`fellBack` は `follow` 以外のときだけ true**。
@@ -212,7 +215,8 @@ splitPane(paneId, direction, ratio, newCwd?) // newCwd（fallback = source.cwd�
 ```
 
 `newCwd.ts` の `makeNewCwdDeps({ terminals, inspector, getPane, currentDir })`（`composeServer.ts` が呼ぶ）:
-`liveCwd = async (id) => { const h = terminals.get(id); if (!h) return null; const fg = await inspector.foreground(h.pid); return fg?.cwd ?? h.mirror.cwdHint() ?? null; }`、
+`liveCwd = async (id) => { const h = terminals.get(id); if (!h) return null; const fg = await inspector.foreground(h.pid).catch(() => null); return fg?.cwd ?? null; }`、
+`hintCwd = (id) => terminals.get(id)?.mirror.cwdHint() ?? null`（decisions D9）、
 `recordedCwd = (id) => getPane(id)?.cwd`、`home = os.homedir`、`currentDir` は `composeServer.ts` の `defaultCwd` と同じ値、
 `isUsableDir` は `fs.promises.stat` → `isDirectory()` と `access(X_OK)`（どちらかが失敗したら false）。
 
@@ -256,8 +260,9 @@ export function buildNewCwd(policy: NewCwdPolicy, path: string, sourcePaneId: st
 ### 設定ダイアログ（端末の節）
 
 - scrollback の組の下に `<fieldset>`「新しく開く場所（workspace・tab・分割）」。ラジオは `change` で保存。
-- 「指定した場所」の入力欄は `change`（Enter・入力欄を離れたとき）で保存し、`input` では保存しない。`disabled` は「指定した場所」以外のとき。
-  注記「絶対パスか ~ で始まるパス」。
+- 「指定した場所」の入力欄は `change`（Enter・入力欄を離れたとき）で保存し、`input` では保存しない。**ダイアログを閉じたときも確定する**
+  （Esc は取り消しではない。decisions D8）。IME の変換を確定する Enter では保存しない。`disabled` は「指定した場所」以外のとき。
+  注記「絶対パスか ~/ で始まるパス（~ だけならホーム）」（cross の点検で `~user` を含めないようにした）。
 - 入力欄の中のキーは、既存の作法どおり端末へ漏れない（ダイアログ中は window の keydown が何もしない）。
 
 ## ドメイン固有の考慮

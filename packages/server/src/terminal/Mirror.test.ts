@@ -1,6 +1,6 @@
 import { DEFAULT_THEME } from "@wtm/protocol";
 import { describe, expect, it } from "vitest";
-import { XtermMirror } from "./Mirror.js";
+import { XtermMirror, parseOsc7 } from "./Mirror.js";
 
 function writeAndWait(mirror: XtermMirror, data: string): Promise<void> {
   return new Promise((resolve) => mirror.write(data, resolve));
@@ -94,6 +94,13 @@ describe("XtermMirror — serialize / bottomLines / OSC capture", () => {
     await writeAndWait(mirror, `\x1b]7;file://host/home/user/project\x07`);
     expect(mirror.cwdHint()).toBe("/home/user/project");
     mirror.dispose();
+  });
+
+  it("OSC 7 のドライブ付きパスは、サーバが Windows のときだけ Windows の形に直す", () => {
+    expect(parseOsc7("file://host/C:/Users/u/My%20Work", "win32")).toBe("C:\\Users\\u\\My Work");
+    expect(parseOsc7("file://host/C:", "win32")).toBe("C:\\");
+    expect(parseOsc7("file://host/C:/Users/u", "linux")).toBe("/C:/Users/u");
+    expect(parseOsc7("file://host/home/u", "win32")).toBe("/home/u");
   });
 
   it("resize updates cols/rows reflected in the next serialize", async () => {

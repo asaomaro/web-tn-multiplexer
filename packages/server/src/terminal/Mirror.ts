@@ -4,6 +4,7 @@
 // default（名前空間オブジェクト）を受けて実行時に取り出す。
 import xtermHeadless from "@xterm/headless";
 import xtermAddonSerialize from "@xterm/addon-serialize";
+import { win32 } from "node:path";
 import { DEFAULT_THEME } from "@wtm/protocol";
 import type { Disposable } from "../util/Disposable.js";
 
@@ -181,12 +182,20 @@ function hexToXtermRgb(hex: string): string {
   return `rgb:${r}${r}/${g}${g}/${b}${b}`;
 }
 
-/** OSC 7 の `file://host/path`（または `file:///path`）から、この端末上のパスを取り出す。 */
-function parseOsc7(data: string): string | null {
+/**
+ * OSC 7 の `file://host/path`（または `file:///path`）から、この端末上のパスを取り出す。
+ * サーバが Windows なら `file://host/C:/Users/u` の pathname（`/C:/Users/u`）を `C:\Users\u` に直す——そのままでは
+ * 使えない場所になり、新しく開く場所の「引き継ぐ」も `Pane.cwd` も追従しない（20260921-new-terminal-cwd の独立点検）。
+ */
+export function parseOsc7(data: string, platform: NodeJS.Platform = process.platform): string | null {
   try {
     const url = new URL(data);
     if (url.protocol !== "file:") return null;
-    return decodeURIComponent(url.pathname);
+    const path = decodeURIComponent(url.pathname);
+    if (platform === "win32" && /^\/[A-Za-z]:(\/|$)/.test(path)) {
+      return win32.normalize(`${path.slice(1, 3)}\\${path.slice(4)}`);
+    }
+    return path;
   } catch {
     return null;
   }

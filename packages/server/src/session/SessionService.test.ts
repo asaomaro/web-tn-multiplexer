@@ -9,6 +9,7 @@ import type { TerminalHost } from "../terminal/TerminalHost.js";
 import type { PersistScheduler } from "./PersistScheduler.js";
 import { SessionModel } from "./SessionModel.js";
 import { SessionService } from "./SessionService.js";
+import type { NewCwdDeps } from "./newCwd.js";
 import type { SessionFileData } from "../persist/SessionFile.js";
 
 /** 即座に失敗させたい pane の id を登録しておける偽の TerminalManager（T17「テスト方針」）。 */
@@ -576,5 +577,146 @@ describe("SessionService — startup and restore", () => {
     // 復元後の新規採番が、保存されていた nextId から続く。
     const { workspace } = await service.createWorkspace("/home/u", "new");
     expect(workspace.id).toBe("w2");
+  });
+});
+
+// 20260921-new-terminal-cwd：新しく開く場所の方針（herdr の `terminal.new_cwd`）。場所の規則そのものは `newCwd.test.ts`。
+// ここで見るのは、3 つの作成が決めた場所で**起動し、記録（Pane.cwd）もその場所にし**、`cwdFallback` を返し、`cwd` が勝つこと。
+describe("SessionService — 新しく開く場所（newCwd）", () => {
+  /** 使える場所と、pane ごとの「いまの場所」を持つ偽の deps。 */
+  function makeNewCwdService(live: Record<string, string> = {}, usable = ["/home/u", "/home/u/api", "/srv/live", "/tmp/picked", "/start"]) {
+    const terminals = new FakeTerminalManager();
+    const model = new SessionModel();
+    const set = new Set(usable);
+    const newCwdDeps: NewCwdDeps = {
+      liveCwd: async (id) => live[id] ?? null,
+      hintCwd: () => null,
+      recordedCwd: (id) => model.getPane(id)?.cwd,
+      home: () => "/home/u",
+      currentDir: "/start",
+      isUsableDir: async (path) => set.has(path),
+    };
+    const service = new SessionService({
+      model,
+      terminals,
+      bus: new EventBus(),
+      persist: new FakePersistScheduler(),
+      serverVersion: "0.1.0-test",
+      host: HOST_INFO,
+      scrollbackLines: 1000,
+      spawnGraceMs: 5,
+      defaultCwd: "/start",
+      logger: new MemoryLogger(),
+      newCwdDeps,
+    });
+    return { service, terminals, model, live };
+  }
+
+  it("引き継ぐ：新しい workspace は、元の pane のいまの場所で起動し、workspace と pane の記録もそこになる（AC1）", async () => {
+    const h = makeNewCwdService();
+    const { pane } = await h.service.createWorkspace("/home/u/api", "api");
+    h.live[pane.id] = "/srv/live";
+    const r = await h.service.createWorkspace(undefined, undefined, { policy: "follow", sourcePaneId: pane.id });
+    expect(h.terminals.createOptions.at(-1)!.cwd).toBe("/srv/live");
+    expect(r.workspace.cwd).toBe("/srv/live");
+    expect(r.pane.cwd).toBe("/srv/live");
+    expect(r.cwdFallback).toBeUndefined();
+  });
+
+  it("引き継ぐ：新しい tab は元の pane のいまの場所で起動し、pane の記録もそこ。workspace の場所は変えない（AC2）", async () => {
+    const h = makeNewCwdService();
+    const { workspace, pane } = await h.service.createWorkspace("/home/u/api", "api");
+    h.live[pane.id] = "/srv/live";
+    const r = await h.service.createTab(workspace.id, undefined, { policy: "follow", sourcePaneId: pane.id });
+    expect(h.terminals.createOptions.at(-1)!.cwd).toBe("/srv/live");
+    expect(r.pane.cwd, "記録も起動と同じ場所").toBe("/srv/live");
+    expect(h.model.getWorkspace(workspace.id)!.cwd, "Workspace.cwd は書き換えない（git の情報と worktree が使う）").toBe("/home/u/api");
+  });
+
+  it("引き継ぐ：分割は分割する pane のいまの場所で起動し、記録もそこ（AC3）", async () => {
+    const h = makeNewCwdService();
+    const { workspace, pane } = await h.service.createWorkspace("/home/u/api", "api");
+    h.live[pane.id] = "/srv/live";
+    const r = await h.service.splitPane(pane.id, "right", undefined, { policy: "follow" });
+    expect(h.terminals.createOptions.at(-1)!.cwd).toBe("/srv/live");
+    expect(r.pane.cwd).toBe("/srv/live");
+    expect(h.model.getWorkspace(workspace.id)!.cwd, "Workspace.cwd は書き換えない").toBe("/home/u/api");
+  });
+
+  it("ホーム・起動した場所・指定した場所で起動する（AC6〜AC8）", async () => {
+    const h = makeNewCwdService();
+    const { workspace, pane } = await h.service.createWorkspace("/home/u/api", "api");
+    await h.service.createTab(workspace.id, undefined, { policy: "home" });
+    await h.service.splitPane(pane.id, "down", undefined, { policy: "current" });
+    await h.service.createWorkspace(undefined, undefined, { policy: "path", path: "/tmp/picked" });
+    expect(h.terminals.createOptions.slice(-3).map((o) => o.cwd)).toEqual(["/home/u", "/start", "/tmp/picked"]);
+  });
+
+  it("指定した場所が使えなければ以前と同じ場所で起動し、cwdFallback を返す（AC9）", async () => {
+    const h = makeNewCwdService();
+    const { workspace, pane } = await h.service.createWorkspace("/home/u/api", "api");
+    const tab = await h.service.createTab(workspace.id, undefined, { policy: "path", path: "/nope" });
+    expect(tab.pane.cwd, "tab は workspace の場所").toBe("/home/u/api");
+    expect(tab.cwdFallback).toBe(true);
+    const split = await h.service.splitPane(pane.id, "right", undefined, { policy: "path", path: "/nope" });
+    expect(split.pane.cwd, "分割は元の pane の記録").toBe("/home/u/api");
+    expect(split.cwdFallback).toBe(true);
+    const created = await h.service.createWorkspace(undefined, undefined, { policy: "path", path: "/nope" });
+    expect(h.terminals.createOptions.at(-1)!.cwd, "workspace はサーバを起動した場所").toBe("/start");
+    expect(created.workspace.cwd).toBe("/start");
+    expect(created.cwdFallback).toBe(true);
+  });
+
+  it("引き継ぐで代わりへ回っても cwdFallback は返さない（知らせない。AC5）", async () => {
+    const h = makeNewCwdService();
+    const { workspace } = await h.service.createWorkspace("/home/u/api", "api");
+    const r = await h.service.createTab(workspace.id, undefined, { policy: "follow" }); // 元の pane が無い
+    expect(r.pane.cwd).toBe("/home/u/api");
+    expect(r.cwdFallback).toBeUndefined();
+  });
+
+  // **worktree を開く経路**（AC11・design D5）。明示した場所が方針に勝ち、代わりへも回さない。
+  it("明示した cwd は newCwd に勝ち、検証も代わりもしない", async () => {
+    const h = makeNewCwdService();
+    const r = await h.service.createWorkspace("/repo/.wtm/worktrees/feat", "feat", { policy: "home" });
+    expect(h.terminals.createOptions.at(-1)!.cwd).toBe("/repo/.wtm/worktrees/feat"); // 偽の isUsableDir では使えない場所でも
+    expect(r.workspace.cwd).toBe("/repo/.wtm/worktrees/feat");
+    expect(r.cwdFallback).toBeUndefined();
+  });
+
+  // 本番の `SessionService` は必ず deps を持つので、`newCwd` を載せないクライアント（テストのクライアント・古い web）はこの組（design D5）。
+  it("newCwdDeps があっても、要求に newCwd が無ければ今までどおり", async () => {
+    const h = makeNewCwdService();
+    const { workspace, pane } = await h.service.createWorkspace("/home/u/api", "api");
+    h.live[pane.id] = "/srv/live"; // 読み直せば別の場所になる状態でも見ない
+    const tab = await h.service.createTab(workspace.id, undefined);
+    const split = await h.service.splitPane(pane.id, "right", undefined);
+    const created = await h.service.createWorkspace(undefined, undefined);
+    expect(h.terminals.createOptions.slice(-3).map((o) => o.cwd)).toEqual(["/home/u/api", "/home/u/api", "/start"]);
+    expect([tab.cwdFallback, split.cwdFallback, created.cwdFallback]).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("newCwdDeps が無ければ newCwd を見ない（今までどおり）", async () => {
+    const terminals = new FakeTerminalManager();
+    const service = makeService(terminals, new EventBus(), new FakePersistScheduler());
+    const { workspace } = await service.createWorkspace(undefined, undefined, { policy: "home" });
+    expect(terminals.createOptions.at(-1)!.cwd, "defaultCwd").toBe("/home/u");
+    await service.createTab(workspace.id, undefined, { policy: "path", path: "/tmp/picked" });
+    expect(terminals.createOptions.at(-1)!.cwd, "workspace の場所").toBe("/home/u");
+  });
+
+  // 方針を決める間（await の間）に分割元が閉じられたら、シェルを起動する前に失敗し、孤児の PTY を残さない。
+  it("方針を決める間に分割元が閉じられたら、分割のシェルを起動せずに失敗する", async () => {
+    const h = makeNewCwdService();
+    const { pane } = await h.service.createWorkspace("/home/u/api", "api");
+    const spawnsBefore = h.terminals.createOptions.length;
+    const splitting = h.service.splitPane(pane.id, "right", undefined, { policy: "follow" });
+    const closing = h.service.closePane(pane.id); // 唯一の pane なので、D24 で代わりの workspace が自動で作られる（その PTY は正当）
+    await expect(splitting).rejects.toThrow();
+    await closing;
+    expect(h.terminals.createOptions.length, "起動したのは D24 の代わりの workspace だけ").toBe(spawnsBefore + 1);
+    // **モデルに無い pane の PTY が生きたまま残っていない**（分割で起動した PTY は破棄されている）。
+    const orphans = [...h.terminals.hosts.entries()].filter(([id, host]) => !(host as FakeTerminalHost).disposed && !h.model.getPane(id));
+    expect(orphans.map(([id]) => id)).toEqual([]);
   });
 });

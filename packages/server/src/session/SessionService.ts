@@ -3,6 +3,7 @@ import type {
   Dir,
   GitInfo,
   HostInfo,
+  NewCwd,
   Pane,
   PaneId,
   RightClickTarget,
@@ -19,6 +20,7 @@ import type { SessionFileData, SessionFilePane, SessionFileTab, SessionFileWorks
 import type { TerminalManager } from "../terminal/TerminalManager.js";
 import type { EventBus } from "../bus/EventBus.js";
 import { NotFoundError, SessionModel } from "./SessionModel.js";
+import { resolveNewCwd, type NewCwdDeps } from "./newCwd.js";
 import type { PersistScheduler } from "./PersistScheduler.js";
 import type { Logger } from "../log/Logger.js";
 
@@ -48,6 +50,11 @@ export interface SessionServiceOptions {
   /** `--shell`（新しい pane のシェル）。省略時は OS の既定（`ProcessInspector.defaultShell()`。T27）。 */
   shell?: string | undefined;
   logger: Logger;
+  /**
+   * 新しく開く場所の方針（`newCwd`）を場所に変える依存（20260921-new-terminal-cwd の design D6。`composeServer` が `makeNewCwdDeps` で作る）。
+   * **任意**——無ければ `newCwd` を見ない（今までどおり）。
+   */
+  newCwdDeps?: NewCwdDeps | undefined;
 }
 
 /**
@@ -66,6 +73,7 @@ export class SessionService {
   private readonly defaultCwd: string;
   private readonly shell: string | undefined;
   private readonly logger: Logger;
+  private readonly newCwdDeps: NewCwdDeps | undefined;
 
   constructor(opts: SessionServiceOptions) {
     this.model = opts.model;
@@ -79,6 +87,22 @@ export class SessionService {
     this.defaultCwd = opts.defaultCwd;
     this.shell = opts.shell;
     this.logger = opts.logger;
+    this.newCwdDeps = opts.newCwdDeps;
+  }
+
+  /**
+   * 新しい pane の場所。`newCwd` が無い・依存が無ければ `fallback`（今までどおり）を**同期で**返し、あれば `newCwd.ts` の規則で決める
+   * Promise を返す（20260921-new-terminal-cwd）。呼ぶ側は **Promise のときだけ `await` する**——方針の無い要求では、以前と同じく
+   * 起動（`spawnForPane`）までを同期で進め、猶予の競走の起点を変えない（`SessionService.test.ts` の分割の孤児のテストが前提にしている）。
+   * **場所を明示する `cwd`（worktree）はここを通さない**——呼ぶ側で先に使う（design D5）。
+   */
+  private placeFor(
+    newCwd: NewCwd | undefined,
+    sourcePaneId: PaneId | undefined,
+    fallback: string,
+  ): { cwd: string; fellBack: boolean } | Promise<{ cwd: string; fellBack: boolean }> {
+    if (!newCwd || !this.newCwdDeps) return { cwd: fallback, fellBack: false };
+    return resolveNewCwd(newCwd, sourcePaneId, fallback, this.newCwdDeps);
   }
 
   snapshot(): SessionSnapshot {
@@ -118,8 +142,15 @@ export class SessionService {
 
   // --- workspace ------------------------------------------------------------
 
-  async createWorkspace(cwd: string | undefined, label: string | undefined): Promise<{ workspace: Workspace; tab: Tab; pane: Pane }> {
-    const resolvedCwd = cwd ?? this.defaultCwd;
+  async createWorkspace(
+    cwd: string | undefined,
+    label: string | undefined,
+    newCwd?: NewCwd,
+  ): Promise<{ workspace: Workspace; tab: Tab; pane: Pane; cwdFallback?: true }> {
+    // **明示した `cwd`（worktree を開く）が方針に勝ち、代わりへは回さない**（design D5。使えなければ今までどおり spawn_failed）。
+    const pending = cwd !== undefined ? { cwd, fellBack: false } : this.placeFor(newCwd, followSource(newCwd), this.defaultCwd);
+    const place = pending instanceof Promise ? await pending : pending;
+    const resolvedCwd = place.cwd;
     // D37「成功を確認してからモデルを更新する順にする」：先に id とオブジェクトだけ用意し（reserve）、
     // spawn の成功を確認してから初めて Map へ入れる（commit）。レビュー指摘：以前は逆順で、
     // 猶予期間中に他クライアントが「存在するはずの無い」workspace を読めてしまっていた。
@@ -144,7 +175,7 @@ export class SessionService {
     this.bus.publish({ event: "pane.created", data: { pane: reserved.pane } });
     this.persist.touch();
     if (spawn.alreadyExited) await this.closePaneAfterExit(reserved.pane.id, 0); // D37：猶予中に code 0 で即終了していた
-    return { workspace: reserved.workspace, tab: reserved.tab, pane: reserved.pane };
+    return { workspace: reserved.workspace, tab: reserved.tab, pane: reserved.pane, ...(place.fellBack ? { cwdFallback: true as const } : {}) };
   }
 
   renameWorkspace(id: WorkspaceId, label: string): void {
@@ -172,12 +203,20 @@ export class SessionService {
 
   // --- tab --------------------------------------------------------------------
 
-  async createTab(workspaceId: WorkspaceId | undefined, label: string | undefined): Promise<{ tab: Tab; pane: Pane }> {
+  async createTab(
+    workspaceId: WorkspaceId | undefined,
+    label: string | undefined,
+    newCwd?: NewCwd,
+  ): Promise<{ tab: Tab; pane: Pane; cwdFallback?: true }> {
     const wsId = workspaceId ?? this.model.getFocus()?.workspaceId;
     if (!wsId) throw new RpcError("not_found", "no workspace to create a tab in");
     const ws = this.requireWorkspace(wsId);
-    const reserved = this.model.reserveTab(ws.id, label, { cwd: ws.cwd, shell: this.shell ?? "", cols: HEADLESS_COLS, rows: HEADLESS_ROWS });
-    const spawn = await this.spawnForPane(reserved.pane.id, ws.cwd);
+    // 1 段目の代わりは workspace の場所（以前と同じ）。**`Workspace.cwd` は書き換えない**（git の情報と worktree が使う）。
+    const pending = this.placeFor(newCwd, followSource(newCwd), ws.cwd);
+    const place = pending instanceof Promise ? await pending : pending;
+    // 新しい pane の記録（`Pane.cwd`）も決めた場所にする——起動の場所と記録を食い違わせない（design「振る舞いの詳細」）。
+    const reserved = this.model.reserveTab(ws.id, label, { cwd: place.cwd, shell: this.shell ?? "", cols: HEADLESS_COLS, rows: HEADLESS_ROWS });
+    const spawn = await this.spawnForPane(reserved.pane.id, place.cwd);
     if (!spawn.ok) {
       throw new RpcError("spawn_failed", `failed to start a shell for tab ${reserved.tab.id}`);
     }
@@ -196,7 +235,7 @@ export class SessionService {
     if (updatedWs) this.bus.publish({ event: "workspace.updated", data: { workspace: updatedWs } });
     this.persist.touch();
     if (spawn.alreadyExited) await this.closePaneAfterExit(reserved.pane.id, 0);
-    return { tab: reserved.tab, pane: reserved.pane };
+    return { tab: reserved.tab, pane: reserved.pane, ...(place.fellBack ? { cwdFallback: true as const } : {}) };
   }
 
   renameTab(id: TabId, label: string): void {
@@ -232,17 +271,27 @@ export class SessionService {
 
   // --- pane -------------------------------------------------------------------
 
-  async splitPane(paneId: PaneId, direction: SplitDirection, ratio: number | undefined): Promise<{ pane: Pane }> {
+  async splitPane(
+    paneId: PaneId,
+    direction: SplitDirection,
+    ratio: number | undefined,
+    newCwd?: NewCwd,
+  ): Promise<{ pane: Pane; cwdFallback?: true }> {
     const source = this.requirePane(paneId);
+    // 「引き継ぐ」の元は分割する pane そのもの。1 段目の代わりはその記録された場所（以前と同じ）。
+    const pending = this.placeFor(newCwd, paneId, source.cwd);
+    const place = pending instanceof Promise ? await pending : pending;
+    // 場所を決める間（await の間）に分割元が閉じられていたら、シェルを起動する前に失敗する（`createTab` は `reserveTab` で確かめ直す）。
+    this.requirePane(paneId);
     const newPaneId = this.model.reserveNextPaneId();
-    const spawn = await this.spawnForPane(newPaneId, source.cwd);
+    const spawn = await this.spawnForPane(newPaneId, place.cwd);
     if (!spawn.ok) throw new RpcError("spawn_failed", `failed to start a shell for a new pane split from ${paneId}`);
     let pane: Pane;
     try {
       // 猶予中（await の間）に分割元の pane/tab が別の RPC で閉じられていたら、ここで NotFoundError
       // （`requirePane`/`requireTab`）。その場合は孤児化した PTY を破棄してから伝える
       // （`createTab` の `commitTab` 失敗時と同じ理由・同じ形。レビュー指摘・round2）。
-      ({ pane } = this.model.splitPane(paneId, direction, ratio, newPaneId, { cwd: source.cwd, shell: this.shell ?? "", cols: source.cols, rows: source.rows }));
+      ({ pane } = this.model.splitPane(paneId, direction, ratio, newPaneId, { cwd: place.cwd, shell: this.shell ?? "", cols: source.cols, rows: source.rows }));
     } catch (err) {
       this.terminals.dispose(newPaneId);
       throw err;
@@ -251,7 +300,7 @@ export class SessionService {
     this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(source.tabId) } });
     this.persist.touch();
     if (spawn.alreadyExited) await this.closePaneAfterExit(pane.id, 0);
-    return { pane };
+    return { pane, ...(place.fellBack ? { cwdFallback: true as const } : {}) };
   }
 
   async closePane(paneId: PaneId): Promise<void> {
@@ -533,6 +582,11 @@ function sameAgent(a: AgentInfo | null, b: AgentInfo | null): boolean {
     a.verified === b.verified &&
     a.since === b.since
   );
+}
+
+/** 「引き継ぐ」の元の pane（`newCwd.sourcePaneId`）。ほかの方針では元の pane を使わない。 */
+function followSource(newCwd: NewCwd | undefined): PaneId | undefined {
+  return newCwd?.policy === "follow" ? newCwd.sourcePaneId : undefined;
 }
 
 export { NotFoundError };

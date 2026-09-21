@@ -12,6 +12,7 @@ import type { ProcessInspector } from "./platform/ProcessInspector.js";
 import { DefaultTerminalManager } from "./terminal/TerminalManager.js";
 import { SessionModel } from "./session/SessionModel.js";
 import { SessionService } from "./session/SessionService.js";
+import { makeNewCwdDeps } from "./session/newCwd.js";
 import { DefaultPersistScheduler } from "./session/PersistScheduler.js";
 import { FsSessionFile, type SessionFileData } from "./persist/SessionFile.js";
 import { FsAuthFile } from "./persist/AuthFile.js";
@@ -125,6 +126,9 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
     await sessionFile.save(toSessionFileData(session));
   });
   const host: HostInfo = { os: platform() === "win32" ? "windows" : "linux", windowsBuild: null, hostname: (await import("node:os")).hostname() };
+  // 「起動した場所」。新しい workspace の以前の場所と、新しく開く場所の方針「起動した場所」・代わりの 2 段目は同じ値
+  // （2 か所で別々に持たない。20260921-new-terminal-cwd の design D6）。
+  const defaultCwd = process.cwd();
   const session = new SessionService({
     model,
     terminals,
@@ -133,7 +137,14 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
     serverVersion: "0.1.0",
     host,
     scrollbackLines: options.scrollbackLines,
-    defaultCwd: process.cwd(),
+    defaultCwd,
+    // 新しく開く場所（herdr の `terminal.new_cwd`）。「引き継ぐ」は元の pane の前面プロセスの cwd をその時点で読み直す。
+    newCwdDeps: makeNewCwdDeps({
+      terminals,
+      inspector: processInspector,
+      getPane: (id) => model.getPane(id),
+      currentDir: defaultCwd,
+    }),
     shell: options.shell, // `--shell`（T27。以前はどこにも渡しておらず効いていなかった）
     logger,
   });

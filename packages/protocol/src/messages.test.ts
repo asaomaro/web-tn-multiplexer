@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { METHOD_SCHEMAS, PaneSplitParams } from "./messages.js";
+import {
+  METHOD_SCHEMAS,
+  NewCwd,
+  PaneSplitParams,
+  TabCreateParams,
+  WorkspaceCreateParams,
+} from "./messages.js";
 
 describe("messages", () => {
   it("validates pane.split params", () => {
@@ -19,5 +25,64 @@ describe("messages", () => {
     expect(methods).toContain("layout.set_split_ratio");
     expect(methods.length).toBe(Object.keys(METHOD_SCHEMAS).length);
     expect(new Set(methods).size).toBe(methods.length); // 重複登録が無い
+  });
+});
+
+// 20260921-new-terminal-cwd：新しく開く場所の方針（herdr の `terminal.new_cwd`）。
+describe("NewCwd", () => {
+  it("4 つの方針の形を受け付ける", () => {
+    expect(NewCwd.parse({ policy: "follow", sourcePaneId: "p1" })).toEqual({
+      policy: "follow",
+      sourcePaneId: "p1",
+    });
+    expect(NewCwd.parse({ policy: "follow" })).toEqual({ policy: "follow" }); // 分割では元の pane を付けない
+    expect(NewCwd.parse({ policy: "home" })).toEqual({ policy: "home" });
+    expect(NewCwd.parse({ policy: "current" })).toEqual({ policy: "current" });
+    expect(NewCwd.parse({ policy: "path", path: "~/work" })).toEqual({
+      policy: "path",
+      path: "~/work",
+    });
+  });
+
+  // 「指定した場所」を選んだまま何も入れていないブラウザから届く形。ここで弾くと作成が失敗する（サーバが使えない場所として扱う）。
+  it("path の空文字・相対パスは通す（弾くのはサーバの検証）", () => {
+    expect(NewCwd.parse({ policy: "path", path: "" })).toEqual({ policy: "path", path: "" });
+    expect(NewCwd.parse({ policy: "path", path: "work/dir" })).toEqual({
+      policy: "path",
+      path: "work/dir",
+    });
+  });
+
+  it("知らない方針・必要な値が無い形を弾く", () => {
+    expect(() => NewCwd.parse({ policy: "elsewhere" })).toThrow();
+    expect(() => NewCwd.parse({ policy: "path" })).toThrow(); // path が無い
+    expect(() => NewCwd.parse({ policy: "follow", sourcePaneId: "" })).toThrow(); // 空の pane id
+    expect(() => NewCwd.parse({})).toThrow();
+  });
+
+  it("3 つの作成の params が newCwd を受け付ける（無くてもよい）", () => {
+    expect(WorkspaceCreateParams.parse({ newCwd: { policy: "home" } }).newCwd).toEqual({
+      policy: "home",
+    });
+    expect(
+      TabCreateParams.parse({ workspaceId: "w1", newCwd: { policy: "follow", sourcePaneId: "p1" } })
+        .newCwd,
+    ).toEqual({
+      policy: "follow",
+      sourcePaneId: "p1",
+    });
+    expect(
+      PaneSplitParams.parse({ paneId: "p1", direction: "right", newCwd: { policy: "current" } })
+        .newCwd,
+    ).toEqual({ policy: "current" });
+    expect(WorkspaceCreateParams.parse({}).newCwd).toBeUndefined();
+  });
+
+  // worktree を開く経路は cwd を明示する。両方来てもスキーマは通し、どちらを使うかはサーバが決める（cwd が勝つ。design D5）。
+  it("workspace.create は cwd と newCwd を両方受け付ける", () => {
+    expect(WorkspaceCreateParams.parse({ cwd: "/repo/wt", newCwd: { policy: "home" } })).toEqual({
+      cwd: "/repo/wt",
+      newCwd: { policy: "home" },
+    });
   });
 });
