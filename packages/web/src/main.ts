@@ -6,7 +6,7 @@ import { createPinia } from "pinia";
 import { createApp, watch } from "vue";
 import App from "./App.vue";
 import { ActionDispatcher } from "./actions/ActionDispatcher.js";
-import { ActionDispatcherKey, ConnectionKey, KeyInputControllerKey, NotificationControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
+import { ActionDispatcherKey, ConnectionKey, DeviceKindKey, KeyInputControllerKey, NotificationControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
 import { KeyInputController } from "./keys/KeyInputController.js";
 import { KeyRouter } from "./keys/KeyRouter.js";
 import { CopyMode } from "./keys/CopyMode.js";
@@ -24,10 +24,12 @@ import type { ConnectionPort, TerminalSinkPort } from "./net/ports.js";
 import { StoreAdapter } from "./store/StoreAdapter.js";
 import { useSeenStore } from "./store/seen.js";
 import { useSessionStore } from "./store/session.js";
+import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
 import { MouseBridge } from "./term/MouseBridge.js";
 import { RendererPool } from "./term/RendererPool.js";
 import { TerminalRegistry } from "./term/TerminalRegistry.js";
+import { effectiveScrollback } from "./term/scrollback.js";
 import { ViewSync } from "./term/ViewSync.js";
 
 /**
@@ -42,7 +44,6 @@ const DESKTOP_TERMINAL_CAPACITY = 24; // D28・D60（LRU の容量）
 const DESKTOP_WEBGL_CAPACITY = 12; // D60（表示中の WebGL の上限）
 const MOBILE_TERMINAL_CAPACITY = 2; // D28（モバイルの LRU＝表示中＋直前）
 const MOBILE_WEBGL_CAPACITY = 2; // D60（モバイルの WebGL 上限。design.md の「4」は D28 改訂前の取り残し）
-const MOBILE_SCROLLBACK_LINES = 1000; // design「WebSocket の通信」：モバイルは 1000 を申告する
 
 const kind = isCoarsePointer() ? "mobile" : "desktop";
 const terminalCapacity = kind === "mobile" ? MOBILE_TERMINAL_CAPACITY : DESKTOP_TERMINAL_CAPACITY;
@@ -52,6 +53,7 @@ const pinia = createPinia();
 const session = useSessionStore(pinia);
 const view = useViewStore(pinia);
 const seen = useSeenStore(pinia);
+const settings = useSettingsStore(pinia);
 
 const httpOrigin = ""; // 同一オリジン配信（vite dev は /api・/ws を proxy する。vite.config.ts）
 const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
@@ -109,11 +111,16 @@ const actionDispatcherBox: { current?: ActionDispatcher } = {};
 const terminalOptions: Partial<ITerminalOptions> = {};
 
 /**
- * pane の scrollback の行数（design「WebSocket の通信」：デスクトップは `limits.scrollbackLines`（既定 5,000・上限 10,000）、
- * モバイルは 1,000）。`pane.subscribe` で SNAPSHOT に求める行数（`ViewSync`）と、ブラウザの xterm.js が持つ行数
- * （`TerminalRegistry` が作るときの `scrollback`）の両方に使う（D107。以前の xterm.js は既定の 1,000 行で、それを超える分を捨てていた）。
+ * pane の scrollback の行数。**このブラウザの設定 → 端末の種類 → サーバの上限**の順で決める
+ * （`term/scrollback.ts` の `effectiveScrollback`。20260921-herdr-settings-gaps の D5）。「自動」（既定）は以前と同じで、
+ * デスクトップは `limits.scrollbackLines`（既定 5,000・上限 10,000）、モバイルは 1,000（design「WebSocket の通信」）。
+ * 数を選んだときはサーバの上限で押さえる。
+ *
+ * **読むのは `TerminalRegistry` が端末を作るとき**で、`pane.subscribe` で SNAPSHOT に求める行数（`ViewSync`）は、
+ * その端末を作ったときの値を使う（D6。途中で設定を変えても xterm の容量と求める行数を食い違わせない。
+ * 以前の xterm.js は既定の 1,000 行で、それを超える分を捨てていた——D107）。
  */
-const getScrollbackLines = (): number => (kind === "mobile" ? MOBILE_SCROLLBACK_LINES : session.limits.scrollbackLines);
+const getScrollbackLines = (): number => effectiveScrollback(settings.scrollback, kind, session.limits.scrollbackLines);
 
 const registry = new TerminalRegistry({
   capacity: terminalCapacity,
@@ -245,6 +252,7 @@ app.provide(ConnectionKey, conn);
 app.provide(ActionDispatcherKey, actionDispatcher);
 app.provide(TerminalRegistryKey, registry);
 app.provide(ViewSyncKey, viewSync);
+app.provide(DeviceKindKey, kind);
 app.provide(KeyInputControllerKey, keys);
 app.provide(NotificationControllerKey, notifications);
 app.mount("#app");

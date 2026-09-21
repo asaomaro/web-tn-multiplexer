@@ -382,11 +382,14 @@ test("通知：prefix+s で設定を開き、キーだけで切り替えられ�
   await openApp(page, appServer);
 
   await prefixKey(page, "s");
-  const dialog = page.locator(".notify-settings");
+  // 20260921-herdr-settings-gaps で通知だけのダイアログが、節に分かれた「設定」（`.settings-dialog`）に広がった。
+  // 通知の切り替えは「通知」節にある。
+  const dialog = page.locator(".settings-dialog");
   await expect(dialog).toBeVisible();
+  const notify = dialog.locator('section[aria-labelledby="settings-notify"]');
 
   // 開いたら最初の切り替えへフォーカスが移り、Space で切り替わる（AC-I4・AC-I2）。
-  const first = dialog.locator('[role="switch"]').first();
+  const first = notify.locator('[role="switch"]').first();
   await expect(first).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Space");
   await expect(first).toHaveAttribute("aria-checked", "false");
@@ -395,7 +398,7 @@ test("通知：prefix+s で設定を開き、キーだけで切り替えられ�
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await prefixKey(page, "s");
-  await expect(dialog.locator('[role="switch"]').first()).toHaveAttribute("aria-checked", "false");
+  await expect(notify.locator('[role="switch"]').first()).toHaveAttribute("aria-checked", "false");
 });
 
 /**

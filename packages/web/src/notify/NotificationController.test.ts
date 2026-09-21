@@ -941,7 +941,7 @@ describe("NotificationController — 他の仕組みとの噛み合わせ", () =
     await queueOne(h);
     const view = useViewStore(pinia);
     view.focusPane("p-other");
-    view.openDialogWithContext({ kind: "notifySettings" }); // 開く前の焦点は p-other
+    view.openDialogWithContext({ kind: "settings" }); // 開く前の焦点は p-other
 
     h.c.focusNext();
 

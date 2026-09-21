@@ -134,8 +134,8 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
         return;
       // 20260920-agent-notifications。**`switch` に `default` も網羅性の検査も無い**ので、
       // 足し忘れてもキーが黙って何もしないだけで型では落ちない。
-      case "notifySettings":
-        this.view.openDialogWithContext({ kind: "notifySettings" });
+      case "settings":
+        this.view.openDialogWithContext({ kind: "settings" });
         return;
       case "nextNotification":
         this.notifications.focusNext();

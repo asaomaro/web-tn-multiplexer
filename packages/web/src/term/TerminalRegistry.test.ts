@@ -337,6 +337,20 @@ describe("TerminalRegistry", () => {
   it("getScrollbackLines を省くと xterm.js の既定（1,000 行）のまま", () => {
     const { registry } = makeRegistry({ capacity: 24 });
     expect(registry.acquire("p1").term.options.scrollback).toBe(1000);
+    expect(registry.get("p1")?.scrollback, "作ったときの行数は無い（購読は getScrollbackLines を使う）").toBeUndefined();
+  });
+
+  // 20260921-herdr-settings-gaps の D6：購読（`ViewSync`）は作ったときの行数を使う。**後から設定が変わっても、
+  // 既に作った端末の値は変わらない**（xterm の容量と SNAPSHOT に求める行数を食い違わせない）。
+  it("作ったときの行数を持ち、後から getScrollbackLines が変わっても変えない", () => {
+    let lines = 2000;
+    const { registry } = makeRegistry({ capacity: 24, getScrollbackLines: () => lines });
+    registry.acquire("p1");
+    lines = 5000;
+    expect(registry.get("p1")?.scrollback).toBe(2000);
+    expect(registry.get("p1")?.term.options.scrollback).toBe(2000);
+    registry.acquire("p2");
+    expect(registry.get("p2")?.scrollback, "新しく作る端末には新しい値").toBe(5000);
   });
 
   it("存在しない pane への onOutput/onSnapshot/onSizeChanged は例外を投げない（破棄済み・未購読）", () => {

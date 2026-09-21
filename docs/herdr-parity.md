@@ -25,7 +25,7 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 | H03 | pane の分割・閉じる・フォーカス移動・巡回・入れ替え・拡大表示・resize モード・名前変更 | MVP | AC3 |
 | H04 | tab・workspace の並べ替え | 後続:workspace のグルーピング | — |
 | H05 | 端末としての pane（全画面 TUI・色・マウス報告・ブラケットペースト） | MVP | AC4 |
-| H06 | scrollback（既定 10MB）・ホイール・スクロールバー | MVP | AC5 |
+| H06 | scrollback（既定 10MB）・ホイール・スクロールバー | MVP（このブラウザでの行数の設定は 20260921-herdr-settings-gaps） | AC5（MVP）・AC3・AC9〜AC11（20260921-herdr-settings-gaps） |
 | H07 | copy モード（キーボードでの選択・検索・コピー） | MVP | AC5 |
 | H08 | マウスでの選択とコピー（M4・M5）・貼り付け | MVP | AC5 |
 | H09 | リンクを開く（M6） | MVP | AC14 |
@@ -38,13 +38,15 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 | H16 | エージェントの検出と5状態・状態の集約・`done` の既読管理 | MVP（主要数種＋汎用） | AC6, AC7 |
 | H17 | 残りのエージェントの検出・判定ルールの自動更新・`agent explain` | 後続:エージェント対応の拡充 | — |
 | H18 | エージェント連携（integrations）の導入・削除・独自エージェントの状態報告 | 後続:エージェント対応の拡充 | — |
-| H19 | サイドバー（Space パネル・Agent パネル）・折りたたみ・ソート | MVP（既定の表示だけ） | AC6, AC7 |
+| H19 | サイドバー（Space パネル・Agent パネル）・折りたたみ・ソート | MVP（既定の表示だけ。幅と折りたたみを覚えるのは 20260921-herdr-settings-gaps） | AC6, AC7（MVP）・AC1〜AC3（20260921-herdr-settings-gaps） |
 | H20 | Space 行の Git ブランチと ahead/behind の表示 | MVP | 既定の Space 行に含む |
 | H21 | サイドバーの行の並び・色の条件付け・独自トークン | 新規後続(提案):外観と設定 | — |
 | H22 | tab バーの位置・右端の状態表示・自動非表示 | 新規後続(提案):外観と設定 | — |
 | H23 | pane の枠・隙間・エージェント名表示の設定 | 新規後続(提案):外観と設定 | — |
+| H23b | 状態表示を記号にする設定（`ui.status_indicators`。字形は herdr の `symbols` と同じ × ◐ ✓ ○ ·） | 20260921-herdr-settings-gaps（**既定は herdr と逆で「記号」**。herdr は `dots`。色だけで伝える状態を既定にしない——WCAG 1.4.1・同 work の decisions D1） | AC3〜AC8（同 work） |
 | H24 | テーマ（組み込み＋色の上書き＋明暗自動切替） | 新規後続(提案):外観と設定 | — |
-| H25 | 設定画面・設定の再読み込み・onboarding | 新規後続(提案):外観と設定 | — |
+| H25 | 設定画面（`prefix+s`。通知・表示・端末の 3 節） | 20260921-herdr-settings-gaps | AC12〜AC14（同 work） |
+| H25b | 設定の再読み込み・onboarding | 新規後続(提案):外観と設定 | — |
 | H26 | キー割り当ての変更・prefix を使わない直接のキー | 後続:キーバインドのカスタマイズ | — |
 | H27 | ヘルプ（`prefix+?`）と絞り込み | MVP | AC13, AC-I1 |
 | H28 | navigate モード（`prefix+w`）と goto（`prefix+g`） | MVP | AC13, AC-I3 |

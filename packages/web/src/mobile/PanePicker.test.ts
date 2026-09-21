@@ -58,6 +58,20 @@ describe("PanePicker — 表示", () => {
   });
 });
 
+// 20260921-herdr-settings-gaps の D2：状態の印は `StateIcon`（字形と読み上げの名前まで見る）。
+describe("PanePicker — 状態の印", () => {
+  it("エージェントの行の印は字形と読み上げの名前を持つ", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted(makePane("p1", "t1", makeAgent({ state: "blocked" })));
+    const icon = mountPicker(makeConnection()).find('[aria-label="agents"] .pane-picker-state[data-state="blocked"]');
+    expect(icon.text()).toBe("×");
+    expect(icon.attributes("role")).toBe("img");
+    expect(icon.attributes("aria-label")).toBe("入力待ち");
+  });
+});
+
 describe("PanePicker — 選択", () => {
   it("workspace の行をタップすると workspace.focus を送り、view を更新して close を emit する", async () => {
     const session = useSessionStore(pinia);

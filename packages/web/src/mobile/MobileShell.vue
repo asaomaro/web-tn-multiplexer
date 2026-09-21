@@ -81,9 +81,10 @@ onBeforeUnmount(() => touchScroll?.dispose());
       <button type="button" class="mobile-shell-title" @click="showPicker = true">{{ workspaceLabel }} / {{ tabLabel }}</button>
       <button type="button" class="mobile-shell-fit-btn" :aria-pressed="fitEnabled" @click="toggleFit">この端末に合わせる</button>
       <button type="button" class="mobile-shell-keyboard-btn" :aria-pressed="showKeyboard" aria-label="キーボード" @click="showKeyboard = !showKeyboard">⌨</button>
-      <!-- 通知の設定（20260920-agent-notifications の AC16）。モバイルはサイドバーを描かないので、
-           ここが唯一の入口になる（キーボードも常には出ていない）。 -->
-      <button type="button" class="mobile-shell-notify-btn" aria-label="通知の設定" @click="view.openDialogWithContext({ kind: 'notifySettings' })">🔔</button>
+      <!-- 設定（20260921-herdr-settings-gaps の AC13）。モバイルはサイドバーも prefix キーも無いので、
+           ここが唯一の入口になる。**文字のボタンにする**——以前の 🔔 は絵文字で環境により見た目が変わり、
+           設定全体を開くのに通知の絵を出すと中身と食い違う（⚙ も絵文字の属性を持つので避ける）。 -->
+      <button type="button" class="mobile-shell-settings-btn" @click="view.openDialogWithContext({ kind: 'settings' })">設定</button>
     </header>
     <main ref="paneContainer" class="mobile-shell-pane">
       <div
@@ -136,8 +137,12 @@ onBeforeUnmount(() => touchScroll?.dispose());
   background: none;
   border: none;
 }
-.mobile-shell-fit-btn {
+/* 設定のボタンも文字なので、同じく文字の［この端末に合わせる］と同じ見た目にそろえる。設定はモバイルで唯一の入口なので、
+   押せる高さ（⌨ と同じ程度）を持たせる（review ラウンド1 の指摘）。 */
+.mobile-shell-fit-btn,
+.mobile-shell-settings-btn {
   flex: none;
+  min-height: 2rem;
   font-size: 0.85em;
   padding: 0.3em 0.6em;
   color: inherit;
@@ -148,7 +153,6 @@ onBeforeUnmount(() => touchScroll?.dispose());
 .mobile-shell-fit-btn[aria-pressed="true"] {
   background: var(--wtm-accent, #6272a4);
 }
-.mobile-shell-notify-btn,
 .mobile-shell-keyboard-btn {
   flex: none;
   font-size: 1.2em;

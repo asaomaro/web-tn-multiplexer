@@ -6,7 +6,11 @@ import type { TerminalRegistry } from "./TerminalRegistry.js";
 export interface ViewSyncOptions {
   conn: ConnectionPort;
   registry: TerminalRegistry;
-  /** デスクトップは `limits.scrollbackLines`（上限値）、モバイルは 1000（design「WebSocket の通信」）。 */
+  /**
+   * このブラウザが使う行数（`term/scrollback.ts` の `effectiveScrollback`。20260921-herdr-settings-gaps）。
+   * **購読には、その端末を作ったときの値（`TermEntry.scrollback`）を優先する**——これは作ったときの値が無い
+   * （`TerminalRegistry` に `getScrollbackLines` を渡していない）ときの予備。
+   */
   getScrollbackLines: () => number;
   /** テスト用の差し替え（happy-dom にはレイアウトが無く、実物のセル寸法は測れない）。 */
   getCellSize?: (term: Terminal) => CellSize;
@@ -100,8 +104,10 @@ export class ViewSync {
       }
     }
 
-    const scrollbackLines = this.opts.getScrollbackLines();
     for (const paneId of this.opts.registry.takePendingSubscriptions(visible.map((v) => v.paneId))) {
+      // 作ったときの値を使う（D6）。以前は購読のたびに `getScrollbackLines()` を読んでいたが、利用者が設定を変えられる
+      // ようになった今は、作ってから購読するまでの間に変えると xterm の容量と求める行数が食い違う。
+      const scrollbackLines = this.opts.registry.get(paneId)?.scrollback ?? this.opts.getScrollbackLines();
       void this.opts.conn.request("pane.subscribe", { paneId, scrollbackLines }).catch(() => undefined);
     }
   }
