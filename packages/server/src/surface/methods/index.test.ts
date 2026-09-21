@@ -1,5 +1,5 @@
-import type { HostInfo } from "@wtm/protocol";
-import { beforeEach, describe, expect, it } from "vitest";
+import { TERMINAL_PALETTES, type HostInfo } from "@wtm/protocol";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Disposable } from "../../util/Disposable.js";
 import { MemoryLogger } from "../../log/Logger.js";
 import { EventBus } from "../../bus/EventBus.js";
@@ -11,6 +11,7 @@ import { SessionModel } from "../../session/SessionModel.js";
 import { SessionService } from "../../session/SessionService.js";
 import { DefaultClientRegistry } from "../../clients/ClientRegistry.js";
 import { DefaultSizeAuthority } from "../../clients/SizeAuthority.js";
+import { answerPaletteFor } from "../../clients/answerPalette.js";
 import { ControlSurface } from "../ControlSurface.js";
 import { registerAllMethods } from "./index.js";
 import type { WorktreeService } from "../../git/WorktreeService.js";
@@ -124,6 +125,46 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
   beforeEach(() => {
     ctx = makeContext();
     clientId = ctx.clients.register();
+  });
+
+  it("client.theme は表示しているテーマを覚える。知らない名前は invalid_params（20260921-theme-settings）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    expect(ctx.clients.get(clientId)?.theme).toBeNull();
+    expect((await ctx.surface.invoke(c, "client.theme", { theme: "gruvbox-light" })).ok).toBe(true);
+    expect(ctx.clients.get(clientId)?.theme).toBe("gruvbox-light");
+    const bad = await ctx.surface.invoke(c, "client.theme", { theme: "terminal" });
+    expect(bad.ok).toBe(false);
+    if (bad.ok) throw new Error("unreachable");
+    expect(bad.error.code).toBe("invalid_params");
+    expect(ctx.clients.get(clientId)?.theme).toBe("gruvbox-light");
+  });
+
+  it("作る方式（tab・workspace・分割）は、作る前に作った人の操作の時刻を進める——起動の猶予の間の色の問い合わせにも作った人の配色で答える（20260921-theme-settings の decisions D13）", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(1_000);
+      const creator = ctx.clients.register("desktop");
+      const other = ctx.clients.register("desktop");
+      ctx.clients.setTheme(creator, "catppuccin-latte");
+      ctx.clients.setTheme(other, "vesper");
+      const { workspace, pane } = await ctx.session.createWorkspace("/home/u", "w");
+      const deps = { getPane: (id: string) => ctx.session.getPane(id), getTab: (id: string) => ctx.session.getTab(id), clients: ctx.clients };
+      for (const [method, params] of [
+        ["tab.create", { workspaceId: workspace.id }],
+        ["workspace.create", { cwd: "/home/u" }],
+        ["pane.split", { paneId: pane.id, direction: "right" }],
+      ] as const) {
+        vi.setSystemTime(Date.now() + 1_000);
+        ctx.clients.touch(other); // 別の人が後から操作した
+        vi.setSystemTime(Date.now() + 1_000);
+        const pending = ctx.surface.invoke({ clientId: creator, sink: fakeSink(creator) }, method, params as never);
+        // 作っている途中（まだモデルに入っていない pane）の問い合わせにも、作った人の配色で答える。
+        expect(answerPaletteFor("not-yet-committed", deps), method).toBe(TERMINAL_PALETTES["catppuccin-latte"]);
+        expect((await pending).ok, method).toBe(true);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("client.hello sets the kind and returns a snapshot", async () => {

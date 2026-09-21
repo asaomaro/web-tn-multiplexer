@@ -5,7 +5,7 @@ describe("DefaultClientRegistry", () => {
   it("registers a client with defaults and forgets it on unregister", () => {
     const reg = new DefaultClientRegistry();
     const id = reg.register("desktop");
-    expect(reg.get(id)).toMatchObject({ id, kind: "desktop", fit: false, view: null, subscriptions: new Set() });
+    expect(reg.get(id)).toMatchObject({ id, kind: "desktop", fit: false, view: null, subscriptions: new Set(), theme: null, lastActedAt: 0 });
     reg.unregister(id);
     expect(reg.get(id)).toBeUndefined();
   });
@@ -34,7 +34,19 @@ describe("DefaultClientRegistry", () => {
     const before = reg.get(id)!.lastInteractionAt;
     reg.touch(id);
     expect(reg.get(id)).toMatchObject({ view, fit: true });
+    expect(reg.get(id)!.lastActedAt, "touch は最後に操作した時刻も進める（接続しただけでは 0）").toBe(reg.get(id)!.lastInteractionAt);
     expect(reg.get(id)!.lastInteractionAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("setTheme は表示しているテーマをクライアントごとに覚える（20260921-theme-settings）", () => {
+    const reg = new DefaultClientRegistry();
+    const id = reg.register("desktop");
+    const other = reg.register("mobile");
+    reg.setTheme(id, "catppuccin-latte");
+    expect(reg.get(id)?.theme).toBe("catppuccin-latte");
+    expect(reg.get(other)?.theme).toBeNull();
+    reg.setTheme(id, "nord");
+    expect(reg.get(id)?.theme).toBe("nord");
   });
 
   it("tracks subscriptions per client, add/remove independently", () => {
@@ -51,6 +63,8 @@ describe("DefaultClientRegistry", () => {
     const reg = new DefaultClientRegistry();
     expect(() => reg.setFit("nope", true)).not.toThrow();
     expect(() => reg.touch("nope")).not.toThrow();
+    expect(() => reg.setTheme("nope", "nord")).not.toThrow();
+    expect(reg.get("nope")).toBeUndefined(); // 知らない id で record を作らない
     expect(reg.subscriptions("nope")).toEqual([]);
   });
 

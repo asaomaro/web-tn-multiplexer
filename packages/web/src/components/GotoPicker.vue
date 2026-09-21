@@ -339,7 +339,7 @@ const onDialogKeydown = (ev: KeyboardEvent): void => {
   gap: 0.5em;
 }
 .goto-picker::backdrop {
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--wtm-backdrop, rgba(0, 0, 0, 0.4));
 }
 .goto-picker-search {
   display: flex;
@@ -391,7 +391,9 @@ const onDialogKeydown = (ev: KeyboardEvent): void => {
 }
 .goto-picker-meta {
   font-size: 0.8em;
-  opacity: 0.6;
+  /* 0.6 では選ばれた行（--wtm-menu-active-bg）の上で 4.27:1 と WCAG 1.4.3 を割った。薄めて描く文字は 0.7 以上（20260921-theme-settings の
+   * decisions D2。`theme/uiTokens.ts` の MUTED_TEXT_ALPHA）。 */
+  opacity: 0.7;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

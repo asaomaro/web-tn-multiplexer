@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PaneId, TabId, WorkspaceId } from "@wtm/protocol";
+import type { PaneId, TabId, ThemeName, WorkspaceId } from "@wtm/protocol";
 
 export type ClientKind = "desktop" | "mobile";
 
@@ -15,7 +15,18 @@ export interface ClientRecord {
   fit: boolean;
   view: ClientView | null;
   lastInteractionAt: number;
+  /**
+   * 最後に操作した時刻（入力・フォーカス・レイアウト・作る操作。`touch` で進む）。**接続しただけでは 0**——`lastInteractionAt` は接続の時刻から
+   * 始まるので、一度も操作していない後から来たクライアントが勝ってしまう。色の問い合わせの答え（`answerPalette.ts`）が「最後に操作した人」を
+   * 選ぶのに使う（20260921-theme-settings の decisions D13）。
+   */
+  lastActedAt: number;
   readonly subscriptions: Set<PaneId>;
+  /**
+   * このクライアントがいま表示しているテーマ（`client.theme`。20260921-theme-settings）。まだ届いていなければ null。
+   * 色の問い合わせへの答えにだけ使う（`answerPalette.ts`）。
+   */
+  theme: ThemeName | null;
 }
 
 /** 接続中のクライアント（architecture.md「ClientRegistry」）。 */
@@ -31,6 +42,7 @@ export interface ClientRegistry {
   setKind(clientId: string, kind: ClientKind): void;
   setView(clientId: string, view: ClientView): void;
   setFit(clientId: string, on: boolean): void;
+  setTheme(clientId: string, theme: ThemeName): void;
   touch(clientId: string): void;
   addSubscription(clientId: string, paneId: PaneId): void;
   removeSubscription(clientId: string, paneId: PaneId): void;
@@ -42,7 +54,7 @@ export class DefaultClientRegistry implements ClientRegistry {
 
   register(kind: ClientKind = "desktop"): string {
     const id = randomUUID();
-    this.clients.set(id, { id, kind, fit: false, view: null, lastInteractionAt: Date.now(), subscriptions: new Set() });
+    this.clients.set(id, { id, kind, fit: false, view: null, lastInteractionAt: Date.now(), lastActedAt: 0, subscriptions: new Set(), theme: null });
     return id;
   }
 
@@ -73,9 +85,14 @@ export class DefaultClientRegistry implements ClientRegistry {
     if (client) client.fit = on;
   }
 
+  setTheme(clientId: string, theme: ThemeName): void {
+    const client = this.clients.get(clientId);
+    if (client) client.theme = theme;
+  }
+
   touch(clientId: string): void {
     const client = this.clients.get(clientId);
-    if (client) client.lastInteractionAt = Date.now();
+    if (client) client.lastInteractionAt = client.lastActedAt = Date.now();
   }
 
   addSubscription(clientId: string, paneId: PaneId): void {

@@ -292,7 +292,6 @@ watch(
    */
   padding-left: calc(1.5em / 0.85);
   font-size: 0.85em;
-  opacity: 0.75;
 }
 /* 長いブランチ名・エージェント名を省略記号で切る（AC3）。flex アイテムに overflow があると
  * main 軸の自動最小サイズが 0 になって縮む——1 行目の `.sidebar-label` と同じ仕組み。 */
@@ -300,6 +299,13 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 補足（ブランチ・エージェント名）は薄く描く。薄めるのは行ではなく 1 つずつ——警告（未検証）まで薄めると、明るいテーマなどで
+   * agents の行の下地（menu-bg・hover）の上で WCAG 1.4.3 の 4.5:1 を割る。規則は全テーマ同じで、dracula でも警告は薄めない
+   * （20260921-theme-settings の review ラウンド 2・3、decisions D16）。 */
+  opacity: 0.75;
+}
+.sidebar-row-line2 > .sidebar-unverified {
+  opacity: 1;
 }
 /* 縮めると意味を失うので縮ませない。 */
 .sidebar-git-counts {
@@ -312,7 +318,7 @@ watch(
 }
 .sidebar-unverified {
   flex: none;
-  color: #ffb86c;
+  color: var(--wtm-warn-fg, #ffb86c);
 }
 /* 以前は `right: -3px` で外へ 3px はみ出しており、文字が 1 つも無くても横スクロールバーが出ていた
  * （decisions.md D3）。幅の変更は移動量の差分で決まるので、内側へ寄せても操作感は変わらない。 */

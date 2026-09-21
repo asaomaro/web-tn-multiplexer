@@ -5,7 +5,7 @@
 import xtermHeadless from "@xterm/headless";
 import xtermAddonSerialize from "@xterm/addon-serialize";
 import { win32 } from "node:path";
-import { DEFAULT_THEME } from "@wtm/protocol";
+import { DEFAULT_THEME, type TerminalPalette } from "@wtm/protocol";
 import type { Disposable } from "../util/Disposable.js";
 
 const { Terminal } = xtermHeadless;
@@ -50,7 +50,17 @@ export class XtermMirror implements Mirror {
   private latestCwd: string | null = null;
   private readonly disposables: Disposable[] = [];
 
-  constructor(cols: number, rows: number, scrollback: number) {
+  /**
+   * `palette` は色の問い合わせに答える配色を返す関数（20260921-theme-settings の design D6）。**答える瞬間に呼ぶ**——その pane を操作している
+   * ブラウザがテーマを変えたら次の答えから変わる。既定は今までの答え（dracula）。**投げてはならない**——xterm headless は OSC のハンドラを
+   * try/catch で囲わないので、投げると書き込みの列が止まり（PTY は pause されたまま戻らない）、サーバも落ちる（`answerPaletteFor` は投げない）。
+   */
+  constructor(
+    cols: number,
+    rows: number,
+    scrollback: number,
+    private readonly palette: () => TerminalPalette = () => DEFAULT_THEME,
+  ) {
     this.term = new Terminal({ cols, rows, scrollback, allowProposedApi: true });
     this.serializeAddon = new SerializeAddon();
     this.term.loadAddon(this.serializeAddon);
@@ -59,10 +69,10 @@ export class XtermMirror implements Mirror {
     this.disposables.push(this.term.onData((data) => this.emitResponse(data)));
     this.disposables.push(this.term.onTitleChange((title) => (this.latestTitle = sanitizeOsc(title))));
 
-    // 色の問い合わせ（OSC 4/10/11/12）には headless は応答しないので、既定のテーマで応答する（D17）。
-    this.disposables.push(this.term.parser.registerOscHandler(10, (data) => this.handleColorQuery(data, DEFAULT_THEME.foreground, 10)));
-    this.disposables.push(this.term.parser.registerOscHandler(11, (data) => this.handleColorQuery(data, DEFAULT_THEME.background, 11)));
-    this.disposables.push(this.term.parser.registerOscHandler(12, (data) => this.handleColorQuery(data, DEFAULT_THEME.cursor, 12)));
+    // 色の問い合わせ（OSC 4/10/11/12）には headless は応答しないので、`palette()` の配色で応答する（D17・20260921-theme-settings の design D6）。
+    this.disposables.push(this.term.parser.registerOscHandler(10, (data) => this.handleColorQuery(data, "foreground", 10)));
+    this.disposables.push(this.term.parser.registerOscHandler(11, (data) => this.handleColorQuery(data, "background", 11)));
+    this.disposables.push(this.term.parser.registerOscHandler(12, (data) => this.handleColorQuery(data, "cursor", 12)));
     this.disposables.push(this.term.parser.registerOscHandler(4, (data) => this.handlePaletteQuery(data)));
 
     // OSC 9;4 は進捗（Windows Terminal/ConEmu 方式）。design「OSC の取得」。
@@ -149,23 +159,25 @@ export class XtermMirror implements Mirror {
     for (const fn of [...this.responseListeners]) fn(data);
   }
 
-  private handleColorQuery(data: string, hex: string, oscNumber: 10 | 11 | 12): boolean {
+  private handleColorQuery(data: string, key: "foreground" | "background" | "cursor", oscNumber: 10 | 11 | 12): boolean {
     if (data !== "?") return false; // 問い合わせ以外（実際に色を設定する OSC）は関与しない
-    this.emitResponse(`\x1b]${oscNumber};${hexToXtermRgb(hex)}\x07`);
+    this.emitResponse(`\x1b]${oscNumber};${hexToXtermRgb(this.palette()[key])}\x07`);
     return true;
   }
 
   private handlePaletteQuery(data: string): boolean {
     // 形式: "<idx>;?"（複数指定 "<idx>;?;<idx2>;?..." も許容する）
     const parts = data.split(";");
+    let ansi: TerminalPalette["ansi"] | undefined; // 最初の問い合わせで 1 回だけ引く（設定の OSC 4 では引かない。1 回の中で配色を揃える）
     let matched = false;
     for (let i = 0; i + 1 < parts.length; i += 2) {
       const idxStr = parts[i];
       const query = parts[i + 1];
       if (query !== "?" || idxStr === undefined) continue;
       const idx = Number(idxStr);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= DEFAULT_THEME.ansi.length) continue;
-      const color = DEFAULT_THEME.ansi[idx];
+      ansi ??= this.palette().ansi;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= ansi.length) continue;
+      const color = ansi[idx];
       if (color === undefined) continue;
       this.emitResponse(`\x1b]4;${idx};${hexToXtermRgb(color)}\x07`);
       matched = true;

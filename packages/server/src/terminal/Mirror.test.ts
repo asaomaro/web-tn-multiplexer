@@ -1,4 +1,4 @@
-import { DEFAULT_THEME } from "@wtm/protocol";
+import { DEFAULT_THEME, TERMINAL_PALETTES } from "@wtm/protocol";
 import { describe, expect, it } from "vitest";
 import { XtermMirror, parseOsc7 } from "./Mirror.js";
 
@@ -27,6 +27,25 @@ describe("XtermMirror — query responses (evidence/query-response*.mjs)", () =>
     expect(joined).toContain(`\x1b]10;${expectedRgb(DEFAULT_THEME.foreground)}\x07`);
     expect(joined).toContain(`\x1b]11;${expectedRgb(DEFAULT_THEME.background)}\x07`);
     expect(joined).toContain(`\x1b]12;${expectedRgb(DEFAULT_THEME.cursor)}\x07`);
+    mirror.dispose();
+  });
+
+  it("答える配色は関数で受け、問い合わせの瞬間に引き直す（20260921-theme-settings の design D6）", async () => {
+    let palette = TERMINAL_PALETTES["catppuccin-latte"];
+    const mirror = new XtermMirror(80, 24, 1000, () => palette);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    await writeAndWait(mirror, "\x1b]11;?\x07\x1b]4;1;?\x07");
+    expect(responses.join("")).toBe(
+      `\x1b]11;${expectedRgb(palette.background)}\x07\x1b]4;1;${expectedRgb(palette.ansi[1]!)}\x07`,
+    );
+    // 権限者がテーマを変えた後の問い合わせは、新しい配色で答える（作るときに引いて保持しない）。
+    palette = TERMINAL_PALETTES.nord;
+    responses.length = 0;
+    await writeAndWait(mirror, "\x1b]10;?\x07\x1b]12;?\x07\x1b]4;4;?\x07");
+    expect(responses.join("")).toBe(
+      `\x1b]10;${expectedRgb(palette.foreground)}\x07\x1b]12;${expectedRgb(palette.cursor)}\x07\x1b]4;4;${expectedRgb(palette.ansi[4]!)}\x07`,
+    );
     mirror.dispose();
   });
 

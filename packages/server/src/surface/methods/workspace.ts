@@ -10,8 +10,10 @@ import type { MethodDeps } from "./deps.js";
 export function registerWorkspaceMethods(surface: ControlSurface, deps: MethodDeps): void {
   surface.register("workspace.create", {
     schema: WorkspaceCreateParams,
-    handler: (_ctx, params) =>
-      deps.session.createWorkspace(params.cwd, params.label, params.newCwd),
+    handler: (ctx, params) => {
+      deps.clients.touch(ctx.clientId); // 作る操作も操作（色の問い合わせの答え。20260921-theme-settings の decisions D13）
+      return deps.session.createWorkspace(params.cwd, params.label, params.newCwd);
+    },
   });
 
   surface.register("workspace.rename", {

@@ -25,6 +25,7 @@ import { OsNetworkInfo } from "./infra/OsNetworkInfo.js";
 import { ChildProcessGitRunner } from "./infra/GitRunner.js";
 import { DefaultWorktreeService } from "./git/WorktreeService.js";
 import { DefaultGitInfoPoller } from "./git/GitInfoPoller.js";
+import { createPaletteSource } from "./clients/answerPalette.js";
 import { DefaultClientRegistry } from "./clients/ClientRegistry.js";
 import { DefaultSizeAuthority } from "./clients/SizeAuthority.js";
 import { ControlSurface } from "./surface/ControlSurface.js";
@@ -120,7 +121,11 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   const model = new SessionModel();
   const bus = new EventBus();
   const processInspector = pickProcessInspector();
-  const terminals = new DefaultTerminalManager(new NodePtyBackend(), processInspector, options.scrollbackLines);
+  // 色の問い合わせの答え（20260921-theme-settings の design D6）は `session`（pane・tab）と `clients` から引くが、`session` は `terminals` を受けて
+  // 作る（`clients` もその下）——先に箱を渡し、`clients` を作った直後に埋める。pane を作る（復元する）のは `listen()` の中で、埋めた後になる。
+  // 埋まる前に問い合わせが来ても dracula で答える（投げない）。
+  const palettes = createPaletteSource();
+  const terminals = new DefaultTerminalManager(new NodePtyBackend(), processInspector, options.scrollbackLines, palettes.paletteFor);
   const sessionFile = new FsSessionFile(options.stateDir);
   const persist = new DefaultPersistScheduler(async () => {
     await sessionFile.save(toSessionFileData(session));
@@ -163,6 +168,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   const agentMonitor = new AgentMonitor({ session, terminals, processInspector, manifestStore, bus, logger });
 
   const clients = new DefaultClientRegistry();
+  palettes.attach({ getPane: (id) => session.getPane(id), getTab: (id) => session.getTab(id), clients });
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(logger);
   registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees });

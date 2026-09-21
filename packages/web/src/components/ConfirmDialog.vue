@@ -94,7 +94,7 @@ function onKeydown(ev: KeyboardEvent): void {
   padding: 1em;
 }
 .confirm-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--wtm-backdrop, rgba(0, 0, 0, 0.4));
 }
 .confirm-dialog-message {
   margin: 0 0 1em;

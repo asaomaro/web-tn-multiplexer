@@ -131,6 +131,7 @@ const injectPrefix = (): void => {
   touch-action: manipulation;
 }
 .extra-keys-btn-active {
-  background: var(--wtm-accent, #6272a4);
+  color: var(--wtm-accent-fg, #f8f8f2);
+  background: var(--wtm-accent, #6070a1);
 }
 </style>

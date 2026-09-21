@@ -80,7 +80,13 @@ const isMobile = isMobileViewport();
 </template>
 
 <style>
+/*
+ * 画面の枠の色（CSS 変数）。**ここは dracula（既定のテーマ）の写し**——正は `theme/uiTokens.ts` の定数で、一致は `uiTokens.test.ts` が守る
+ * （20260921-theme-settings）。選んだテーマは `ThemeController` が `documentElement.style` に当てて上書きする。ここの値が効くのは、
+ * 最初の描画で起動用の控え（`public/theme-boot.js`）が無いときに、本体の `ThemeController.start()` が当てるまでの間だけ。
+ */
 :root {
+  color-scheme: dark;
   --wtm-bg: #1e1f29;
   --wtm-fg: #f8f8f2;
   --wtm-menu-bg: #282a36;
@@ -90,6 +96,18 @@ const isMobile = isMobileViewport();
   /* 一時的なホバーの面。--wtm-menu-bg(#282a36) より明るく --wtm-menu-active-bg(#44475a) より暗い色にして、
    * 表示中と取り違えないようにする。 */
   --wtm-menu-hover-bg: #343746;
+  --wtm-accent: #6070a1;
+  --wtm-accent-fg: #f8f8f2;
+  --wtm-error-fg: #ff5555;
+  --wtm-warn-fg: #ffb86c;
+  --wtm-state-blocked: #ff6e6e;
+  --wtm-state-working: #f1fa8c;
+  --wtm-state-done: #50fa7b;
+  --wtm-state-idle: #8a9ad0;
+  --wtm-subtle-bg: rgba(255, 255, 255, 0.08);
+  --wtm-backdrop: rgba(0, 0, 0, 0.4);
+  --wtm-backdrop-strong: rgba(0, 0, 0, 0.5);
+  --wtm-pane-current: #44475a;
 }
 html,
 body,

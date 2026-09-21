@@ -49,8 +49,10 @@ export class DefaultSizeAuthority implements SizeAuthority {
   noteInteraction(clientId: string, paneId: string): void {
     const client = this.clients.get(clientId);
     if (!client) return;
-    if (!canDecideSize(client)) return; // fit していないモバイルは権限を取らない
+    // 操作の時刻は資格を問わず進める——色の問い合わせの答え（`answerPalette.ts` の 2 段目）が「最後に操作した人」を選ぶのに使う
+    // （20260921-theme-settings の decisions D7）。権限の移譲（`transferOwnership`）は候補を `canDecideSize` で絞ってから比べるので変わらない。
     this.clients.touch(clientId);
+    if (!canDecideSize(client)) return; // fit していないモバイルは権限を取らない
     const pane = this.session.getPane(paneId);
     if (!pane) return;
     this.claim(clientId, pane.tabId);

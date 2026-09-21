@@ -1,5 +1,5 @@
 import { Terminal } from "@xterm/xterm";
-import type { ITerminalOptions } from "@xterm/xterm";
+import type { ITerminalOptions, ITheme } from "@xterm/xterm";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { SearchAddon } from "@xterm/addon-search";
 import type { KeyInputController } from "../keys/KeyInputController.js";
@@ -49,6 +49,8 @@ export interface TerminalRegistryOptions {
    * 超える分を捨てていた）。省略時は xterm.js の既定。
    */
   getScrollbackLines?: () => number;
+  /** 作る xterm.js の配色（いま使っているテーマ。20260921-theme-settings）。省略時は既定（dracula）。開いている端末は `setTheme` で替える。 */
+  getTheme?: () => ITheme;
   now?: () => number;
 }
 
@@ -99,6 +101,14 @@ export class TerminalRegistry implements TerminalSinkPort {
 
   release(paneId: string): void {
     this.visible.delete(paneId);
+  }
+
+  /**
+   * 開いている全端末の配色を替える（20260921-theme-settings の AC2）。**`options.theme` を代入するだけ**——xterm.js は色だけを作り直し
+   * （WebGL も追従する）、画面の中身・scrollback・選択・スクロールの位置は触らない（research F21。AC-I5）。端末は作り直さない。
+   */
+  setTheme(theme: ITheme): void {
+    for (const entry of this.entries.values()) entry.term.options.theme = theme;
   }
 
   /**
@@ -192,7 +202,7 @@ export class TerminalRegistry implements TerminalSinkPort {
     const scrollback = this.opts.getScrollbackLines?.();
     const term = new Terminal({
       allowProposedApi: true,
-      theme: toXtermTheme(),
+      theme: this.opts.getTheme?.() ?? toXtermTheme(),
       ...(scrollback !== undefined ? { scrollback } : {}),
       ...this.opts.terminalOptions,
     });

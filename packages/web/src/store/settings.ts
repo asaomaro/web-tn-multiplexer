@@ -1,6 +1,7 @@
-import type { NewCwd } from "@wtm/protocol";
+import type { NewCwd, ThemeName } from "@wtm/protocol";
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { loadThemePrefs, resolveTheme } from "../theme/themes.js";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
 import { readPrefs, writePrefs } from "./view.js";
 
@@ -67,6 +68,24 @@ export const useSettingsStore = defineStore("settings", () => {
   /** 新しい workspace・tab・分割を開く場所の方針と、「指定した場所」のパス（方針が `path` のときだけ使う）。 */
   const newCwdPolicy = ref<NewCwdPolicy>(loadNewCwdPolicy(initial["newCwdPolicy"]));
   const newCwdPath = ref(loadNewCwdPath(initial["newCwdPath"]));
+  /**
+   * テーマ（20260921-theme-settings）。1 つのテーマ・自動の切替・明るいとき・暗いとき（null＝まだ選んでいない＝1 つのテーマの対）。
+   * 読み込みは値ごとに落とす（`loadThemePrefs`。AC4）。
+   */
+  const themePrefs = loadThemePrefs(initial);
+  const theme = ref<ThemeName>(themePrefs.theme);
+  const themeAuto = ref(themePrefs.auto);
+  const themeLight = ref<ThemeName | null>(themePrefs.light);
+  const themeDark = ref<ThemeName | null>(themePrefs.dark);
+  /** OS（ブラウザ）の明暗が暗いか。`ThemeController.start()` が `matchMedia` の値で上書きし、変化を追う（初期は暗い＝herdr の「分からなければ暗い」）。 */
+  const systemDark = ref(true);
+  /** いま使うテーマ（名前の解決は `theme/themes.ts` の `resolveTheme` の 1 か所）。 */
+  const effectiveTheme = computed<ThemeName>(() =>
+    resolveTheme(
+      { theme: theme.value, auto: themeAuto.value, light: themeLight.value, dark: themeDark.value },
+      systemDark.value,
+    ),
+  );
 
   /** 反映と保存を同時に行う（確定ボタンを置かない。AC-I2）。 */
   function setStatusSymbols(v: boolean): void {
@@ -92,14 +111,51 @@ export const useSettingsStore = defineStore("settings", () => {
     writePrefs({ newCwdPath: v });
   }
 
+  /**
+   * 1 つのテーマを選ぶ。反映と保存を同時に行う。**自動の切替が入っていたら切る**（herdr の「設定画面で手で選ぶと auto_switch が切れる」。AC7）。
+   */
+  function setTheme(v: ThemeName): void {
+    theme.value = v;
+    themeAuto.value = false;
+    writePrefs({ theme: v, themeAuto: false });
+  }
+
+  /** 自動の切替の入切。切ると 1 つのテーマに戻る（`resolveTheme`。AC7）。 */
+  function setThemeAuto(v: boolean): void {
+    themeAuto.value = v;
+    writePrefs({ themeAuto: v });
+  }
+
+  /** 明るいときのテーマ。null で既定（1 つのテーマの対）に戻り、また追従する（design D7）。 */
+  function setThemeLight(v: ThemeName | null): void {
+    themeLight.value = v;
+    writePrefs({ themeLight: v });
+  }
+
+  /** 暗いときのテーマ。null で既定に戻る。 */
+  function setThemeDark(v: ThemeName | null): void {
+    themeDark.value = v;
+    writePrefs({ themeDark: v });
+  }
+
   return {
     statusSymbols,
     scrollback,
     newCwdPolicy,
     newCwdPath,
+    theme,
+    themeAuto,
+    themeLight,
+    themeDark,
+    systemDark,
+    effectiveTheme,
     setStatusSymbols,
     setScrollback,
     setNewCwdPolicy,
     setNewCwdPath,
+    setTheme,
+    setThemeAuto,
+    setThemeLight,
+    setThemeDark,
   };
 });

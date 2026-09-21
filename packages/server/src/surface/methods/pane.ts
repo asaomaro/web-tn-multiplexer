@@ -16,6 +16,7 @@ export function registerPaneMethods(surface: ControlSurface, deps: MethodDeps): 
   surface.register("pane.split", {
     schema: PaneSplitParams,
     handler: async (ctx, params) => {
+      deps.clients.touch(ctx.clientId); // 起動の猶予より前に（色の問い合わせの答え。20260921-theme-settings の decisions D13）
       const result = await deps.session.splitPane(
         params.paneId,
         params.direction,

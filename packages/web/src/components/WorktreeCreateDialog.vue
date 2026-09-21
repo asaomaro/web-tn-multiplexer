@@ -94,7 +94,7 @@ function onNativeCancel(ev: Event): void {
   padding: 1em;
 }
 .worktree-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--wtm-backdrop, rgba(0, 0, 0, 0.4));
 }
 .worktree-dialog-label {
   display: flex;

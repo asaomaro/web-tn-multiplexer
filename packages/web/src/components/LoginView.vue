@@ -186,7 +186,7 @@ function onSubmit(): void {
   opacity: 0.85;
 }
 .login-view-error {
-  color: #ff5555;
+  color: var(--wtm-error-fg, #ff5555);
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -199,7 +199,7 @@ function onSubmit(): void {
 /* `--origin <Origin>` をそのまま写せるように、選択しやすく・折り返せる形で出す（D105）。 */
 .login-view-error-command {
   color: var(--wtm-fg, #f8f8f2);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--wtm-subtle-bg, rgba(255, 255, 255, 0.08));
   padding: 0.3em 0.5em;
   border-radius: 3px;
   overflow-wrap: anywhere;

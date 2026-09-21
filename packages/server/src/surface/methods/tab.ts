@@ -5,8 +5,11 @@ import type { MethodDeps } from "./deps.js";
 export function registerTabMethods(surface: ControlSurface, deps: MethodDeps): void {
   surface.register("tab.create", {
     schema: TabCreateParams,
-    handler: (_ctx, params) =>
-      deps.session.createTab(params.workspaceId, params.label, params.newCwd),
+    handler: (ctx, params) => {
+      // 作る操作も操作——作った pane のシェルが起動の直後に色を問い合わせたら、作った人の配色で答える（20260921-theme-settings の decisions D13）。
+      deps.clients.touch(ctx.clientId);
+      return deps.session.createTab(params.workspaceId, params.label, params.newCwd);
+    },
   });
 
   surface.register("tab.rename", {

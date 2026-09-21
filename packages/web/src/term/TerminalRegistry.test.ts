@@ -1,4 +1,5 @@
-import type { MethodName, ParamsOf, ResultOf } from "@wtm/protocol";
+import { TERMINAL_PALETTES, type MethodName, type ParamsOf, type ResultOf } from "@wtm/protocol";
+import type { ITheme } from "@xterm/xterm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KeyInputController } from "../keys/KeyInputController.js";
 import { KeyRouter, type KeyRouterClock } from "../keys/KeyRouter.js";
@@ -7,6 +8,7 @@ import type { ConnectionPort } from "../net/ports.js";
 import { MouseBridge } from "./MouseBridge.js";
 import { RendererPool, type WebglAddonLike } from "./RendererPool.js";
 import { TerminalRegistry } from "./TerminalRegistry.js";
+import { toXtermTheme } from "./theme.js";
 
 function realClock(): KeyRouterClock {
   return { now: () => Date.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) };
@@ -37,7 +39,13 @@ class FakeWebglAddon implements WebglAddonLike {
   }
 }
 
-function makeRegistry(opts: { capacity: number; now?: () => number; hasSizeAuthority?: (paneId: string) => boolean; getScrollbackLines?: () => number }) {
+function makeRegistry(opts: {
+  capacity: number;
+  now?: () => number;
+  hasSizeAuthority?: (paneId: string) => boolean;
+  getScrollbackLines?: () => number;
+  getTheme?: () => ITheme;
+}) {
   const conn = makeConnection();
   const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
   const keys = new KeyInputController(router, conn);
@@ -51,6 +59,7 @@ function makeRegistry(opts: { capacity: number; now?: () => number; hasSizeAutho
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.hasSizeAuthority ? { hasSizeAuthority: opts.hasSizeAuthority } : {}),
     ...(opts.getScrollbackLines ? { getScrollbackLines: opts.getScrollbackLines } : {}),
+    ...(opts.getTheme ? { getTheme: opts.getTheme } : {}),
     createMouseBridge: (term, paneId) => {
       const bridge = new MouseBridge({ term, paneId, ui: { toast: () => undefined, openContextMenu: () => undefined }, getRightClickTarget: () => "herdr" });
       mouseBridges.push(bridge);
@@ -71,6 +80,42 @@ describe("TerminalRegistry", () => {
     expect(entry.paneId).toBe("p1");
     expect(registry.takePendingSubscriptions(["p1"])).toEqual(["p1"]);
     entry.term.dispose();
+  });
+
+  // 20260921-theme-settings：作るときの配色と、開いている端末の入れ替え（AC2・AC-I5）。
+  describe("テーマ", () => {
+    it("作るときは、そのときの getTheme の配色（替えた後に作る端末は新しい配色）。省けば既定（dracula）", () => {
+      let current = toXtermTheme(TERMINAL_PALETTES["catppuccin-latte"]);
+      const { registry } = makeRegistry({ capacity: 24, getTheme: () => current });
+      const p1 = registry.acquire("p1");
+      expect(p1.term.options.theme).toMatchObject({ background: "#eff1f5", foreground: "#4c4f69" });
+      current = toXtermTheme(TERMINAL_PALETTES.nord);
+      const p2 = registry.acquire("p2");
+      expect(p2.term.options.theme).toMatchObject({ background: "#2e3440" });
+      const b = makeRegistry({ capacity: 24 }).registry.acquire("p1");
+      expect(b.term.options.theme).toMatchObject({ background: "#282a36", foreground: "#f8f8f2" });
+      for (const t of [p1.term, p2.term, b.term]) t.dispose();
+    });
+
+    it("setTheme は隠れている端末も含めて options.theme だけを替え、端末を作り直さず中身を保つ。dracula に戻すと選択の色は既定に戻る", async () => {
+      const { registry } = makeRegistry({ capacity: 24 });
+      const p1 = registry.acquire("p1");
+      const p2 = registry.acquire("p2");
+      registry.release("p2"); // 隠れている（LRU に残っている）端末
+      const term1 = p1.term;
+      await new Promise<void>((resolve) => term1.write("keep-this", resolve));
+      registry.setTheme(toXtermTheme(TERMINAL_PALETTES.nord));
+      expect(registry.get("p1")?.term).toBe(term1); // 作り直していない
+      expect(term1.buffer.active.getLine(0)?.translateToString(true)).toBe("keep-this"); // 中身を保つ
+      expect(p1.term.options.theme).toMatchObject({ background: "#2e3440", selectionForeground: "#2e3440" });
+      expect(p2.term.options.theme).toMatchObject({ background: "#2e3440" });
+      registry.setTheme(toXtermTheme());
+      expect(p1.term.options.theme).toMatchObject({ background: "#282a36" });
+      expect(p1.term.options.theme).not.toHaveProperty("selectionBackground");
+      expect(p1.term.options.theme).not.toHaveProperty("selectionForeground");
+      p1.term.dispose();
+      p2.term.dispose();
+    });
   });
 
   // 20260920-agent-notifications の AC3：知らせる直前に「その pane を見ているか」を引く口。

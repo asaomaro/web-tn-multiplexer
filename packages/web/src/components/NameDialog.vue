@@ -137,7 +137,7 @@ function onNativeCancel(ev: Event): void {
   padding: 1em;
 }
 .name-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--wtm-backdrop, rgba(0, 0, 0, 0.4));
 }
 .name-dialog-label {
   display: flex;
