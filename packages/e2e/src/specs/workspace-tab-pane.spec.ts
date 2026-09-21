@@ -422,3 +422,35 @@ test("サイドバー：区切りの無い長いブランチ名でも横に溢�
   const narrow = await sidebarWidths(page);
   expect(narrow.scroll, `折りたたみ時（実測 ${JSON.stringify(narrow)}）`).toBeLessThanOrEqual(narrow.client);
 });
+
+/**
+ * AC1・AC3・AC6・AC12（20260920-sidebar-tabbar-controls）：足したボタンが実際に効くこと。
+ * キー操作（prefix+b / prefix+shift+N / prefix+c）は変えていないので、同じ結果になるのが正しい。
+ */
+test("サイドバーとタブバーのボタンが、キー操作と同じ結果になる（AC1・AC3・AC6・AC12）", async ({ page, appServer }) => {
+  const client = await appServer.openClient();
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  // 折りたたみ：ボタンで畳んで、畳んだ状態のボタンで戻す（戻せないと行き止まりになる）。
+  const collapse = page.locator(".sidebar-footer .sidebar-collapse-btn");
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await collapse.click();
+  await expect(page.locator(".sidebar-collapsed")).toHaveCount(1);
+  await expect(collapse).toHaveAttribute("aria-expanded", "false");
+  await collapse.click();
+  await expect(page.locator(".sidebar-collapsed")).toHaveCount(0);
+
+  // 「新規」：workspace が 1 つ増える（prefix+shift+N と同じ）。
+  await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(1);
+  const created = client.waitForEvent("workspace.created");
+  await page.locator(".sidebar-section-footer .sidebar-btn").first().click();
+  await created;
+  await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(2);
+
+  // ＋：新しいタブの名前入力が開く（prefix+c と同じ）。
+  await page.locator(".tab-bar-new").click();
+  await expect(page.locator(".name-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".name-dialog")).toBeHidden();
+});

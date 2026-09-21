@@ -23,6 +23,9 @@ import { ViewSync } from "./term/ViewSync.js";
 let pinia: Pinia;
 
 beforeEach(() => {
+  // view ストアは初期化時に `wtm.prefs.v1`（localStorage）を読む。消さないと
+  // 同じワーカーで先に走ったファイルの選択が持ち越される（20260920-sidebar-tabbar-controls）。
+  localStorage.clear();
   sessionStorage.clear();
   pinia = createPinia();
 });

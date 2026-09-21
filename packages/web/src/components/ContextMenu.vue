@@ -68,10 +68,22 @@ const items = computed<MenuItem[]>(() => {
       { label: "閉じる", run: () => actions.closeTabById(target.tabId) },
     ];
   }
-  // workspace：herdr は worktree 対応で 4 パターンあるが、本製品はグルーピングが対象外なので常にこの 2 項目（D56 の訂正 10）。
+  if (target.kind === "workspace") {
+    // herdr は worktree 対応で 4 パターンあるが、本製品はグルーピングが対象外なので常にこの 2 項目（D56 の訂正 10）。
+    return [
+      { label: "名前の変更", run: () => actions.renameWorkspaceById(target.workspaceId) },
+      { label: "閉じる", run: () => actions.closeWorkspaceById(target.workspaceId) },
+    ];
+  }
+  // global：どこにも属さない全体の操作。この製品に設定画面も更新機構も無いので、
+  // herdr の `settings` / `reload config` / `what's new` は入れない。切り離しは押し間違えると接続が切れるので最後。
+  // 最後の分岐は `target` の中身を見ないので、種類が増えてもここへ黙って落ちてしまう。
+  // それを防ぐために網羅性を明示する（5 つ目を足したらここで型エラーになる）。
+  target satisfies { kind: "global" };
   return [
-    { label: "名前の変更", run: () => actions.renameWorkspaceById(target.workspaceId) },
-    { label: "閉じる", run: () => actions.closeWorkspaceById(target.workspaceId) },
+    { label: "キー割り当て", run: () => actions.run({ type: "help" }) },
+    { label: "移動", run: () => actions.run({ type: "goto" }) },
+    { label: "切り離し", run: () => actions.run({ type: "detach" }) },
   ];
 });
 

@@ -228,6 +228,8 @@ test("pane の枠はキーボードでも開ける：tab バーから Tab で枠
   await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
 
   await page.locator(".tab-bar-item").first().click(); // 端末の外（端末の中では Tab は端末へ届く）
+  await page.keyboard.press("Tab"); // tab バーの「＋」（20260920-sidebar-tabbar-controls で足した）
+  await expect(page.locator(".tab-bar-new")).toBeFocused();
   await page.keyboard.press("Tab");
   const edge = page.locator(".pane-frame-edge").first();
   await expect(edge).toBeFocused();
@@ -256,6 +258,7 @@ function describeFocus(page: Page): Promise<string> {
     if (active.classList.contains("xterm-helper-textarea")) return `terminal${where}`;
     if (active.getAttribute("role") === "separator") return "splitter";
     if (active.classList.contains("tab-bar-item")) return "tab";
+    if (active.classList.contains("tab-bar-new")) return "newTab";
     return active.tagName.toLowerCase();
   });
 }
@@ -292,11 +295,13 @@ test("分割した 2 つ目の pane も、prefix のキーで選んでから、t
   // tab バーへフォーカスを置いて代える。そこから Tab で進む順を記録する。
   await page.locator(".tab-bar-item").first().focus();
   const order: string[] = [];
-  for (let i = 0; i < 4 && order.at(-1) !== "frame@pane2"; i++) {
+  for (let i = 0; i < 5 && order.at(-1) !== "frame@pane2"; i++) {
     await page.keyboard.press("Tab");
     order.push(await describeFocus(page));
   }
-  expect(order).toEqual(["splitter", "frame@pane2"]); // 境界（Splitter）の次が p2 の枠。p1 の枠・端末には止まらない
+  // 先頭の「＋」は tab バーの新しいタブのボタン（20260920-sidebar-tabbar-controls の AC6）。
+  // 境界（Splitter）の次が p2 の枠で、p1 の枠・端末には止まらない。
+  expect(order).toEqual(["newTab", "splitter", "frame@pane2"]);
   await expect(edges.nth(1)).toHaveAttribute("tabindex", "0"); // 選ばれている p2 の枠だけが Tab で止まる
   await expect(edges.nth(0)).toHaveAttribute("tabindex", "-1");
   await expect(page.locator(".xterm-helper-textarea").nth(0)).toHaveAttribute("tabindex", "-1"); // 選ばれていない p1 の端末も
@@ -457,4 +462,61 @@ test("pane の枠：prefix のキーで選び直すと強調が移る（AC-I3）
   await prefixKey(page, "l");
   await client.waitForEvent("session.focus_changed", (e) => e.data.focus?.paneId === p2);
   await expect(edges.nth(1)).toHaveClass(/pane-frame-edge-current/);
+});
+
+/**
+ * AC5・AC-I1・AC-I3・AC-I4（20260920-sidebar-tabbar-controls）：全体のメニューは既存の右クリックメニューに
+ * 相乗りしているので、キーボードの操作もフォーカスの戻りも同じ実装が担う。それを実地で確かめる。
+ */
+test("全体のメニュー：キーボードだけで開いて閉じ、開いたボタンへフォーカスが戻る（AC5・AC-I1・AC-I3・AC-I4）", async ({ page, appServer }) => {
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  // **Tab で到達できること自体を確かめる**（`.focus()` で飛ばすと「キーボードだけで」を確かめたことにならない）。
+  // サイドバーは DOM の先頭側にあるので、焦点を外した状態から Tab を押すと足したボタンが順に出る。
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  const reached: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    await page.keyboard.press("Tab");
+    reached.push(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.className ?? ""));
+  }
+  const trail = reached.join(" → ");
+  // 足した 4 つのボタンが、この順に Tab で出る（DOM の順＝新規・メニュー・ソート・折りたたみ）。
+  // 先頭にはクラス名を持たない要素が挟まることがあるので、見たい要素だけを抜き出して順序を見る。
+  const btns = reached.filter((c) => c.includes("sidebar-btn") || c.includes("tab-bar-item"));
+  expect(btns[0], trail).toBe("sidebar-btn");
+  expect(btns[1], trail).toContain("sidebar-btn-right");
+  expect(btns[2], trail).toContain("sidebar-sort-btn");
+  expect(btns[3], trail).toContain("sidebar-collapse-btn");
+  expect(btns[4], trail).toContain("tab-bar-item"); // サイドバーを抜けるとタブへ
+
+  // 「メニュー」へ戻って Enter で開く。
+  const menuBtn = page.locator(".sidebar-section-footer .sidebar-btn-right");
+  await menuBtn.focus();
+  await expect(menuBtn).toBeFocused();
+  await page.keyboard.press("Enter");
+  const menu = page.locator(".context-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu).toBeFocused();
+  await expect(menu.getByRole("menuitem", { name: "キー割り当て" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "切り離し" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(menuBtn).toBeFocused(); // 開く前の場所へ戻る
+});
+
+/** AC10：並び順は「この端末での好み」なので、再読み込みしても残る。 */
+test("agents の並び順は、切り替えると再読み込みしても残る（AC7・AC10）", async ({ page, appServer }) => {
+  await page.goto(`${appServer.origin}/#token=${appServer.token}`);
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+
+  const sortBtn = page.locator(".sidebar-section-header .sidebar-sort-btn");
+  await expect(sortBtn).toHaveText("グループ順"); // 既定（内部の値は grouped）
+  await sortBtn.click();
+  await expect(sortBtn).toHaveText("優先度順");
+
+  await page.reload();
+  await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+  await expect(page.locator(".sidebar-section-header .sidebar-sort-btn")).toHaveText("優先度順");
 });

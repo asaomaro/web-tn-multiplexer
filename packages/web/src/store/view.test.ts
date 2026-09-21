@@ -6,10 +6,50 @@ let pinia: Pinia;
 
 beforeEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
   pinia = createPinia();
 });
 afterEach(() => {
   sessionStorage.clear();
+  localStorage.clear();
+});
+
+// 20260920-sidebar-tabbar-controls の AC10：並び順は「この端末での好み」なので、
+// 表示位置（sessionStorage）ではなく localStorage に置く——タブを閉じて開き直しても残す必要がある。
+describe("useViewStore — agents の並び順", () => {
+  it("既定は grouped で、押すたびに priority と行き来する", () => {
+    const store = useViewStore(pinia);
+    expect(store.agentSort).toBe("grouped");
+    store.toggleAgentSort();
+    expect(store.agentSort).toBe("priority");
+    store.toggleAgentSort();
+    expect(store.agentSort).toBe("grouped");
+  });
+
+  it("切り替えると localStorage に残り、新しいストアが読み戻す（タブを閉じて開き直しても残る）", () => {
+    const store = useViewStore(pinia);
+    store.toggleAgentSort();
+    expect(sessionStorage.getItem("wtm.prefs.v1")).toBeNull(); // 表示位置とは別の入れ物
+    const store2 = useViewStore(createPinia());
+    expect(store2.agentSort).toBe("priority");
+  });
+
+  it("壊れた値が入っていたら grouped に落とす", () => {
+    localStorage.setItem("wtm.prefs.v1", JSON.stringify({ agentSort: "なにか" }));
+    expect(useViewStore(createPinia()).agentSort).toBe("grouped");
+  });
+
+  it("localStorage が読めない環境でも動く（保存が効かないだけ）", () => {
+    const original = Storage.prototype.getItem;
+    Storage.prototype.getItem = () => {
+      throw new Error("denied");
+    };
+    try {
+      expect(useViewStore(createPinia()).agentSort).toBe("grouped");
+    } finally {
+      Storage.prototype.getItem = original;
+    }
+  });
 });
 
 describe("useViewStore — restoreView", () => {

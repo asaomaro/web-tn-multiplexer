@@ -2,8 +2,15 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { ILink, ILinkDecorations, ILinkProvider, Terminal } from "@xterm/xterm";
 import { writeClipboard } from "./clipboard.js";
 
-/** M3：pane（`MouseBridge` が右クリックから作る。`PaneFrame` の枠も同じ）・tab・workspace（T22・T21 が直接 `UiPort` を呼ぶ）。 */
-export type MenuTarget = { kind: "pane"; paneId: string } | { kind: "tab"; tabId: string } | { kind: "workspace"; workspaceId: string };
+/**
+ * M3：pane（`MouseBridge` が右クリックから作る。`PaneFrame` の枠も同じ）・tab・workspace（T22・T21 が直接 `UiPort` を呼ぶ）。
+ * `global` はサイドバーの「メニュー」ボタンから開く、どこにも属さない全体の操作（20260920-sidebar-tabbar-controls）。
+ */
+export type MenuTarget =
+  | { kind: "pane"; paneId: string }
+  | { kind: "tab"; tabId: string }
+  | { kind: "workspace"; workspaceId: string }
+  | { kind: "global" };
 
 export interface UiPort {
   openContextMenu(target: MenuTarget, at: { x: number; y: number }): void;

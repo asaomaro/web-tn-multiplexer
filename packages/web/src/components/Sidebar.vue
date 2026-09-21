@@ -2,8 +2,8 @@
 import { computed, inject, ref } from "vue";
 import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
-import { useSeenStore, aggregate, displayStateFor, type STATE_PRIORITY } from "../store/seen.js";
-import { useViewStore } from "../store/view.js";
+import { useSeenStore, aggregate, displayStateFor, STATE_PRIORITY } from "../store/seen.js";
+import { type AgentSort, useViewStore } from "../store/view.js";
 
 /**
  * サイドバー（D56 の訂正 9）。「spaces」（workspace の一覧）と「agents」（エージェントの一覧）の 2 区画。
@@ -36,8 +36,14 @@ const spaces = computed(() =>
   }),
 );
 
-const agents = computed(() =>
-  [...session.panes.values()]
+/** 全体のメニューが開いているか（`PaneFrame` の枠のボタンと同じく `aria-expanded` で伝える）。 */
+const globalMenuOpen = computed(() => view.contextMenu?.target.kind === "global");
+
+/** 並び順の表示名。内部の値（`grouped` / `priority`）をそのまま出さない（decisions.md D6）。 */
+const AGENT_SORT_LABEL: Record<AgentSort, string> = { grouped: "グループ順", priority: "優先度順" };
+
+const agents = computed(() => {
+  const rows = [...session.panes.values()]
     .filter((p) => p.agent)
     .map((p) => {
       const tab = session.tabs.get(p.tabId);
@@ -45,8 +51,16 @@ const agents = computed(() =>
       const agent = p.agent!;
       const state = displayStateFor(agent, seen.getSeenSeq(agent.instanceId, agent.serverSeenSeq));
       return { pane: p, tab, workspace: ws, agent, state };
-    }),
-);
+    });
+  // `grouped` は並べ替えない——サーバが返す順（workspace 順 → tab 順 → pane 順）がそのままグループになる（herdr と同じ）。
+  if (view.agentSort === "grouped") return rows;
+  // `priority`：手を動かす必要がある順。同点なら状態が最近変わったものを上に。
+  // `sort` は安定なので、両方同点なら `grouped` の並びが残る。
+  return [...rows].sort((a, b) => {
+    const byState = STATE_PRIORITY[b.state ?? "unknown"] - STATE_PRIORITY[a.state ?? "unknown"];
+    return byState !== 0 ? byState : b.agent.since - a.agent.since;
+  });
+});
 
 /** サイドバーでの選択（M1・AC-I4・AC7）。design「フォーカス系の方式」：自分の表示を変え、サーバの
  *  「最後の選択」も更新する（ほかのクライアントの表示は動かさない）。 */
@@ -68,6 +82,17 @@ function focusPane(paneId: string, tabId: string, workspaceId: string): void {
 function onWorkspaceContextMenu(ev: MouseEvent, workspaceId: string): void {
   ev.preventDefault();
   actions?.openContextMenu({ kind: "workspace", workspaceId }, { x: ev.clientX, y: ev.clientY });
+}
+
+/** 新しい workspace を作る。キーの `prefix+shift+n` と同じ経路（`ActionDispatcher.run`）を通す。 */
+function onNewWorkspace(): void {
+  actions?.run({ type: "newWorkspace" });
+}
+
+/** 全体のメニューを、押したボタンの位置に開く（`ContextMenu` が中身と操作を引き受ける）。 */
+function onOpenGlobalMenu(ev: MouseEvent): void {
+  const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+  actions?.openContextMenu({ kind: "global" }, { x: rect.left, y: rect.top });
 }
 
 function onDividerPointerDown(ev: PointerEvent): void {
@@ -118,9 +143,29 @@ function onDividerPointerUp(): void {
           <span class="sidebar-git-counts">↑{{ workspace.git!.ahead }} ↓{{ workspace.git!.behind }}</span>
         </div>
       </div>
+
+      <div v-if="!view.sidebarCollapsed" class="sidebar-section-footer">
+        <button type="button" class="sidebar-btn" @click="onNewWorkspace" @keydown.stop>＋ 新規</button>
+        <button
+          type="button"
+          class="sidebar-btn sidebar-btn-right"
+          aria-haspopup="menu"
+          :aria-expanded="globalMenuOpen ? 'true' : 'false'"
+          @click="onOpenGlobalMenu"
+          @keydown.stop
+        >
+          メニュー
+        </button>
+      </div>
     </section>
 
     <section class="sidebar-agents" aria-label="agents">
+      <div v-if="!view.sidebarCollapsed" class="sidebar-section-header">
+        <span class="sidebar-section-title">agents</span>
+        <button type="button" class="sidebar-btn sidebar-sort-btn" :aria-label="`並び順: ${AGENT_SORT_LABEL[view.agentSort]}（押すと切り替え）`" @click="view.toggleAgentSort()" @keydown.stop>
+          {{ AGENT_SORT_LABEL[view.agentSort] }}
+        </button>
+      </div>
       <div v-for="{ pane, tab, workspace, agent, state } in agents" :key="pane.id" class="sidebar-row" @click="focusPane(pane.id, pane.tabId, workspace?.id ?? '')">
         <div class="sidebar-row-line1">
           <span class="sidebar-state-icon" :data-state="state ?? 'none'" />
@@ -135,6 +180,19 @@ function onDividerPointerUp(): void {
         </div>
       </div>
     </section>
+
+    <div class="sidebar-footer">
+      <button
+        type="button"
+        class="sidebar-btn sidebar-collapse-btn"
+        :aria-expanded="!view.sidebarCollapsed"
+        :aria-label="view.sidebarCollapsed ? 'サイドバーを開く' : 'サイドバーを畳む'"
+        @click="actions?.run({ type: 'toggleSidebar' })"
+        @keydown.stop
+      >
+        {{ view.sidebarCollapsed ? "»" : "«" }}
+      </button>
+    </div>
 
     <div class="sidebar-divider" @pointerdown="onDividerPointerDown" @pointermove="onDividerPointerMove" @pointerup="onDividerPointerUp" />
   </nav>
@@ -245,6 +303,51 @@ function onDividerPointerUp(): void {
 }
 /* 以前は `right: -3px` で外へ 3px はみ出しており、文字が 1 つも無くても横スクロールバーが出ていた
  * （decisions.md D3）。幅の変更は移動量の差分で決まるので、内側へ寄せても操作感は変わらない。 */
+/* ボタンの帯（20260920-sidebar-tabbar-controls）。`.sidebar-divider` が右端 6px を縦一杯に覆うので、
+ * その分だけ内側に寄せてボタンがつまみの下に潜らないようにする。 */
+.sidebar-section-footer,
+.sidebar-section-header,
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  flex: none;
+  padding: 0.2em 0.8em;
+  padding-right: calc(0.8em + 6px);
+}
+.sidebar-section-header {
+  border-bottom: 1px solid var(--wtm-menu-border, #44475a);
+}
+/* 内容が短いときは下端へ寄る。`.sidebar` の overflow は動かさない（decisions.md D3）。 */
+.sidebar-footer {
+  margin-top: auto;
+  justify-content: flex-end;
+}
+.sidebar-section-title {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+.sidebar-btn {
+  font: inherit;
+  font-size: 0.85em;
+  color: var(--wtm-fg, #f8f8f2);
+  background: none;
+  border: none;
+  padding: 0.2em 0.4em;
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sidebar-btn:hover {
+  background: var(--wtm-menu-hover-bg, #343746);
+}
+.sidebar-btn-right,
+.sidebar-sort-btn {
+  margin-left: auto;
+}
+.sidebar-collapse-btn {
+  padding: 0.2em 0.5em;
+}
 .sidebar-divider {
   position: absolute;
   top: 0;

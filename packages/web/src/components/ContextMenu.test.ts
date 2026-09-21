@@ -10,6 +10,9 @@ import ContextMenu from "./ContextMenu.vue";
 let pinia: Pinia;
 
 beforeEach(() => {
+  // view ストアは初期化時に `wtm.prefs.v1`（localStorage）を読む。消さないと
+  // 同じワーカーで先に走ったファイルの選択が持ち越される（20260920-sidebar-tabbar-controls）。
+  localStorage.clear();
   pinia = createPinia();
 });
 
@@ -27,6 +30,7 @@ function makeActions() {
     closeTabById: vi.fn(),
     renameWorkspaceById: vi.fn(),
     closeWorkspaceById: vi.fn(),
+    run: vi.fn(),
   };
 }
 
@@ -138,6 +142,35 @@ describe("ContextMenu — workspace", () => {
     view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
     const wrapper = mountMenu(makeActions());
     expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる"]);
+  });
+});
+
+// 20260920-sidebar-tabbar-controls の AC4：サイドバーの「メニュー」から開く、どこにも属さない全体の操作。
+describe("ContextMenu — global", () => {
+  it("キー割り当て・移動・切り離しの 3 項目を、この順で出す", () => {
+    const view = useViewStore(pinia);
+    view.openContextMenu({ kind: "global" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(makeActions());
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["キー割り当て", "移動", "切り離し"]);
+  });
+
+  it("選ぶと、キー操作と同じ action が `run` に渡る", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    view.openContextMenu({ kind: "global" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(actions);
+    await wrapper.findAll("li")[1]!.trigger("click"); // 「移動」
+    expect(actions.run).toHaveBeenCalledWith({ type: "goto" });
+  });
+
+  it("Esc で閉じたときは何も実行しない（AC-I2）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    view.openContextMenu({ kind: "global" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(actions);
+    await wrapper.get('[role="menu"]').trigger("keydown", { key: "Escape" });
+    expect(actions.run).not.toHaveBeenCalled();
+    expect(view.contextMenu).toBeNull();
   });
 });
 
