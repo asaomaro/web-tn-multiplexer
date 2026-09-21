@@ -41,30 +41,70 @@ export type AgentSort = "grouped" | "priority";
  */
 const PREFS_KEY = "wtm.prefs.v1";
 
-function loadAgentSort(): AgentSort {
+/**
+ * `wtm.prefs.v1` の読み書きは**この 2 つに集約する**（20260920-agent-notifications の AC6）。
+ * 以前は `JSON.stringify({ agentSort: v })` で**オブジェクトごと置き換えて**いたので、
+ * 項目を足しても**並び順を切り替えた瞬間に消えた**。複数のストアが同じキーを別々に
+ * read-modify-write しないよう、所有者をここ 1 つにする。
+ */
+export function readPrefs(): Record<string, unknown> {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    if (!raw) return "grouped";
+    if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
-    const v = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "agentSort" in parsed ? (parsed as { agentSort: unknown }).agentSort : null;
-    return v === "priority" || v === "grouped" ? v : "grouped"; // 壊れた値は既定へ落とす
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
   } catch {
-    return "grouped"; // プライベートウィンドウ等で読めなくても動く（保存が効かないだけ）
+    return {}; // プライベートウィンドウ等で読めなくても動く（保存が効かないだけ）
   }
 }
 
-function saveAgentSort(v: AgentSort): void {
+/** 既存の値に**併合して**書く。**読みも書きも同じ try/catch の内側**に置く（読めない環境で throw させない）。 */
+export function writePrefs(patch: Record<string, unknown>): void {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ agentSort: v }));
+    const current = readPrefs();
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...current, ...patch }));
   } catch {
     // 保存できなくても致命的ではない（この画面の間だけ効く）。
   }
 }
 
+function loadAgentSort(): AgentSort {
+  const v = readPrefs()["agentSort"];
+  return v === "priority" || v === "grouped" ? v : "grouped"; // 壊れた値は既定へ落とす
+}
+
+function saveAgentSort(v: AgentSort): void {
+  writePrefs({ agentSort: v });
+}
+
 let nextToastId = 1;
+
+/** トーストの行動ボタン（`sticky` のときだけ置く。20260920-agent-notifications）。 */
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 export interface Toast {
   id: number;
   message: string;
+  /**
+   * 既定（`undefined`）は今までどおり 4 秒で自動的に消える。
+   * **`"sticky"` は消えない**——席を外している間に出た知らせが消えていては意味が無い
+   * （20260920-agent-notifications の requirements）。消すのは利用者の操作か、
+   * `prefix+o` で対象へ移ったとき。
+   */
+  kind?: "sticky";
+  /** `sticky` に添えるボタン。トースト本体のクリックは今までどおり「消す」なので、ボタン側で `@click.stop` する。 */
+  actions?: ToastAction[];
+  /** `true` なら 1 行に畳まない（案内だけの例外。狭い画面で本文が読めなくなるため）。 */
+  wrap?: boolean;
+}
+
+export interface ToastOptions {
+  kind?: "sticky";
+  actions?: ToastAction[];
+  wrap?: boolean;
 }
 
 /**
@@ -81,7 +121,9 @@ export type DialogContext =
   | { kind: "goto" }
   // worktree（20260920-git-worktree-actions）。**サーバへ聞いてから開く**ので、開く時点で中身が揃っている。
   | { kind: "worktreeCreate"; workspaceId: string; info: WorktreeListResult }
-  | { kind: "worktreeOpen"; workspaceId: string; entries: WorktreeEntry[] };
+  | { kind: "worktreeOpen"; workspaceId: string; entries: WorktreeEntry[] }
+  // 通知の設定（20260920-agent-notifications）。状態は `store/notifications` が持つので文脈は空。
+  | { kind: "notifySettings" };
 
 /**
  * このクライアントの表示・モード・接続状態（architecture.md「store/view」）。
@@ -220,9 +262,10 @@ export const useViewStore = defineStore("view", () => {
     sidebarCollapsed.value = !sidebarCollapsed.value;
   }
 
-  function toast(message: string): number {
+  /** `opts` を省けば今までどおり（4 秒で消える 1 行）。`kind: "sticky"` は消えない（20260920-agent-notifications）。 */
+  function toast(message: string, opts?: ToastOptions): number {
     const id = nextToastId++;
-    toasts.value = [...toasts.value, { id, message }];
+    toasts.value = [...toasts.value, { id, message, ...opts }];
     return id;
   }
 

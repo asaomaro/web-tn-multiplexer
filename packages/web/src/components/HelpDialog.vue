@@ -40,9 +40,9 @@ const HELP_GROUPS: HelpGroup[] = [
     entries: [
       { keys: "?", label: "キー一覧" },
       { keys: "q", label: "このブラウザを切り離す" },
-      notYet("s", "s"),
+      { keys: "s", label: "通知の設定" },
       notYet("R", "shift+r"),
-      notYet("o", "o"),
+      { keys: "o", label: "次の知らせへ移る" },
     ],
   },
   {

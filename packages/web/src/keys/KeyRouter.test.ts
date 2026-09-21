@@ -132,11 +132,20 @@ describe("KeyRouter — prefix モード", () => {
     expect(router.mode).toBe("navigate");
   });
 
-  it("後続のキー（例 s）は notYet の action を返し、terminal へ戻る", () => {
+  // `s` は 20260920-agent-notifications で「通知の設定」になった（`shift+r` が未対応のまま残る）。
+  it("後続のキー（例 shift+r）は notYet の action を返し、terminal へ戻る", () => {
     const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
     router.handle(ctrlB());
-    expect(router.handle(key({ key: "s" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "notYet", work: "外観と設定" } });
+    expect(router.handle(key({ key: "R", shift: true }))).toEqual<KeyDecision>({ kind: "action", action: { type: "notYet", work: "外観と設定" } });
     expect(router.mode).toBe("terminal");
+  });
+
+  it("prefix+s は通知の設定、prefix+o は次の知らせへ移る", () => {
+    const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
+    router.handle(ctrlB());
+    expect(router.handle(key({ key: "s" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "notifySettings" } });
+    router.handle(ctrlB());
+    expect(router.handle(key({ key: "o" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "nextNotification" } });
   });
 
   it("3 秒経つと自動で terminal へ戻る（D21。herdr には無いが AC-I1 のために維持）", () => {

@@ -36,7 +36,10 @@ describe("HelpDialog — 表示", () => {
     const grayed = wrapper.findAll(".help-dialog-grayed");
     expect(grayed.length).toBeGreaterThan(0);
     expect(wrapper.text()).toContain("未対応（後続: 外観と設定）");
-    expect(wrapper.text()).toContain("未対応（後続: 通知）");
+    // `o` は 20260920-agent-notifications で「次の知らせへ移る」になった（`shift+r` は未対応のまま残る）。
+    expect(wrapper.text()).toContain("次の知らせへ移る");
+    expect(wrapper.text()).toContain("通知の設定");
+    expect(wrapper.text(), "壊れた表示（work 名が空）を出さない").not.toContain("未対応（後続: ）");
     // `shift+g`（グルーピングの枠）は 20260920-git-worktree-actions で「新しい worktree」に置き換わった。
     expect(wrapper.text()).toContain("新しい worktree");
     expect(wrapper.text()).toContain("未対応（後続: 端末機能の拡張）");

@@ -1,0 +1,13 @@
+schema: 11
+slug: agent-notifications
+current: deliver
+approved: [requirements, research, design, tasks, coding, test, review, deliver]
+mode: autonomous
+profile: full
+humanGates: []
+maxSendBacks: 3
+dependsOn: []
+harnessRev: unknown
+backlog: product-roadmap.md
+backlogItem: 通知: 完了・入力待ちのアプリ内トースト / OS 通知（HTTPS・PWA 前提）/ 音、通知の対象への移動（herdr prefix+o）
+harnessRevDelivered: unknown

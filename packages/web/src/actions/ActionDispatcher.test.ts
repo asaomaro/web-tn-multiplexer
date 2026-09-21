@@ -58,7 +58,10 @@ class FakeWebglAddon implements WebglAddonLike {
 }
 
 /** T17/T18 共通のテスト用の組み立て（実物の KeyRouter・TerminalRegistry を使う。軽量な部品なので実害は無い）。 */
-function makeDispatcher(conn: ConnectionPort): { dispatcher: ActionDispatcher; registry: TerminalRegistry; keys: KeyInputController } {
+function makeDispatcher(
+  conn: ConnectionPort,
+  extra: { notifications?: { focusNext(): void } } = {},
+): { dispatcher: ActionDispatcher; registry: TerminalRegistry; keys: KeyInputController } {
   const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
   const keys = new KeyInputController(router, conn);
   const renderers = new RendererPool({ capacity: 100, createWebglAddon: () => new FakeWebglAddon() });
@@ -69,7 +72,7 @@ function makeDispatcher(conn: ConnectionPort): { dispatcher: ActionDispatcher; r
     keys,
     createMouseBridge: (term, paneId) => new MouseBridge({ term, paneId, ui: { toast: () => undefined, openContextMenu: () => undefined }, getRightClickTarget: () => "herdr" }),
   });
-  const dispatcher = new ActionDispatcher({ conn, pinia, registry, keys });
+  const dispatcher = new ActionDispatcher({ conn, pinia, registry, keys, notifications: { focusNext: () => undefined }, ...extra });
   const view = useViewStore(pinia);
   keys.bind({ action: dispatcher, focus: dispatcher, mode: { onModeChange: (m) => view.onModeChange(m) } });
   return { dispatcher, registry, keys };
@@ -114,7 +117,7 @@ describe("ActionDispatcher — 分割・フォーカス移動・入れ替え", (
     const view = useViewStore(pinia);
     view.focusPane("p1");
     const { registry, keys } = makeDispatcher(conn);
-    const dispatcher = new ActionDispatcher({ conn, pinia, registry, keys, input: gate });
+    const dispatcher = new ActionDispatcher({ conn, pinia, registry, keys, input: gate, notifications: { focusNext: () => undefined } });
     dispatcher.run({ type: "split", dir: "right" });
     gate.sendInput("p1", "ls\r"); // 応答の前に、まだ焦点のある p1 で打った
     expect(conn.sendInput).not.toHaveBeenCalled();
@@ -135,7 +138,7 @@ describe("ActionDispatcher — 分割・フォーカス移動・入れ替え", (
     const view = useViewStore(pinia);
     view.focusPane("p1");
     const { registry, keys } = makeDispatcher(conn);
-    new ActionDispatcher({ conn, pinia, registry, keys, input: gate }).run({ type: "split", dir: "right" });
+    new ActionDispatcher({ conn, pinia, registry, keys, input: gate, notifications: { focusNext: () => undefined } }).run({ type: "split", dir: "right" });
     gate.sendInput("p1", "ls");
     expect(conn.sendInput).not.toHaveBeenCalled(); // 失敗が分かるまでは溜めている
     await flush();
@@ -149,7 +152,7 @@ describe("ActionDispatcher — 分割・フォーカス移動・入れ替え", (
     const view = useViewStore(pinia);
     view.focusPane("p1");
     const { registry, keys } = makeDispatcher(conn);
-    new ActionDispatcher({ conn, pinia, registry, keys, input: gate }).run({ type: "split", dir: "right" });
+    new ActionDispatcher({ conn, pinia, registry, keys, input: gate, notifications: { focusNext: () => undefined } }).run({ type: "split", dir: "right" });
     gate.sendInput("p1", "ls");
     await flush();
     expect(conn.sendInput).toHaveBeenCalledWith("p1", "ls");
@@ -167,7 +170,7 @@ describe("ActionDispatcher — 分割・フォーカス移動・入れ替え", (
     view.focusPane("p1");
     view.openDialogWithContext({ kind: "newTab", workspaceId: "w1" });
     const { registry, keys } = makeDispatcher(conn);
-    new ActionDispatcher({ conn, pinia, registry, keys, input: gate }).confirmNewTab("second");
+    new ActionDispatcher({ conn, pinia, registry, keys, input: gate, notifications: { focusNext: () => undefined } }).confirmNewTab("second");
     gate.sendInput("p1", "pwd");
     expect(conn.sendInput).not.toHaveBeenCalled();
     await flush();
@@ -890,5 +893,30 @@ describe("ActionDispatcher — worktree", () => {
   it("コードを読み取れない失敗は、汎用の文言に落とす（AC7）", async () => {
     const message = await toastAfterFailure("worktree.list", "", (d) => d.openWorktree("w1"));
     expect(message).toBe("worktree の操作に失敗しました。");
+  });
+});
+
+// 20260920-agent-notifications：`run()` の switch に `default` も網羅性の検査も無いので、
+// **足し忘れてもキーが黙って何もしないだけで型では落ちない**。ここで結線を固定する。
+describe("ActionDispatcher — 通知", () => {
+  it("notifySettings で設定のダイアログが開く", () => {
+    const { dispatcher } = makeDispatcher(makeConnection());
+    const view = useViewStore(pinia);
+    dispatcher.run({ type: "notifySettings" });
+    expect(view.dialogContext).toEqual({ kind: "notifySettings" });
+    expect(view.openDialog, "ダイアログのモードに入る（端末へキーを流さない）").toBe("notifySettings");
+  });
+
+  it("nextNotification で次の知らせへ移る", () => {
+    const conn = makeConnection();
+    const focusNext = vi.fn();
+    const { dispatcher } = makeDispatcher(conn, { notifications: { focusNext } });
+    dispatcher.run({ type: "nextNotification" });
+    expect(focusNext).toHaveBeenCalledOnce();
+  });
+
+  it("通知を繋いでいなくても落ちない（テスト・古い呼び出し元）", () => {
+    const { dispatcher } = makeDispatcher(makeConnection());
+    expect(() => dispatcher.run({ type: "nextNotification" })).not.toThrow();
   });
 });

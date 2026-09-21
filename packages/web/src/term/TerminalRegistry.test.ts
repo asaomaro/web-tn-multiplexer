@@ -73,6 +73,36 @@ describe("TerminalRegistry", () => {
     entry.term.dispose();
   });
 
+  // 20260920-agent-notifications の AC3：知らせる直前に「その pane を見ているか」を引く口。
+  describe("isVisible（通知の抑止に使う）", () => {
+    it("acquire で表示中になり、release で外れる", () => {
+      const { registry } = makeRegistry({ capacity: 24 });
+      expect(registry.isVisible("p1")).toBe(false); // 作る前
+      const entry = registry.acquire("p1");
+      expect(registry.isVisible("p1")).toBe(true);
+      registry.release("p1");
+      expect(registry.isVisible("p1")).toBe(false); // 端末は生きているが、画面には出ていない
+      expect(registry.get("p1")).toBeDefined();
+      entry.term.dispose();
+    });
+
+    it("知らない pane は表示中ではない", () => {
+      const { registry } = makeRegistry({ capacity: 24 });
+      expect(registry.isVisible("missing")).toBe(false);
+    });
+
+    it("複数を開いていれば、それぞれ独立に判定する（分割している tab）", () => {
+      const { registry } = makeRegistry({ capacity: 24 });
+      const p1 = registry.acquire("p1");
+      const p2 = registry.acquire("p2");
+      registry.release("p1");
+      expect(registry.isVisible("p1")).toBe(false);
+      expect(registry.isVisible("p2")).toBe(true);
+      p1.term.dispose();
+      p2.term.dispose();
+    });
+  });
+
   it("acquire: 既にあれば同じ entry を返し、再購読しない", () => {
     const { registry } = makeRegistry({ capacity: 24 });
     const first = registry.acquire("p1");

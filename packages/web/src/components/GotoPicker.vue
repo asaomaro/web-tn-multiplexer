@@ -4,6 +4,7 @@ import { computed, inject, nextTick, ref, watch } from "vue";
 import { ConnectionKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
 import { aggregate, displayStateFor, useSeenStore } from "../store/seen.js";
+import { paneNameOf } from "../store/paneName.js";
 import { useViewStore } from "../store/view.js";
 import { depthFirstPaneIds } from "../term/layoutOrder.js";
 
@@ -73,9 +74,9 @@ const rows = computed<GotoRow[]>(() => {
         const pane = session.panes.get(paneId);
         if (!pane) continue;
         const state = paneState(paneId);
-        // `pane.title`（未設定なら空文字）を「値なし」として扱うため `??` ではなく `||` で繋ぐ（herdr の
-        // フォールバック連鎖と同じ。`label`/`title` が空文字のときも次の候補へ落ちる）。
-        const label = pane.label || pane.agent?.label || pane.title || `pane ${index + 1}`;
+        // 連鎖の正典は `store/paneName.ts` の `paneNameOf`（herdr のフォールバック連鎖と同じ）。
+        // ここは tab 内の順番を既定にする。
+        const label = paneNameOf(pane, `pane ${index + 1}`);
         if (!filtering || (statusMatch(state) && (textMatch(label) || textMatch(pane.cwd)))) {
           paneRows.push({ depth: 2, label, meta: pane.cwd, state, current: view.focusedPaneId === paneId, target: { kind: "pane", paneId } });
         }

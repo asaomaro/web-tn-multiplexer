@@ -18,6 +18,12 @@ export interface ActionDispatcherOptions {
   keys: KeyInputController;
   /** 新しい pane へ焦点を移す操作の応答を待つ間の入力を溜める関所（D99。`net/InputGate`）。省略時は溜めない。 */
   input?: { holdInput(sourcePaneId: string | null): InputHold };
+  /**
+   * 通知（20260920-agent-notifications）。`prefix+o` の行き先。**必須**——省略可にすると
+   * **結線を落としたときに `prefix+o` が完全に無反応**になる（「キーを押したのに無反応を作らない」）。
+   * 必須なら落とした時点で型で落ちる。
+   */
+  notifications: { focusNext(): void };
 }
 
 /**
@@ -31,10 +37,12 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   private readonly registry: TerminalRegistry;
   private readonly keys: KeyInputController;
   private readonly input: ActionDispatcherOptions["input"];
+  private readonly notifications: ActionDispatcherOptions["notifications"];
 
   constructor(opts: ActionDispatcherOptions) {
     this.conn = opts.conn;
     this.input = opts.input;
+    this.notifications = opts.notifications;
     this.session = useSessionStore(opts.pinia);
     this.view = useViewStore(opts.pinia);
     this.registry = opts.registry;
@@ -123,6 +131,14 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
       }
       case "detach":
         void this.conn.request("client.detach", {}).catch(() => undefined); // 後始末は Connection 自身が行う（D58）
+        return;
+      // 20260920-agent-notifications。**`switch` に `default` も網羅性の検査も無い**ので、
+      // 足し忘れてもキーが黙って何もしないだけで型では落ちない。
+      case "notifySettings":
+        this.view.openDialogWithContext({ kind: "notifySettings" });
+        return;
+      case "nextNotification":
+        this.notifications.focusNext();
         return;
       case "notYet":
         this.view.toast(`未対応（後続: ${action.work}）`);

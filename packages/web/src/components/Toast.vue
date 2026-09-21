@@ -39,12 +39,16 @@ watch(
 );
 
 // 新しく増えた toast だけに自動消去のタイマーを掛ける（同じ id に何度も掛けない）。
+// **`sticky` には掛けない**（20260920-agent-notifications）——席を外している間に出た知らせが
+// 4 秒で消えては意味が無い。消すのは利用者の操作か、`prefix+o` で対象へ移ったとき。
 watch(
   () => view.toasts.map((t) => t.id),
   (ids, oldIds) => {
     const before = new Set(oldIds ?? []);
     for (const id of ids) {
-      if (!before.has(id)) setTimeout(() => view.dismissToast(id), AUTO_DISMISS_MS);
+      if (before.has(id)) continue;
+      if (view.toasts.find((t) => t.id === id)?.kind === "sticky") continue;
+      setTimeout(() => view.dismissToast(id), AUTO_DISMISS_MS);
     }
   },
 );
@@ -56,8 +60,13 @@ function dismiss(id: number): void {
 
 <template>
   <div class="toast-list" aria-live="polite">
-    <div v-for="t in view.toasts" :key="t.id" class="toast" @click="dismiss(t.id)">
-      {{ t.message }}
+    <div v-for="t in view.toasts" :key="t.id" class="toast" :class="{ 'toast-sticky': t.kind === 'sticky', 'toast-wrap': t.wrap }" @click="dismiss(t.id)">
+      <span class="toast-message">{{ t.message }}</span>
+      <!-- 行動ボタンと閉じるボタンは `<button>`。既存のトーストは `<div>` で Tab の順に入らず、
+           4 秒で消えるので実害が無かったが、**消えないトーストはキーボードで片付けられる必要がある**。
+           本体のクリックは「消す」なので、ボタン側は `.stop` で食い止める。 -->
+      <button v-for="a in t.actions" :key="a.label" type="button" class="toast-action" @click.stop="a.run()">{{ a.label }}</button>
+      <button v-if="t.kind === 'sticky'" type="button" class="toast-close" aria-label="閉じる" @click.stop="dismiss(t.id)">×</button>
     </div>
   </div>
 </template>
@@ -72,13 +81,57 @@ function dismiss(id: number): void {
   flex-direction: column;
   gap: 0.4em;
   z-index: 950;
+  /* 消えないトーストは最大 8 枚まで溜まる（待ち行列の上限）。**畳まないと画面を覆う**ので、
+     高さを切って中で送れるようにする。 */
+  max-height: 40vh;
+  overflow-y: auto;
+  /* **幅も縛る**。縛らないと下の `text-overflow: ellipsis` が効かない——flex の子は
+     min-content（`nowrap` の全文幅）より縮まないので、長い呼び名でトーストが横へ伸び、
+     後ろに並ぶ［移動］と［×］が視界の外へ出る。**知らせから移る手段が届かなくなる**。 */
+  max-width: min(90vw, 36em);
 }
 .toast {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
   padding: 0.4em 1em;
   background: var(--wtm-menu-bg, #282a36);
   color: var(--wtm-fg, #f8f8f2);
   border: 1px solid var(--wtm-menu-border, #44475a);
   border-radius: 4px;
   cursor: pointer;
+}
+/* 消えないトーストは 1 行に畳む（8 枚 × 2em では画面を覆うため）。
+   **`min-width: 0` が要る**——flex の子は既定で min-content より縮まないので、
+   これが無いと `text-overflow: ellipsis` が空振りして横へ伸びる。 */
+.toast-sticky .toast-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 案内だけの例外：問いかけ＋ボタン 2 つを畳むと、狭い画面で本文が読めなくなる。 */
+.toast-wrap {
+  flex-wrap: wrap;
+}
+.toast-wrap .toast-message {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+.toast-action,
+.toast-close {
+  flex: none;
+  font: inherit;
+  color: inherit;
+  background: var(--wtm-menu-hover-bg, #343746);
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.1em 0.6em;
+  cursor: pointer;
+}
+.toast-close {
+  padding: 0.1em 0.4em;
 }
 </style>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
 import { ActionDispatcherKey, TerminalRegistryKey } from "../injection.js";
+import { paneNameOf } from "../store/paneName.js";
 import { useSessionStore } from "../store/session.js";
 import { useViewStore } from "../store/view.js";
 
@@ -37,7 +38,9 @@ const edge = ref<HTMLElement | null>(null);
 /** 利用者が付けた名前 → エージェント名 → 端末のタイトル の順に拾う。どれも無ければ空。 */
 const paneName = computed(() => {
   const pane = session?.panes.get(props.paneId);
-  return pane ? pane.label || pane.agent?.label || pane.title : "";
+  // 連鎖の正典は `store/paneName.ts` の `paneNameOf`。ここは**名前が無ければ空**にする
+  // （枠のラベルは名前が無ければ付けない）ので、既定値に空文字を渡す。
+  return pane ? paneNameOf(pane, "") : "";
 });
 /** pane そのものの名前。枠の `aria-label` は**メニューボタン**の名前なので流用しない（AC8）。 */
 const paneLabel = computed(() => (paneName.value ? `pane「${paneName.value}」` : "pane"));

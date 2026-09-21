@@ -62,6 +62,8 @@ export type Action =
   | { type: "goto" }
   | { type: "toggleSidebar" }
   | { type: "newWorktree" } // 20260920-git-worktree-actions（prefix+G）
+  | { type: "notifySettings" } // 20260920-agent-notifications（prefix+s）
+  | { type: "nextNotification" } // 同（prefix+o）
   | { type: "detach" }
   | { type: "notYet"; work: string } // 後続のキー
   | { type: "navigate"; op: "up" | "down" | "paneDir" | "activate" | "cancel"; dir?: Dir }

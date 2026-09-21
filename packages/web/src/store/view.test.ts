@@ -1,6 +1,6 @@
 import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useViewStore } from "./view.js";
+import { readPrefs, useViewStore, writePrefs } from "./view.js";
 
 let pinia: Pinia;
 
@@ -48,6 +48,58 @@ describe("useViewStore — agents の並び順", () => {
       expect(useViewStore(createPinia()).agentSort).toBe("grouped");
     } finally {
       Storage.prototype.getItem = original;
+    }
+  });
+});
+
+// 20260920-agent-notifications の AC6：`wtm.prefs.v1` は複数の設定が同居するので、
+// **書き込みは併合でなければならない**。以前は全置換で、項目を足しても並び順を切り替えた瞬間に消えた。
+describe("wtm.prefs.v1 の読み書き（併合式）", () => {
+  it("writePrefs は既存の値を残したまま足す", () => {
+    writePrefs({ a: 1 });
+    writePrefs({ b: 2 });
+    expect(readPrefs()).toEqual({ a: 1, b: 2 });
+  });
+
+  it("同じキーは上書きする", () => {
+    writePrefs({ a: 1 });
+    writePrefs({ a: 2 });
+    expect(readPrefs()).toEqual({ a: 2 });
+  });
+
+  // **これが AC6 の核心**：並び順を切り替えても、他の設定が巻き添えで消えない。
+  it("並び順を切り替えても、同居する他の設定が消えない", () => {
+    writePrefs({ notify: { toast: false, desktop: true, sound: true } });
+    const store = useViewStore(pinia);
+    store.toggleAgentSort();
+    expect(readPrefs()).toEqual({ notify: { toast: false, desktop: true, sound: true }, agentSort: "priority" });
+  });
+
+  // 逆向きも確かめる：後から並び順を読み戻しても、他の設定が残っている。
+  it("他の設定を書いても、並び順が消えない", () => {
+    const store = useViewStore(pinia);
+    store.toggleAgentSort();
+    writePrefs({ notifyHintDone: true });
+    expect(useViewStore(createPinia()).agentSort).toBe("priority");
+    expect(readPrefs()["notifyHintDone"]).toBe(true);
+  });
+
+  it("壊れた中身（配列・非オブジェクト）は空として扱う", () => {
+    localStorage.setItem("wtm.prefs.v1", JSON.stringify([1, 2]));
+    expect(readPrefs()).toEqual({});
+    localStorage.setItem("wtm.prefs.v1", "{ not json");
+    expect(readPrefs()).toEqual({});
+  });
+
+  it("書けない環境でも throw しない", () => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      throw new Error("denied");
+    };
+    try {
+      expect(() => writePrefs({ a: 1 })).not.toThrow();
+    } finally {
+      Storage.prototype.setItem = original;
     }
   });
 });
