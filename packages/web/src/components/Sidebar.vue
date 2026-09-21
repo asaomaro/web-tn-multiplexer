@@ -1,25 +1,21 @@
 <script setup lang="ts">
-import { computed, inject, ref } from "vue";
+import { computed, inject, ref, watch } from "vue";
 import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
 import { useSeenStore, aggregate, displayStateFor, STATE_PRIORITY } from "../store/seen.js";
-import { type AgentSort, useViewStore } from "../store/view.js";
+import { type AgentSort, SIDEBAR_WIDTH, useViewStore } from "../store/view.js";
+import StateIcon from "./StateIcon.vue";
 
 /**
  * サイドバー（D56 の訂正 9）。「spaces」（workspace の一覧）と「agents」（エージェントの一覧）の 2 区画。
  * `prefix+b` での折りたたみは `view.sidebarCollapsed` を見るだけ（切替自体は `ActionDispatcher`）。
  */
-const DEFAULT_WIDTH = 240;
-const MIN_WIDTH = 160;
-const MAX_WIDTH = 360;
-
 const session = useSessionStore();
 const seen = useSeenStore();
 const view = useViewStore();
 const actions = inject(ActionDispatcherKey);
 const conn = inject(ConnectionKey);
 
-const width = ref(DEFAULT_WIDTH);
 const el = ref<HTMLElement | null>(null);
 let dragging = false;
 let dragStartX = 0;
@@ -95,32 +91,60 @@ function onOpenGlobalMenu(ev: MouseEvent): void {
   actions?.openContextMenu({ kind: "global" }, { x: rect.left, y: rect.top });
 }
 
+/*
+ * 幅は `view.sidebarWidth`（このブラウザに残る。20260921-herdr-settings-gaps の AC1）。
+ * **ドラッグ中は反映だけ**（`setSidebarWidth`）で、**保存はドラッグを終えたときに 1 回**（`commitSidebarWidth`）——
+ * `pointermove` ごとに `localStorage` へ書くと、毎フレーム同期の I/O が走る。
+ */
 function onDividerPointerDown(ev: PointerEvent): void {
+  // **畳んでいる間は幅を動かさない**。幅が効くのは展開中だけ（`nav` の style）なので、畳んだまま動かすと
+  // 利用者が一度も見ていない幅が保存され、展開したときにその幅で開く（タスク点検 T6 の指摘）。
+  if (view.sidebarCollapsed) return;
   const now = Date.now();
   if (now - lastDividerClick < 350) {
-    width.value = DEFAULT_WIDTH; // ダブルクリックで既定幅へ戻す（D56 の訂正 11）
+    // ダブルクリックで既定幅へ戻す（D56 の訂正 11）。戻した幅も覚える。
+    view.setSidebarWidth(SIDEBAR_WIDTH.default);
+    view.commitSidebarWidth();
     lastDividerClick = 0;
     return;
   }
   lastDividerClick = now;
   dragging = true;
   dragStartX = ev.clientX;
-  dragStartWidth = width.value;
+  dragStartWidth = view.sidebarWidth;
   (ev.currentTarget as HTMLElement).setPointerCapture?.(ev.pointerId);
 }
 
 function onDividerPointerMove(ev: PointerEvent): void {
   if (!dragging) return;
-  width.value = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, dragStartWidth + (ev.clientX - dragStartX)));
+  view.setSidebarWidth(dragStartWidth + (ev.clientX - dragStartX)); // 範囲に収めるのはストア
 }
 
-function onDividerPointerUp(): void {
+/**
+ * ドラッグを終えて、**見えている幅を覚える**。`pointerup` だけでなく `pointercancel`・`lostpointercapture` でも
+ * 呼ぶ——取り消されたドラッグでも見えている幅を保存する（戻す先の値を持っていないうえ、見えている幅と保存値が
+ * 食い違うほうが分かりにくい）。`pointerup` の後にも `lostpointercapture` が来るが、2 回目は何もしない。
+ */
+function endDrag(): void {
+  if (!dragging) return;
   dragging = false;
+  view.commitSidebarWidth();
 }
+
+/*
+ * **ドラッグ中にダイアログが開いたら、その時点で終えて保存する**（AC-I5）。`showModal()` で文書が inert になったとき、
+ * ポインタの捕捉が外れるのか・捕捉先へ `pointerup` が届き続けるのかは確かめた出所が無い。分からない挙動に頼らない。
+ */
+watch(
+  () => view.openDialog,
+  (dialog) => {
+    if (dialog !== null) endDrag();
+  },
+);
 </script>
 
 <template>
-  <nav ref="el" class="sidebar" :class="{ 'sidebar-collapsed': view.sidebarCollapsed }" :style="view.sidebarCollapsed ? {} : { width: `${width}px` }">
+  <nav ref="el" class="sidebar" :class="{ 'sidebar-collapsed': view.sidebarCollapsed }" :style="view.sidebarCollapsed ? {} : { width: `${view.sidebarWidth}px` }">
     <section class="sidebar-spaces" aria-label="spaces">
       <div
         v-for="{ workspace, state, showGit, isCurrent } in spaces"
@@ -135,7 +159,7 @@ function onDividerPointerUp(): void {
         @contextmenu="onWorkspaceContextMenu($event, workspace.id)"
       >
         <div class="sidebar-row-line1">
-          <span class="sidebar-state-icon" :data-state="state ?? 'none'" />
+          <StateIcon class="sidebar-state-icon" :state="state" />
           <span v-if="!view.sidebarCollapsed" class="sidebar-label">{{ workspace.label }}</span>
         </div>
         <div v-if="!view.sidebarCollapsed && showGit" class="sidebar-row-line2">
@@ -168,7 +192,7 @@ function onDividerPointerUp(): void {
       </div>
       <div v-for="{ pane, tab, workspace, agent, state } in agents" :key="pane.id" class="sidebar-row" @click="focusPane(pane.id, pane.tabId, workspace?.id ?? '')">
         <div class="sidebar-row-line1">
-          <span class="sidebar-state-icon" :data-state="state ?? 'none'" />
+          <StateIcon class="sidebar-state-icon" :state="state" />
           <template v-if="!view.sidebarCollapsed">
             <span class="sidebar-label">{{ workspace?.label }}</span>
             <span class="sidebar-label">{{ tab?.label }}</span>
@@ -194,14 +218,22 @@ function onDividerPointerUp(): void {
       </button>
     </div>
 
-    <div class="sidebar-divider" @pointerdown="onDividerPointerDown" @pointermove="onDividerPointerMove" @pointerup="onDividerPointerUp" />
+    <div
+      class="sidebar-divider"
+      @pointerdown="onDividerPointerDown"
+      @pointermove="onDividerPointerMove"
+      @pointerup="endDrag"
+      @pointercancel="endDrag"
+      @lostpointercapture="endDrag"
+    />
   </nav>
 </template>
 
 <style scoped>
 /* 05-e2e-docs T3 の E2E で発見：この component にも `<style>` が一度も存在しなかった（PaneLayout.vue・
- * Splitter.vue・TabBar.vue と同様の欠落。D92）。`state` の色は `GotoPicker.vue`/`PanePicker.vue` の
- * `data-state` の配色（blocked/working/done/idle）に揃える。 */
+ * Splitter.vue・TabBar.vue と同様の欠落。D92）。状態の印の見た目は `StateIcon.vue` だけが持つ
+ * （20260921-herdr-settings-gaps の D2。ここに `.sidebar-state-icon` の規則を書くと、子の根要素に効いて
+ * 字形の後ろに丸が描かれる）。 */
 .sidebar {
   flex: none;
   position: relative;
@@ -253,7 +285,12 @@ function onDividerPointerUp(): void {
 .sidebar-row-line2 {
   display: flex;
   gap: 0.6em;
-  padding-left: 1.1em;
+  /*
+   * 1 行目のラベルにそろえる：状態の印の箱（1em。StateIcon.vue）＋ 1 行目の間隔（0.5em）＝ 行の 1.5em。
+   * この行は `font-size: 0.85em` なので、`em` はその小さい文字で数えられる——割り戻す（以前の 1.1em はこれを
+   * 忘れていて 2.3px ずれていた）。
+   */
+  padding-left: calc(1.5em / 0.85);
   font-size: 0.85em;
   opacity: 0.75;
 }
@@ -272,30 +309,6 @@ function onDividerPointerUp(): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.sidebar-state-icon {
-  width: 0.6em;
-  height: 0.6em;
-  flex: none;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.3;
-}
-.sidebar-state-icon[data-state="blocked"] {
-  opacity: 1;
-  color: #ff5555;
-}
-.sidebar-state-icon[data-state="working"] {
-  opacity: 1;
-  color: #f1fa8c;
-}
-.sidebar-state-icon[data-state="done"] {
-  opacity: 1;
-  color: #50fa7b;
-}
-.sidebar-state-icon[data-state="idle"] {
-  opacity: 1;
-  color: #6272a4;
 }
 .sidebar-unverified {
   flex: none;

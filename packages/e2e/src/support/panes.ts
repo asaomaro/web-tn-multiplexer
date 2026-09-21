@@ -37,7 +37,7 @@ export interface ShownView {
 
 /**
  * ブラウザが最後に送った `client.view` の中身を返す関数を作る（まだ送っていなければ `null`）。
- * **`page.goto()` の前に `await` して呼ぶ**（CDP の `Network.enable` の前に張られた WebSocket のフレームは見えない）。
+ * **`page.goto()` の前に `await` して呼ぶ**（CDP の `Network.enable` より前に送られたフレームは見えない。最初の `client.view` を取りこぼす）。
  */
 export async function watchClientView(page: Page): Promise<() => ShownView | null> {
   const views = await watchClientViews(page);
@@ -67,6 +67,29 @@ export async function watchClientViews(page: Page): Promise<{ latest: () => Show
     }
   });
   return { latest: () => latest, count: () => count };
+}
+
+/**
+ * ブラウザが送った `pane.subscribe` の中身（pane と、SNAPSHOT に求めた scrollback の行数）を送った順に返す関数を作る
+ * （20260921-herdr-settings-gaps の AC9・AC11）。**xterm の buffer は DOM に出ていない**ので、ブラウザが実際に求めた行数を
+ * ブラウザの側（CDP の `Network.webSocketFrameSent`）で読む——テスト自身の WebSocket クライアントではない。
+ * **最初の pane の購読から見たいなら `page.goto()` の前に `await` して呼ぶ**。後から呼んでも、それ以降に送られた
+ * フレームは見える（既に張られた接続の新しい購読も届く。settings.spec.ts で確かめた）が、それより前の購読は見えない。
+ */
+export async function watchPaneSubscribes(page: Page): Promise<() => { paneId: string; scrollbackLines: number }[]> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Network.enable");
+  const sent: { paneId: string; scrollbackLines: number }[] = [];
+  cdp.on("Network.webSocketFrameSent", (e) => {
+    if (e.response.opcode !== 1) return; // テキストのフレーム（JSON の要求）だけ
+    try {
+      const msg = JSON.parse(e.response.payloadData) as { method?: string; params?: { paneId: string; scrollbackLines: number } };
+      if (msg.method === "pane.subscribe" && msg.params) sent.push({ paneId: msg.params.paneId, scrollbackLines: msg.params.scrollbackLines });
+    } catch {
+      // JSON でないテキストは無い想定だが、あっても無視する。
+    }
+  });
+  return () => [...sent];
 }
 
 /**

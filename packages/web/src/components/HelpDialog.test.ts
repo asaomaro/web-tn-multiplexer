@@ -38,7 +38,10 @@ describe("HelpDialog — 表示", () => {
     expect(wrapper.text()).toContain("未対応（後続: 外観と設定）");
     // `o` は 20260920-agent-notifications で「次の知らせへ移る」になった（`shift+r` は未対応のまま残る）。
     expect(wrapper.text()).toContain("次の知らせへ移る");
-    expect(wrapper.text()).toContain("通知の設定");
+    // `s` の行を特定して見る——「設定」は「未対応（後続: 外観と設定）」にも含まれるので、全文の `toContain` では
+    // `s` の表記が何であっても通ってしまう（20260921-herdr-settings-gaps で「通知の設定」から「設定」に広げた）。
+    const sLabel = wrapper.findAll("dt").find((dt) => dt.text() === "s")?.element.nextElementSibling?.textContent;
+    expect(sLabel).toBe("設定");
     expect(wrapper.text(), "壊れた表示（work 名が空）を出さない").not.toContain("未対応（後続: ）");
     // `shift+g`（グルーピングの枠）は 20260920-git-worktree-actions で「新しい worktree」に置き換わった。
     expect(wrapper.text()).toContain("新しい worktree");

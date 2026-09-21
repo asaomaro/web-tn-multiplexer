@@ -52,9 +52,9 @@ export const DEFAULT_KEYMAP: Keymap = new Map<string, Action>([
   ["D", { type: "closeWorkspace" }],
   // worktree（20260920-git-worktree-actions）。herdr の `new_worktree` の既定も prefix+shift+g。
   ["G", { type: "newWorktree" }],
-  // 通知（20260920-agent-notifications）。`s` は herdr の `settings` と同じ位置——
-  // 後で「外観と設定」が来たら、このダイアログを育てればよい（別のキーを作らない）。
-  ["s", { type: "notifySettings" }],
+  // 設定（`s`）と通知（`o`）。`s` は herdr の `settings` と同じ位置で、20260920-agent-notifications で通知の設定として
+  // 足し、20260921-herdr-settings-gaps で設定全体（通知・表示・端末）に育てた（別のキーを作っていない）。
+  ["s", { type: "settings" }],
   ["o", { type: "nextNotification" }],
   ["w", { type: "enterMode", mode: "navigate" }],
   // 共通

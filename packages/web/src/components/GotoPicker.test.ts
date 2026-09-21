@@ -91,6 +91,23 @@ describe("GotoPicker — 木の表示", () => {
   });
 });
 
+// 20260921-herdr-settings-gaps の D2：状態の印は `StateIcon`（字形と読み上げの名前まで見る）。
+describe("GotoPicker — 状態の印", () => {
+  it("エージェントの居る pane の印は字形と読み上げの名前を持つ", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted(makePane("p1", "t1", { agent: makeAgent({ state: "blocked" }) }));
+    const wrapper = mountPicker(makeConnection());
+    await open(view, wrapper);
+    const icon = wrapper.find('.goto-picker-state[data-state="blocked"]');
+    expect(icon.text()).toBe("×");
+    expect(icon.attributes("role")).toBe("img");
+    expect(icon.attributes("aria-label")).toBe("入力待ち");
+  });
+});
+
 describe("GotoPicker — 文字の絞り込み", () => {
   it("名前・cwd・tab の名前・workspace のブランチで絞り込む", async () => {
     const session = useSessionStore(pinia);

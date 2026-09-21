@@ -132,7 +132,8 @@ describe("KeyRouter — prefix モード", () => {
     expect(router.mode).toBe("navigate");
   });
 
-  // `s` は 20260920-agent-notifications で「通知の設定」になった（`shift+r` が未対応のまま残る）。
+  // `s` は 20260920-agent-notifications で「通知の設定」になり、20260921-herdr-settings-gaps で「設定」に広がった
+  // （`shift+r` が未対応のまま残る）。
   it("後続のキー（例 shift+r）は notYet の action を返し、terminal へ戻る", () => {
     const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
     router.handle(ctrlB());
@@ -140,10 +141,10 @@ describe("KeyRouter — prefix モード", () => {
     expect(router.mode).toBe("terminal");
   });
 
-  it("prefix+s は通知の設定、prefix+o は次の知らせへ移る", () => {
+  it("prefix+s は設定、prefix+o は次の知らせへ移る", () => {
     const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
     router.handle(ctrlB());
-    expect(router.handle(key({ key: "s" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "notifySettings" } });
+    expect(router.handle(key({ key: "s" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "settings" } });
     router.handle(ctrlB());
     expect(router.handle(key({ key: "o" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "nextNotification" } });
   });

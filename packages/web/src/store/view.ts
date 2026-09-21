@@ -77,6 +77,26 @@ function saveAgentSort(v: AgentSort): void {
   writePrefs({ agentSort: v });
 }
 
+/**
+ * サイドバーの幅（px）。**設定の項目ではなく、ドラッグした結果を覚えるだけ**（20260921-herdr-settings-gaps の D1。
+ * herdr も端末ごとの preferences に保存し、設定画面の項目にはしていない）。
+ */
+export const SIDEBAR_WIDTH = { default: 240, min: 160, max: 360 } as const;
+
+/**
+ * 保存された幅を読む。**範囲の外は丸めずに既定へ落とす**——ドラッグは範囲に収めるので、範囲の外の値は
+ * 保存しえない＝壊れた値（20260921-herdr-settings-gaps の AC3）。
+ */
+export function loadSidebarWidth(raw: unknown): number {
+  const ok = typeof raw === "number" && Number.isFinite(raw) && raw >= SIDEBAR_WIDTH.min && raw <= SIDEBAR_WIDTH.max;
+  return ok ? raw : SIDEBAR_WIDTH.default;
+}
+
+/** 保存された折りたたみを読む。`true` のときだけ畳む（壊れた値は展開＝既定。20260921-herdr-settings-gaps の AC3）。 */
+export function loadSidebarCollapsed(raw: unknown): boolean {
+  return raw === true;
+}
+
 let nextToastId = 1;
 
 /** トーストの行動ボタン（`sticky` のときだけ置く。20260920-agent-notifications）。 */
@@ -122,8 +142,8 @@ export type DialogContext =
   // worktree（20260920-git-worktree-actions）。**サーバへ聞いてから開く**ので、開く時点で中身が揃っている。
   | { kind: "worktreeCreate"; workspaceId: string; info: WorktreeListResult }
   | { kind: "worktreeOpen"; workspaceId: string; entries: WorktreeEntry[] }
-  // 通知の設定（20260920-agent-notifications）。状態は `store/notifications` が持つので文脈は空。
-  | { kind: "notifySettings" };
+  // 設定（通知・表示・端末。20260921-herdr-settings-gaps）。値はそれぞれのストアが持つので文脈は空。
+  | { kind: "settings" };
 
 /**
  * このクライアントの表示・モード・接続状態（architecture.md「store/view」）。
@@ -155,7 +175,17 @@ export const useViewStore = defineStore("view", () => {
    * `ReconnectOverlay` が「再接続中…」に、サーバがこのページの Origin を拒否しているかもしれないという手がかりを添える。
    */
   const originRejectSuspected = ref(false);
-  const sidebarCollapsed = ref(false);
+  const initialPrefs = readPrefs();
+  /**
+   * 畳んだかどうか。**切り替えるたびに保存する**（20260921-herdr-settings-gaps の AC2。`prefix+b` と畳むボタンは
+   * 同じ `toggleSidebar` を通る）。
+   */
+  const sidebarCollapsed = ref(loadSidebarCollapsed(initialPrefs["sidebarCollapsed"]));
+  /**
+   * サイドバーの幅。**ドラッグ中は `setSidebarWidth` で反映するだけ**で、保存はドラッグを終えたとき
+   * （`commitSidebarWidth`）に 1 回——`pointermove` ごとに `localStorage` へ書くと、毎フレーム同期の I/O が走る。
+   */
+  const sidebarWidth = ref(loadSidebarWidth(initialPrefs["sidebarWidth"]));
   const agentSort = ref(loadAgentSort());
   const toasts = ref<Toast[]>([]);
 
@@ -260,6 +290,17 @@ export const useViewStore = defineStore("view", () => {
 
   function toggleSidebar(): void {
     sidebarCollapsed.value = !sidebarCollapsed.value;
+    writePrefs({ sidebarCollapsed: sidebarCollapsed.value });
+  }
+
+  /** 幅を範囲に収めて反映する。**保存はしない**（ドラッグの途中。保存は `commitSidebarWidth`）。 */
+  function setSidebarWidth(px: number): void {
+    sidebarWidth.value = Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, px));
+  }
+
+  /** いまの幅を保存する（ドラッグを終えたとき・既定に戻したとき。20260921-herdr-settings-gaps の AC1）。 */
+  function commitSidebarWidth(): void {
+    writePrefs({ sidebarWidth: sidebarWidth.value });
   }
 
   /** `opts` を省けば今までどおり（4 秒で消える 1 行）。`kind: "sticky"` は消えない（20260920-agent-notifications）。 */
@@ -290,6 +331,7 @@ export const useViewStore = defineStore("view", () => {
     authRequiredCount,
     originRejectSuspected,
     sidebarCollapsed,
+    sidebarWidth,
     agentSort,
     toggleAgentSort,
     toasts,
@@ -309,6 +351,8 @@ export const useViewStore = defineStore("view", () => {
     onAuthRequired,
     setOriginRejectSuspected,
     toggleSidebar,
+    setSidebarWidth,
+    commitSidebarWidth,
     toast,
     dismissToast,
   };

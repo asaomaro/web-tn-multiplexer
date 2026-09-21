@@ -62,7 +62,7 @@ export type Action =
   | { type: "goto" }
   | { type: "toggleSidebar" }
   | { type: "newWorktree" } // 20260920-git-worktree-actions（prefix+G）
-  | { type: "notifySettings" } // 20260920-agent-notifications（prefix+s）
+  | { type: "settings" } // prefix+s（20260920-agent-notifications で通知の設定として足し、20260921-herdr-settings-gaps で設定全体に広げた）
   | { type: "nextNotification" } // 同（prefix+o）
   | { type: "detach" }
   | { type: "notYet"; work: string } // 後続のキー

@@ -85,7 +85,7 @@ function makeProvide(conn: ConnectionPort) {
         [TerminalRegistryKey as symbol]: registry,
         [ViewSyncKey as symbol]: viewSync,
         [KeyInputControllerKey as symbol]: keys,
-        // 20260920-agent-notifications。`NotificationSettingsDialog` が inject を必須にしているので、
+        // 20260920-agent-notifications。`SettingsDialog`（旧 `NotificationSettingsDialog`）が inject を必須にしているので、
         // `main.ts` と同じものをここでも渡す（落とすとダイアログが throw して App が描けない）。
         [NotificationControllerKey as symbol]: new NotificationController({
           pinia,

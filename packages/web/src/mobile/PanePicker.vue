@@ -3,6 +3,7 @@ import { computed, inject, onMounted, ref } from "vue";
 import { ConnectionKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
 import { aggregate, displayStateFor, useSeenStore, type STATE_PRIORITY } from "../store/seen.js";
+import StateIcon from "../components/StateIcon.vue";
 import { useViewStore } from "../store/view.js";
 
 /**
@@ -88,11 +89,11 @@ function selectPane(paneId: string, tabId: string, workspaceId: string): void {
     <section class="pane-picker-section" aria-label="spaces">
       <div v-for="{ workspace, state, tabs } in spaces" :key="workspace.id" class="pane-picker-workspace">
         <button type="button" class="pane-picker-row pane-picker-row-workspace" @click="selectWorkspace(workspace.id)">
-          <span class="pane-picker-state" :data-state="state ?? 'none'" />
+          <StateIcon class="pane-picker-state" :state="state" />
           <span class="pane-picker-label">{{ workspace.label }}</span>
         </button>
         <button v-for="{ tab, state: tabState } in tabs" :key="tab.id" type="button" class="pane-picker-row pane-picker-row-tab" @click="selectTab(tab.id)">
-          <span class="pane-picker-state" :data-state="tabState ?? 'none'" />
+          <StateIcon class="pane-picker-state" :state="tabState" />
           <span class="pane-picker-label">{{ tab.label }}</span>
         </button>
       </div>
@@ -105,7 +106,7 @@ function selectPane(paneId: string, tabId: string, workspaceId: string): void {
         class="pane-picker-row"
         @click="selectPane(pane.id, pane.tabId, workspace?.id ?? '')"
       >
-        <span class="pane-picker-state" :data-state="state ?? 'none'" />
+        <StateIcon class="pane-picker-state" :state="state" />
         <span class="pane-picker-label">{{ workspace?.label }} / {{ tab?.label }} — {{ agent.label }}</span>
       </button>
     </section>
@@ -159,30 +160,7 @@ function selectPane(paneId: string, tabId: string, workspaceId: string): void {
 .pane-picker-row-tab {
   padding-left: 2.5em;
 }
-.pane-picker-state {
-  width: 0.6em;
-  height: 0.6em;
-  flex: none;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.3;
-}
-.pane-picker-state[data-state="blocked"] {
-  opacity: 1;
-  color: #ff5555;
-}
-.pane-picker-state[data-state="working"] {
-  opacity: 1;
-  color: #f1fa8c;
-}
-.pane-picker-state[data-state="done"] {
-  opacity: 1;
-  color: #50fa7b;
-}
-.pane-picker-state[data-state="idle"] {
-  opacity: 1;
-  color: #6272a4;
-}
+/* 状態の印の見た目は `StateIcon.vue` だけが持つ（20260921-herdr-settings-gaps の D2）。 */
 .pane-picker-label {
   overflow: hidden;
   text-overflow: ellipsis;

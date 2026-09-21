@@ -16,6 +16,12 @@ const POINTER_EVENT_TYPES = ["mousedown", "mouseup", "mousemove", "wheel", "poin
 export interface TermEntry {
   paneId: string;
   term: Terminal;
+  /**
+   * 作ったときの scrollback の行数（`getScrollbackLines` を省いたときは `undefined`＝xterm.js の既定）。
+   * **購読（`ViewSync`）はこの値を使う**——利用者が途中で設定を変えても、xterm の容量と SNAPSHOT に求める行数を
+   * 食い違わせない（20260921-herdr-settings-gaps の D6）。
+   */
+  scrollback: number | undefined;
   element: HTMLElement;
   webgl: boolean;
   lastUsed: number;
@@ -38,8 +44,9 @@ export interface TerminalRegistryOptions {
   /** `Terminal` の生成オプションの上書き（`host.windowsBuild` からの `windowsPty` 等。T26 が渡す）。 */
   terminalOptions?: Partial<ITerminalOptions>;
   /**
-   * 作る xterm.js の `scrollback`（行数）。`pane.subscribe` で SNAPSHOT に求める行数（`ViewSync` の `getScrollbackLines`）と同じ値を
-   * 渡す（D107：以前は指定せず、xterm.js の既定の 1,000 行を超える分を捨てていた）。省略時は xterm.js の既定。
+   * 作る xterm.js の `scrollback`（行数）。**ここで読んだ値を `TermEntry.scrollback` に持ち、`pane.subscribe` で SNAPSHOT に求める
+   * 行数（`ViewSync`）もその値を使う**（20260921-herdr-settings-gaps の D6。D107：以前は指定せず、xterm.js の既定の 1,000 行を
+   * 超える分を捨てていた）。省略時は xterm.js の既定。
    */
   getScrollbackLines?: () => number;
   now?: () => number;
@@ -235,6 +242,7 @@ export class TerminalRegistry implements TerminalSinkPort {
       webgl,
       lastUsed: this.now(),
       copy: new XtermCopyTarget(term, search),
+      scrollback,
     };
   }
 

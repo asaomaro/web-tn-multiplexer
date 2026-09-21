@@ -1,0 +1,370 @@
+<script setup lang="ts">
+import { computed, inject, nextTick, ref, watch } from "vue";
+import { DeviceKindKey, NotificationControllerKey } from "../injection.js";
+import type { DesktopPermission } from "../notify/ports.js";
+import { useNotificationsStore } from "../store/notifications.js";
+import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
+import { DISPLAY_STATES, stateGlyph, stateLabel } from "../store/stateIndicator.js";
+import { useViewStore } from "../store/view.js";
+import { effectiveScrollback, scrollbackChoices, type ScrollbackPref } from "../term/scrollback.js";
+
+/**
+ * 設定（20260921-herdr-settings-gaps の D7）。**見出しで 3 節（通知・表示・端末）に分けた 1 枚**。
+ * 以前は通知だけのダイアログ（`NotificationSettingsDialog.vue`。20260920-agent-notifications の AC6〜AC8・AC12・AC13）で、
+ * 通知の節はその実装をそのまま移した。`view.dialogContext.kind === "settings"` を扱う。形は `ConfirmDialog` と同じ
+ * （ネイティブ `<dialog>` ＋ `showModal()` ＋ `@cancel` の抑止）。
+ *
+ * **節は Tabs にも Accordion にもしない**（5 項目なら全部見えてよい。見出し付きのグループは Tab で順に進むだけで
+ * キー処理が要らない。先例は `HelpDialog.vue`）。
+ *
+ * **切り替えは `role="switch"`**（decisions D2）——APG は switch を「on/off を表し、**操作が即座に効く**もの」
+ * と定義しており、AC-I2（押した時点で反映・確定ボタンを置かない）と一致する。
+ * 既存の `aria-pressed`（`ExtraKeys` 等）は道具のモードであって設定ではない。
+ */
+const view = useViewStore();
+const store = useNotificationsStore();
+const controller = inject(NotificationControllerKey);
+// 既存のダイアログと同じ流儀（`ConfirmDialog.vue`）。握りつぶすと、結線を落としたときに
+// **「この環境では使えません」という嘘の理由**が利用者に出て、誰も気づかない。
+if (!controller) throw new Error("SettingsDialog: NotificationControllerKey が provide されていません");
+
+const session = useSessionStore();
+const settings = useSettingsStore();
+/**
+ * 端末の種類。**既定値つきで受け、provide が無くても throw しない**——通知の制御器（無いと嘘の理由を出すので throw する）
+ * と違い、これが効くのは「自動」の行に添える行数の表示だけ。**`isCoarsePointer()` を呼び直さない**（判定が 2 か所に割れると、
+ * `main.ts` が実際に使う行数とこの表示が食い違いうる）。結線を落とした場合はモバイルの E2E が文言で捕まえる。
+ */
+const kind = inject(DeviceKindKey, "desktop");
+
+const dialogEl = ref<HTMLDialogElement | null>(null);
+const firstSwitch = ref<HTMLButtonElement | null>(null);
+
+/**
+ * 許可の状態は**明示的に読み直す**（`Notification.permission` は reactive ではないので、
+ * computed から呼ぶと**最初に評価したときの値で固まる**——許可を取っても行が「切」のまま、
+ * もう一度押しても切に戻せない）。読み直すのは「開いたとき」と「許可を求めた後」。
+ */
+const permission = ref<DesktopPermission>(controller.desktopPermission());
+// `controller` を参照するので arrow function にする（`function` 宣言だと const 絞り込みが効かない。
+// `ConfirmDialog.vue` と同じ事情）。
+const refreshPermission = (): void => {
+  permission.value = controller.desktopPermission();
+};
+
+/** OS 通知の行の状態。許可（AC8）と「この環境では使えない」（AC12）を取り違えない。 */
+const desktopState = computed<"usable" | "needsPermission" | "denied" | "unusable">(() => {
+  if (!store.desktopUsable) return "unusable"; // 実際に出そうとして失敗した（Android Chrome 等）
+  if (permission.value === "unsupported") return "unusable";
+  if (permission.value === "denied") return "denied";
+  return permission.value === "granted" ? "usable" : "needsPermission";
+});
+
+const desktopNote = computed(() => {
+  switch (desktopState.value) {
+    case "unusable":
+      return "この環境では使えません（ブラウザが対応していないか、この画面からは出せません）。";
+    case "denied":
+      return "ブラウザで拒否されています。許可するにはブラウザの設定から変えてください。";
+    case "needsPermission":
+      return "押すとブラウザに許可を求めます。";
+    default:
+      return "";
+  }
+});
+
+const soundNote = computed(() => {
+  if (!store.soundUsable) return "この環境では音を鳴らせません（ブラウザが対応していません）。";
+  return store.soundBlocked ? "この画面をまだ操作していないため鳴らせませんでした。どこかを押すと鳴るようになります。" : "";
+});
+
+watch(
+  () => view.dialogContext,
+  (ctx) => {
+    if (ctx?.kind === "settings") {
+      refreshPermission(); // 開くたびに読み直す（前回開いてから外で変わっているかもしれない）
+      void nextTick(() => {
+        dialogEl.value?.showModal();
+        firstSwitch.value?.focus();
+      });
+    } else {
+      dialogEl.value?.close();
+    }
+  },
+);
+
+function toggleToast(): void {
+  store.setPrefs({ toast: !store.prefs.toast });
+}
+
+/** OS 通知。**許可がまだなら、押した勢い（利用者の操作）でそのまま求める**（AC7・AC8）。 */
+const toggleDesktop = async (): Promise<void> => {
+  if (desktopState.value === "denied" || desktopState.value === "unusable") return;
+  if (desktopState.value === "needsPermission") {
+    const p = await controller.requestDesktopPermission();
+    permission.value = p; // 読み直す（ここを忘れると、許可を取っても行が「切」のまま固まる）
+    if (p !== "granted") return; // 拒否されたら「入」にしない
+    store.setPrefs({ desktop: true });
+    return;
+  }
+  store.setPrefs({ desktop: !store.prefs.desktop });
+};
+
+/** 音。**「入」にした瞬間が利用者の操作**なので、ここで自動再生を解除しておく（AC13）。 */
+const toggleSound = (): void => {
+  if (!store.soundUsable) return;
+  const next = !store.prefs.sound;
+  if (next) controller.unlockSound();
+  store.setPrefs({ sound: next });
+};
+
+/**
+ * 表示の節の注記。**字形と名前は表（`store/stateIndicator.ts`）から組み立てる**——直書きすると、表を 1 か所で変えたとき
+ * サイドバー・goto・モバイルのピッカーは新しい字形になるのに、この注記だけが古いまま残る（cross 点検の指摘）。
+ */
+// 字形と名前は**組にして**並べる——列を分けると対応を順番で数えるしかなく、タッチの端末では `title` の吹き出しも出ないので、
+// ここが対応を知る唯一の場所になる（review ラウンド1 の指摘）。
+// 区切りは「、」——「・」（U+30FB）だと状態不明の字形「·」（U+00B7）のすぐ前に来て、日本語フォントでは同じ形に見え、組が読めなくなる。
+const symbolsNote = `色に加えて形でも見分けられます（${DISPLAY_STATES.map((s) => `${stateGlyph(s)} ${stateLabel(s)}`).join("、")}）。`;
+
+/** 表示の節。**押した時点で効き、3 か所（サイドバー・goto・モバイルのピッカー）の印が同時に切り替わる**。 */
+function toggleSymbols(): void {
+  settings.setStatusSymbols(!settings.statusSymbols);
+}
+
+/** サーバの上限（snapshot の `limits`）。上限を超える値は、選んでも黙って上限分しか届かないので出さない。 */
+const limit = computed(() => session.limits.scrollbackLines);
+/** 「自動」の行に添える、この端末でいま効く行数（モバイルの利用者が「自動＝何行か」を知る手段がほかに無い）。 */
+const autoLines = computed(() => effectiveScrollback("auto", kind, limit.value));
+const choices = computed(() => scrollbackChoices(limit.value, typeof settings.scrollback === "number" ? settings.scrollback : undefined));
+/**
+ * 選ばれて見える行。**いつもちょうど 1 つ**——上限を超えた保存値は押さえた値（＝上限。必ず選択肢にある）の行、
+ * 上限以下で段階に無い保存値は `scrollbackChoices` が選択肢に足している（D5）。保存値そのものは書き換えない。
+ */
+const selectedScrollback = computed<ScrollbackPref>(() =>
+  settings.scrollback === "auto" ? "auto" : Math.min(settings.scrollback, limit.value),
+);
+const formatLines = (n: number): string => n.toLocaleString("ja-JP");
+
+/** 端末の節。**選んだ時点で保存する**（確定ボタンを置かない）。効くのはその後に開く pane から（AC9）。 */
+function chooseScrollback(v: ScrollbackPref): void {
+  settings.setScrollback(v);
+}
+
+function cancel(): void {
+  view.closeDialog();
+}
+
+function onNativeCancel(ev: Event): void {
+  ev.preventDefault(); // 既定の close は `view` を更新しないので、こちらで閉じる
+  cancel();
+}
+</script>
+
+<template>
+  <dialog ref="dialogEl" class="settings-dialog" aria-labelledby="settings-title" @cancel="onNativeCancel" @click.self="cancel">
+    <!-- ［閉じる］は確定ボタンではない（押した結果はその場で保存済み）。**モバイルには Esc キーが無く**、ダイアログが画面いっぱいだと
+         背景のタップの余地も無いので、閉じる手段を画面に出す（review ラウンド1 の指摘。先例は HelpDialog の［閉じる］）。 -->
+    <div class="settings-header">
+      <h2 id="settings-title" class="settings-title">設定</h2>
+      <button type="button" class="settings-close" @click="cancel">閉じる</button>
+    </div>
+    <section class="settings-section" aria-labelledby="settings-notify">
+      <h3 id="settings-notify" class="settings-heading">通知</h3>
+      <ul class="settings-list">
+        <li class="settings-row">
+          <button ref="firstSwitch" type="button" role="switch" class="settings-switch" :aria-checked="store.prefs.toast" @click="toggleToast">
+            <span class="settings-mark">{{ store.prefs.toast ? "入" : "切" }}</span>
+            <span>画面の中で知らせる</span>
+          </button>
+        </li>
+        <li class="settings-row">
+          <button
+            type="button"
+            role="switch"
+            class="settings-switch"
+            :aria-checked="store.prefs.desktop && desktopState === 'usable'"
+            :disabled="desktopState === 'denied' || desktopState === 'unusable'"
+            @click="toggleDesktop"
+          >
+            <span class="settings-mark">{{ store.prefs.desktop && desktopState === "usable" ? "入" : "切" }}</span>
+            <span>OS の通知で知らせる</span>
+          </button>
+          <p v-if="desktopNote" class="settings-note">{{ desktopNote }}</p>
+        </li>
+        <li class="settings-row">
+          <button
+            type="button"
+            role="switch"
+            class="settings-switch"
+            :aria-checked="store.prefs.sound && store.soundUsable"
+            :disabled="!store.soundUsable"
+            @click="toggleSound"
+          >
+            <span class="settings-mark">{{ store.prefs.sound && store.soundUsable ? "入" : "切" }}</span>
+            <span>音で知らせる</span>
+          </button>
+          <p v-if="soundNote" class="settings-note">{{ soundNote }}</p>
+        </li>
+      </ul>
+    </section>
+    <section class="settings-section" aria-labelledby="settings-display">
+      <h3 id="settings-display" class="settings-heading">表示</h3>
+      <ul class="settings-list">
+        <li class="settings-row">
+          <button type="button" role="switch" class="settings-switch" :aria-checked="settings.statusSymbols" @click="toggleSymbols">
+            <span class="settings-mark">{{ settings.statusSymbols ? "入" : "切" }}</span>
+            <span>状態を記号でも示す</span>
+          </button>
+          <p class="settings-note">{{ symbolsNote }}</p>
+        </li>
+      </ul>
+    </section>
+    <section class="settings-section" aria-labelledby="settings-terminal">
+      <h3 id="settings-terminal" class="settings-heading">端末</h3>
+      <fieldset class="settings-fieldset">
+        <legend class="settings-legend">scrollback（新しく開く pane から効きます）</legend>
+        <label class="settings-radio">
+          <input type="radio" name="settings-scrollback" value="auto" :checked="selectedScrollback === 'auto'" @change="chooseScrollback('auto')" />
+          <span>自動（この端末では {{ formatLines(autoLines) }} 行）</span>
+        </label>
+        <label v-for="n in choices" :key="n" class="settings-radio">
+          <input type="radio" name="settings-scrollback" :value="n" :checked="selectedScrollback === n" @change="chooseScrollback(n)" />
+          <span>{{ formatLines(n) }} 行</span>
+        </label>
+      </fieldset>
+    </section>
+    <p class="settings-hint">この設定はこのブラウザにだけ効きます。Esc か「閉じる」で閉じます。</p>
+  </dialog>
+</template>
+
+<style scoped>
+.settings-dialog {
+  /* 狭い画面（幅 320〜385px の携帯）でもはみ出さない。以前の `min-width: 22em` は content-box で、枠と padding を含めて 386px になっていた。
+     背が高くなった（3 節）ので、画面の高さも越えないようにして中をスクロールさせる（`overflow` は UA の `dialog:modal` の既定が auto）。
+     **`100vh` ではなく `100%`**（モーダルの `<dialog>` の包含ブロックは見えている領域）——iOS Safari の `100vh` はツールバーを畳んだときの
+     高さなので、ツールバーが出ている間はダイアログが画面から切れる。 */
+  box-sizing: border-box;
+  min-width: min(22em, calc(100% - 16px));
+  max-width: min(34em, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  padding: 1em;
+  /* 上の余白は題名の行（sticky）に持たせる——ダイアログの padding の内側で止まると、その上の帯を中身が透けて流れる。
+     焦点が移ったときに行が題名の行の下に隠れないよう、スクロールの止まる位置も題名の行の分だけ下げる（WCAG 2.4.11。review ラウンド2）。 */
+  padding-top: 0;
+  scroll-padding-top: calc(1em + 2rem + 0.8em);
+  background: var(--wtm-menu-bg, #282a36);
+  color: var(--wtm-fg, #f8f8f2);
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 6px;
+}
+.settings-dialog::backdrop {
+  background: rgb(0 0 0 / 40%);
+}
+/* 題名の行（「閉じる」）は、ダイアログを下までスクロールしても見えるようにする——小さい画面では端末の節まで下げると流れてしまう。 */
+.settings-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+  margin: 0 0 0.8em;
+  padding-top: 1em;
+  background: var(--wtm-menu-bg, #282a36);
+}
+.settings-close {
+  flex: none;
+  min-height: 2rem;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.2em 0.8em;
+  cursor: pointer;
+}
+.settings-title {
+  margin: 0;
+  font-size: 1em; /* 見出しにしても大きさは以前の題名（<p>）のまま。UA の既定の h2（1.5em）にしない */
+  font-weight: bold;
+}
+.settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8em;
+}
+.settings-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.4em 0.6em;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-switch:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.settings-mark {
+  flex: none;
+  min-width: 2em;
+  text-align: center;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 3px;
+  padding: 0 0.2em;
+}
+.settings-switch[aria-checked="true"] .settings-mark {
+  background: var(--wtm-menu-active-bg, #44475a);
+}
+.settings-note {
+  margin: 0.3em 0 0;
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.settings-section + .settings-section {
+  margin-top: 1em;
+}
+.settings-heading {
+  margin: 0 0 0.5em;
+  font-size: 0.95em;
+  font-weight: bold;
+  opacity: 0.85;
+}
+.settings-fieldset {
+  margin: 0;
+  padding: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+}
+.settings-legend {
+  padding: 0;
+  margin-bottom: 0.4em;
+}
+.settings-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  /* 押せる大きさ（WCAG 2.5.8 の最小 24px）。押し間違えると隣の値がその場で保存されるので、携帯では特に要る。 */
+  min-height: 1.75rem;
+  cursor: pointer;
+}
+.settings-hint {
+  margin: 1em 0 0;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+</style>

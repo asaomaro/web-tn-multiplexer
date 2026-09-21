@@ -7,6 +7,7 @@ import { aggregate, displayStateFor, useSeenStore } from "../store/seen.js";
 import { paneNameOf } from "../store/paneName.js";
 import { useViewStore } from "../store/view.js";
 import { depthFirstPaneIds } from "../term/layoutOrder.js";
+import StateIcon from "./StateIcon.vue";
 
 /**
  * goto（session navigator。T24。design「ダイアログ」「goto」）。herdr の `aggregate_navigation.rs`
@@ -309,7 +310,7 @@ const onDialogKeydown = (ev: KeyboardEvent): void => {
         <span v-if="row.target.kind === 'workspace'" class="goto-picker-caret" @click.stop="toggleWorkspaceExpand(row.target.workspaceId)">{{
           expandedWorkspaces.has(row.target.workspaceId) ? "▾" : "▸"
         }}</span>
-        <span class="goto-picker-state" :data-state="row.state ?? 'none'" />
+        <StateIcon class="goto-picker-state" :state="row.state" />
         <span class="goto-picker-label">{{ row.label }}</span>
         <span v-if="row.current" class="goto-picker-current">現在地</span>
         <span v-if="row.meta" class="goto-picker-meta">{{ row.meta }}</span>
@@ -377,29 +378,7 @@ const onDialogKeydown = (ev: KeyboardEvent): void => {
   width: 1em;
   text-align: center;
 }
-.goto-picker-state {
-  width: 0.6em;
-  height: 0.6em;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.3;
-}
-.goto-picker-state[data-state="blocked"] {
-  opacity: 1;
-  color: #ff5555;
-}
-.goto-picker-state[data-state="working"] {
-  opacity: 1;
-  color: #f1fa8c;
-}
-.goto-picker-state[data-state="done"] {
-  opacity: 1;
-  color: #50fa7b;
-}
-.goto-picker-state[data-state="idle"] {
-  opacity: 1;
-  color: #6272a4;
-}
+/* 状態の印の見た目は `StateIcon.vue` だけが持つ（20260921-herdr-settings-gaps の D2）。 */
 .goto-picker-label {
   flex: 1;
   overflow: hidden;

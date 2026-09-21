@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
-import { useViewStore } from "../store/view.js";
+import { readPrefs, useViewStore, writePrefs } from "../store/view.js";
 import Sidebar from "./Sidebar.vue";
 
 let pinia: Pinia;
@@ -69,6 +69,19 @@ describe("Sidebar — spaces", () => {
     const row = wrapper.find(".sidebar-spaces .sidebar-row");
     expect(row.text()).toContain("my-project");
     expect(row.find(".sidebar-state-icon").attributes("data-state")).toBe("blocked");
+  });
+
+  // 20260921-herdr-settings-gaps の D2：状態の印は `StateIcon`。`data-state` だけでは以前の素の `<span>` でも通るので、
+  // 字形と読み上げの名前まで見る（戻すと点すら描かれない——呼ぶ側の CSS は消してある）。
+  it("状態の印は字形と読み上げの名前を持つ（StateIcon）", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.paneUpserted(makePane("p1", "t1", makeAgent({ state: "blocked" })));
+    const icon = mountSidebar(makeConnection()).find('.sidebar-spaces .sidebar-state-icon[data-state="blocked"]');
+    expect(icon.text()).toBe("×");
+    expect(icon.attributes("role")).toBe("img");
+    expect(icon.attributes("aria-label")).toBe("入力待ち");
   });
 
   it("git の ahead/behind が両方 0 なら 2 行目を出さない", () => {
@@ -402,5 +415,107 @@ describe("Sidebar — 幅のドラッグとダブルクリックでの復元（D
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// 20260921-herdr-settings-gaps の AC1・AC-I5：幅は**ドラッグを終えたときに 1 回**保存する（途中では書かない）。
+// E2E が通すのは `pointerup` の経路だけなので、ほかの終わり方はここで 1 つずつ固定する。
+describe("Sidebar — 幅を覚える", () => {
+  function setup() {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    const wrapper = mountSidebar(makeConnection());
+    return { wrapper, divider: wrapper.find(".sidebar-divider") };
+  }
+  const saved = (): unknown => readPrefs()["sidebarWidth"];
+
+  it("ドラッグの途中では保存しない", async () => {
+    const { divider } = setup();
+    await divider.trigger("pointerdown", { clientX: 240 });
+    await divider.trigger("pointermove", { clientX: 300 });
+    expect(saved()).toBeUndefined();
+  });
+
+  it.each(["pointerup", "pointercancel", "lostpointercapture"])("%s でドラッグを終えると、見えている幅を保存する", async (ev) => {
+    const { divider } = setup();
+    await divider.trigger("pointerdown", { clientX: 240 });
+    await divider.trigger("pointermove", { clientX: 300 });
+    await divider.trigger(ev);
+    expect(saved()).toBe(300);
+  });
+
+  it("終えた後の pointermove では幅も保存値も変わらない（pointerup の後の lostpointercapture でも 2 度書かない）", async () => {
+    const { wrapper, divider } = setup();
+    await divider.trigger("pointerdown", { clientX: 240 });
+    await divider.trigger("pointermove", { clientX: 300 });
+    await divider.trigger("pointerup");
+    writePrefs({ sidebarWidth: 999 }); // 2 度目に書いたら上書きされて分かる印
+    await divider.trigger("lostpointercapture");
+    await divider.trigger("pointermove", { clientX: 200 });
+    expect(saved()).toBe(999);
+    expect((wrapper.find(".sidebar").element as HTMLElement).style.width).toBe("300px");
+  });
+
+  it("ダブルクリックで既定に戻したときも保存する", async () => {
+    vi.useFakeTimers();
+    try {
+      const { divider } = setup();
+      await divider.trigger("pointerdown", { clientX: 240 });
+      await divider.trigger("pointermove", { clientX: 300 });
+      await divider.trigger("pointerup");
+      await divider.trigger("pointerdown", { clientX: 300 }); // 2 回目（350ms 以内）
+      expect(saved()).toBe(240);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // AC-I5：`showModal()` でポインタの捕捉がどうなるかは確かめた出所が無いので、こちらで終わらせる。
+  it("ドラッグ中にダイアログが開いたら、その時点で終えて保存し、以後の pointermove を無視する", async () => {
+    const { wrapper, divider } = setup();
+    await divider.trigger("pointerdown", { clientX: 240 });
+    await divider.trigger("pointermove", { clientX: 320 });
+    useViewStore(pinia).openDialogWithContext({ kind: "settings" });
+    await wrapper.vm.$nextTick();
+    expect(saved()).toBe(320);
+    await divider.trigger("pointermove", { clientX: 200 });
+    expect((wrapper.find(".sidebar").element as HTMLElement).style.width, "終えた後は動かない").toBe("320px");
+  });
+
+  // 起点はストアの幅。既定の 240 から 1 回だけ動かすテストでは、起点を既定に固定する・累積で足す、の壊れ方を見分けられない。
+  it("ドラッグの起点は保存された幅で、pointermove は起点からの移動量で決まる", async () => {
+    writePrefs({ sidebarWidth: 280 });
+    pinia = createPinia();
+    const { wrapper, divider } = setup();
+    await divider.trigger("pointerdown", { clientX: 100 });
+    await divider.trigger("pointermove", { clientX: 120 });
+    await divider.trigger("pointermove", { clientX: 150 });
+    expect((wrapper.find(".sidebar").element as HTMLElement).style.width).toBe("330px");
+  });
+
+  it("畳んでいる間は、境目を動かしても幅も保存値も変わらない", async () => {
+    const { wrapper, divider } = setup();
+    useViewStore(pinia).toggleSidebar();
+    await wrapper.vm.$nextTick();
+    writePrefs({ sidebarWidth: 240 });
+    await divider.trigger("pointerdown", { clientX: 40 });
+    await divider.trigger("pointermove", { clientX: 140 });
+    await divider.trigger("pointerup");
+    expect(saved()).toBe(240);
+    expect(useViewStore(pinia).sidebarWidth).toBe(240);
+  });
+
+  it("ドラッグしていないときにダイアログが開いても保存しない", async () => {
+    const { wrapper } = setup();
+    useViewStore(pinia).openDialogWithContext({ kind: "settings" });
+    await wrapper.vm.$nextTick();
+    expect(saved()).toBeUndefined();
+  });
+
+  it("保存された幅で開く（AC1）", () => {
+    writePrefs({ sidebarWidth: 280 });
+    pinia = createPinia(); // ストアは作る時点で読む
+    const { wrapper } = setup();
+    expect((wrapper.find(".sidebar").element as HTMLElement).style.width).toBe("280px");
   });
 });

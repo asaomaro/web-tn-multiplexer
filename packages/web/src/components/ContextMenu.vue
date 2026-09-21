@@ -85,9 +85,9 @@ const items = computed<MenuItem[]>(() => {
         : []),
     ];
   }
-  // global：どこにも属さない全体の操作。**「通知の設定」だけは入れる**
-  // （20260920-agent-notifications）——設定画面が無いことと、その機能に設定が要ることは別の話で、
-  // 通知は入／切を決められないと使い物にならない。herdr の `reload config` / `what's new` は引き続き入れない。
+  // global：どこにも属さない全体の操作。**「設定」は入れる**（20260920-agent-notifications で通知の設定として足し、
+  // 20260921-herdr-settings-gaps で通知・表示・端末の設定全体に広げた）。herdr の `reload config` / `what's new` は
+  // 引き続き入れない。
   // 切り離しは押し間違えると接続が切れるので最後。
   // 最後の分岐は `target` の中身を見ないので、種類が増えてもここへ黙って落ちてしまう。
   // それを防ぐために網羅性を明示する（5 つ目を足したらここで型エラーになる）。
@@ -95,7 +95,7 @@ const items = computed<MenuItem[]>(() => {
   return [
     { label: "キー割り当て", run: () => actions.run({ type: "help" }) },
     { label: "移動", run: () => actions.run({ type: "goto" }) },
-    { label: "通知の設定", run: () => actions.run({ type: "notifySettings" }) },
+    { label: "設定", run: () => actions.run({ type: "settings" }) },
     { label: "切り離し", run: () => actions.run({ type: "detach" }) },
   ];
 });

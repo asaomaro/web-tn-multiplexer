@@ -19,6 +19,9 @@ let pinia: Pinia;
 
 beforeEach(() => {
   sessionStorage.clear();
+  // view ストアは作る時点で `wtm.prefs.v1` を読み、`toggleSidebar` はそこへ書く（20260921-herdr-settings-gaps）。
+  // 消さないと、畳んだ状態が同じファイルの後続のテストへ残る（`--repeats` や再試行で 2 回目が落ちる）。
+  localStorage.clear();
   pinia = createPinia();
 });
 
@@ -899,12 +902,12 @@ describe("ActionDispatcher — worktree", () => {
 // 20260920-agent-notifications：`run()` の switch に `default` も網羅性の検査も無いので、
 // **足し忘れてもキーが黙って何もしないだけで型では落ちない**。ここで結線を固定する。
 describe("ActionDispatcher — 通知", () => {
-  it("notifySettings で設定のダイアログが開く", () => {
+  it("settings で設定のダイアログが開く", () => {
     const { dispatcher } = makeDispatcher(makeConnection());
     const view = useViewStore(pinia);
-    dispatcher.run({ type: "notifySettings" });
-    expect(view.dialogContext).toEqual({ kind: "notifySettings" });
-    expect(view.openDialog, "ダイアログのモードに入る（端末へキーを流さない）").toBe("notifySettings");
+    dispatcher.run({ type: "settings" });
+    expect(view.dialogContext).toEqual({ kind: "settings" });
+    expect(view.openDialog, "ダイアログのモードに入る（端末へキーを流さない）").toBe("settings");
   });
 
   it("nextNotification で次の知らせへ移る", () => {

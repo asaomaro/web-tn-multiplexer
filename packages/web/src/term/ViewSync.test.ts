@@ -29,11 +29,19 @@ function makeElement(width: number, height: number): HTMLElement {
  * `TerminalRegistry` の代わり。`pending` は「今の接続でまだ購読していない」pane（実物の `unsubscribed`）——
  * `takePendingSubscriptions(shown)` は表示する分だけを取り出し、`markAllUnsubscribed` は全部を戻す（D107）。
  */
-function makeRegistry(paneIds: string[], pending: string[]): TerminalRegistry & { markAllUnsubscribed: ReturnType<typeof vi.fn> } {
+function makeRegistry(
+  paneIds: string[],
+  pending: string[],
+  scrollbackOf: Record<string, number> = {},
+): TerminalRegistry & { markAllUnsubscribed: ReturnType<typeof vi.fn> } {
   const terms = new Map(paneIds.map((id) => [id, new Terminal({ cols: 80, rows: 24 })]));
   const unsubscribed = new Set(pending);
   return {
-    get: (paneId: string) => (terms.has(paneId) ? { paneId, term: terms.get(paneId)!, element: document.createElement("div"), webgl: false, lastUsed: 0, copy: { apply: () => ({}) } } : undefined),
+    // `scrollback` は作ったときの行数（20260921-herdr-settings-gaps の D6）。渡さなければ `undefined`＝既存のテストの形。
+    get: (paneId: string) =>
+      terms.has(paneId)
+        ? { paneId, term: terms.get(paneId)!, element: document.createElement("div"), webgl: false, lastUsed: 0, copy: { apply: () => ({}) }, scrollback: scrollbackOf[paneId] }
+        : undefined,
     takePendingSubscriptions: (shown: Iterable<string>) => [...shown].filter((id) => unsubscribed.delete(id)),
     markAllUnsubscribed: vi.fn(() => {
       for (const id of paneIds) unsubscribed.add(id);
@@ -44,6 +52,33 @@ function makeRegistry(paneIds: string[], pending: string[]): TerminalRegistry & 
 const FIXED_CELL = { width: 9, height: 18 };
 
 describe("ViewSync", () => {
+  // 20260921-herdr-settings-gaps の D6：作ってから購読するまでの間に利用者が設定を変えても、xterm の容量と
+  // SNAPSHOT に求める行数を食い違わせない。
+  it("購読の行数は、その端末を作ったときの値を getScrollbackLines より優先する", () => {
+    const conn = makeConnection();
+    // p3 は 0 行で作った端末（サーバの `--scrollback 0` も、0 を選んで保存することも有効な値）。`??` ではなく `||` で
+    // 予備に落とすと、0 で作った端末に 5000 を求めてしまい、D6 が防ぐ食い違いそのものになる。
+    const registry = makeRegistry(["p1", "p2", "p3"], ["p1", "p2", "p3"], { p1: 2000, p3: 0 });
+    const viewSync = new ViewSync({ conn, registry, getScrollbackLines: () => 5000, getCellSize: () => FIXED_CELL });
+    viewSync.onConnectionOpened();
+
+    viewSync.commit({
+      workspaceId: "w1",
+      tabId: "t1",
+      visible: [
+        { paneId: "p1", element: makeElement(720, 360) },
+        { paneId: "p2", element: makeElement(720, 360) },
+        { paneId: "p3", element: makeElement(720, 360) },
+      ],
+    });
+
+    expect(conn.requests.filter(([m]) => m === "pane.subscribe")).toEqual([
+      ["pane.subscribe", { paneId: "p1", scrollbackLines: 2000 }], // 作ったときの値
+      ["pane.subscribe", { paneId: "p2", scrollbackLines: 5000 }], // 作ったときの値が無ければ予備
+      ["pane.subscribe", { paneId: "p3", scrollbackLines: 0 }], // 0 も作ったときの値（予備に落とさない）
+    ]);
+  });
+
   it("commit: client.view を送ってから、予約された pane.subscribe を送る（この順で）", () => {
     const conn = makeConnection();
     const registry = makeRegistry(["p1"], ["p1"]);

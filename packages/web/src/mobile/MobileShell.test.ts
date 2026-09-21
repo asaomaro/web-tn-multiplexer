@@ -288,14 +288,18 @@ describe("MobileShell — 表示領域で測る・繋ぎ直した後の fit（D1
   });
 });
 
-// 20260920-agent-notifications の AC16：モバイルはサイドバーを描かないので、上部バーが唯一の入口。
-describe("MobileShell — 通知の設定への入口", () => {
-  it("上部バーのボタンで設定が開く", async () => {
+// 20260921-herdr-settings-gaps の AC13：モバイルはサイドバーも prefix キーも無いので、上部バーが唯一の入口。
+describe("MobileShell — 設定への入口", () => {
+  it("上部バーの「設定」のボタンで設定が開く", async () => {
     const { wrapper, view } = seedAndMount();
     await wrapper.vm.$nextTick();
-    const btn = wrapper.get(".mobile-shell-notify-btn");
-    expect(btn.attributes("aria-label")).toBe("通知の設定");
+    const btn = wrapper.get(".mobile-shell-settings-btn");
+    // 絵文字（以前の 🔔）ではなく文字。**読み上げの名前を上書きする属性が無い**ことも見る——`aria-label` や
+    // `aria-labelledby` が残っていると、文字が「設定」でも読み上げはそちらが勝つ（以前は「通知の設定」だった）。
+    expect(btn.text()).toBe("設定");
+    expect(btn.attributes("aria-label")).toBeUndefined();
+    expect(btn.attributes("aria-labelledby")).toBeUndefined();
     await btn.trigger("click");
-    expect(view.dialogContext).toEqual({ kind: "notifySettings" });
+    expect(view.dialogContext).toEqual({ kind: "settings" });
   });
 });

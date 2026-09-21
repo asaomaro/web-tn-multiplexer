@@ -1,6 +1,6 @@
 import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readPrefs, useViewStore, writePrefs } from "./view.js";
+import { SIDEBAR_WIDTH, loadSidebarCollapsed, loadSidebarWidth, readPrefs, useViewStore, writePrefs } from "./view.js";
 
 let pinia: Pinia;
 
@@ -231,6 +231,99 @@ describe("useViewStore — モード・ダイアログ・接続状態", () => {
     expect(store.sidebarCollapsed).toBe(true);
     store.toggleSidebar();
     expect(store.sidebarCollapsed).toBe(false);
+  });
+});
+
+// 20260921-herdr-settings-gaps の AC1〜AC3：幅と折りたたみは**操作した結果を覚える**（設定の項目ではない。D1）。
+describe("useViewStore — サイドバーの幅と折りたたみを覚える", () => {
+  it("畳むと保存され、新しいストアが畳んだまま読み戻す（AC2）", () => {
+    useViewStore(pinia).toggleSidebar();
+    expect(readPrefs()["sidebarCollapsed"]).toBe(true);
+    expect(useViewStore(createPinia()).sidebarCollapsed).toBe(true);
+  });
+
+  it("開き直しても保存される（畳む → 開く で false が残る）", () => {
+    const store = useViewStore(pinia);
+    store.toggleSidebar();
+    store.toggleSidebar();
+    expect(useViewStore(createPinia()).sidebarCollapsed).toBe(false);
+  });
+
+  it("幅は setSidebarWidth では保存せず、commitSidebarWidth で保存する（ドラッグ中は書かない）", () => {
+    const store = useViewStore(pinia);
+    store.setSidebarWidth(300);
+    expect(store.sidebarWidth).toBe(300);
+    expect(readPrefs()["sidebarWidth"], "ドラッグの途中では書かない").toBeUndefined();
+    store.commitSidebarWidth();
+    expect(readPrefs()["sidebarWidth"]).toBe(300);
+    expect(useViewStore(createPinia()).sidebarWidth, "新しいストアが読み戻す（AC1）").toBe(300);
+  });
+
+  it("setSidebarWidth は範囲に収める", () => {
+    const store = useViewStore(pinia);
+    store.setSidebarWidth(10);
+    expect(store.sidebarWidth).toBe(SIDEBAR_WIDTH.min);
+    store.setSidebarWidth(9999);
+    expect(store.sidebarWidth).toBe(SIDEBAR_WIDTH.max);
+  });
+
+  // 他の好み（並び順・通知）を消さない——`writePrefs` の併合に乗っている。
+  it("幅と折りたたみを保存しても、並び順は消えない", () => {
+    const store = useViewStore(pinia);
+    store.toggleAgentSort();
+    store.setSidebarWidth(200);
+    store.commitSidebarWidth();
+    store.toggleSidebar();
+    expect(readPrefs()).toMatchObject({ agentSort: "priority", sidebarWidth: 200, sidebarCollapsed: true });
+  });
+
+  it("何も保存されていなければ 240px・展開", () => {
+    const store = useViewStore(pinia);
+    expect(store.sidebarWidth).toBe(240);
+    expect(store.sidebarCollapsed).toBe(false);
+  });
+
+  // AC3：壊れた値でも起動できる。
+  it("保存された値が壊れていれば既定で起動する", () => {
+    writePrefs({ sidebarWidth: "wide", sidebarCollapsed: "yes" });
+    const store = useViewStore(createPinia());
+    expect(store.sidebarWidth).toBe(240);
+    expect(store.sidebarCollapsed).toBe(false);
+  });
+
+  // 読み戻しは `setSidebarWidth` と違い**丸めない**（範囲の外は保存しえない＝壊れた値）。9999 を 360 にしない。
+  it("範囲の外の幅は、丸めずに既定で起動する", () => {
+    writePrefs({ sidebarWidth: 9999 });
+    expect(useViewStore(createPinia()).sidebarWidth).toBe(240);
+  });
+});
+
+describe("loadSidebarWidth / loadSidebarCollapsed（AC3）", () => {
+  it("範囲の中の数はそのまま（端も含む）", () => {
+    expect(loadSidebarWidth(160)).toBe(160);
+    expect(loadSidebarWidth(240)).toBe(240);
+    expect(loadSidebarWidth(360)).toBe(360);
+    expect(loadSidebarWidth(201.5)).toBe(201.5);
+  });
+
+  // 範囲の外は保存しえない（ドラッグは範囲に収める）＝壊れた値。丸めずに既定へ。
+  it("範囲の外は丸めずに既定", () => {
+    expect(loadSidebarWidth(159)).toBe(240);
+    expect(loadSidebarWidth(361)).toBe(240);
+    expect(loadSidebarWidth(-1)).toBe(240);
+  });
+
+  it("数でないもの・NaN・無限は既定", () => {
+    for (const raw of [undefined, null, "300", Number.NaN, Number.POSITIVE_INFINITY, {}, true]) {
+      expect(loadSidebarWidth(raw), String(raw)).toBe(240);
+    }
+  });
+
+  it("折りたたみは true のときだけ真", () => {
+    expect(loadSidebarCollapsed(true)).toBe(true);
+    for (const raw of [false, undefined, null, "true", 1, {}]) {
+      expect(loadSidebarCollapsed(raw), String(raw)).toBe(false);
+    }
   });
 });
 
