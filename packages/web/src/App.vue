@@ -20,6 +20,7 @@ import WorktreeOpenDialog from "./components/WorktreeOpenDialog.vue";
 import { isMobileViewport } from "./mobile/detect.js";
 import MobileShell from "./mobile/MobileShell.vue";
 import { useSessionStore } from "./store/session.js";
+import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
 
 /**
@@ -32,9 +33,17 @@ import { useViewStore } from "./store/view.js";
  */
 const session = useSessionStore();
 const view = useViewStore();
+const settings = useSettingsStore();
 
 const currentTab = computed(() => (view.tabId ? session.tabs.get(view.tabId) : undefined));
 const isMobile = isMobileViewport();
+
+/**
+ * 20260922-tabbar-pane-appearance：そのタブが「分割されているか」（design「依拠する既存の事実」）。
+ * zoom 中は実際に描かれる pane が 1 つなので、分割していない扱いにする。`PaneLayout`（T6）が
+ * `settings.paneBorders` と合わせて `bordered` を解決する際の入力になる（design「振る舞いの詳細」）。
+ */
+const multiPane = computed(() => currentTab.value?.layout.type === "split" && !currentTab.value.zoomedPaneId);
 </script>
 
 <template>
@@ -45,8 +54,8 @@ const isMobile = isMobileViewport();
     <template v-else>
       <Sidebar />
       <div class="app-main">
-        <TabBar />
-        <div class="app-panes">
+        <TabBar :position="settings.tabBarPosition" />
+        <div class="app-panes" :class="{ 'app-panes-outer-borders': settings.paneOuterBorders }">
           <!-- 窓の大きさ・サイドバーの幅や折りたたみの変化に client.view を追従させる（D107）。pane ごとに枠を描く（右クリックで
                常にメニューを開く縁。D110）。どちらもモバイルの MobileShell には付けない -->
           <PaneLayout
@@ -55,6 +64,8 @@ const isMobile = isMobileViewport();
             :tab-id="currentTab.id"
             :layout="currentTab.layout"
             :zoomed-pane-id="currentTab.zoomedPaneId"
+            :multi-pane="multiPane"
+            :show-label="settings.showAgentLabelsOnPaneBorders"
             follow-resize
             pane-frames
           >
@@ -133,5 +144,12 @@ body {
 .app-panes {
   flex: 1;
   min-height: 0;
+}
+/* pane 領域の外周の枠（20260922-tabbar-pane-appearance。AC6）。`outline` を使う——`border` はボックスの
+ * 外寸を増やして内側の大きさを削り、`PaneLayout.vue` が測る葉の大きさ・PTY の cols/rows まで変えてしまう。
+ * `outline` はボックスモデルに参加しないため、その心配が無い（design「振る舞いの詳細」）。 */
+.app-panes-outer-borders {
+  outline: 1px solid var(--wtm-menu-border, #44475a);
+  outline-offset: -1px;
 }
 </style>

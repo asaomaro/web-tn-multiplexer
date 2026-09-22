@@ -1,8 +1,10 @@
 import type { MethodName, ParamsOf, ResultOf } from "@wtm/protocol";
 import { mount } from "@vue/test-utils";
+import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionKey } from "../injection.js";
 import type { ConnectionPort } from "../net/ports.js";
+import { useSettingsStore } from "../store/settings.js";
 import Splitter from "./Splitter.vue";
 
 function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] } {
@@ -19,10 +21,12 @@ function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] 
   };
 }
 
-function mountSplitter(conn: ConnectionPort, dir: "right" | "down" = "right") {
+function mountSplitter(conn: ConnectionPort, dir: "right" | "down" = "right", pinia: Pinia = createPinia()) {
   return mount(Splitter, {
     props: { splitId: "s1", tabId: "t1", ratio: 0.5, dir },
-    global: { provide: { [ConnectionKey as symbol]: conn } },
+    // 20260922-tabbar-pane-appearance：Splitter.vue が `useSettingsStore()`（`paneGaps`）を直に呼ぶため、
+    // Pinia が要る（無いと "no active Pinia" で落ちる）。呼び出し側が `paneGaps` を設定済みの pinia を渡せる。
+    global: { plugins: [pinia], provide: { [ConnectionKey as symbol]: conn } },
     attachTo: document.body,
   });
 }
@@ -80,7 +84,9 @@ describe("Splitter", () => {
     const conn = makeConnection();
     const wrapper = mount(Splitter, {
       props: { splitId: "s1", tabId: "t1", ratio: 0.06, dir: "right" },
-      global: { provide: { [ConnectionKey as symbol]: conn } },
+      // 20260922-tabbar-pane-appearance：Splitter.vue が useSettingsStore() を呼ぶため Pinia が要る
+      // （他の呼び出しは mountSplitter() 経由で持つが、この 1 本だけ ratio を変えるため直に mount している）。
+      global: { plugins: [createPinia()], provide: { [ConnectionKey as symbol]: conn } },
     });
     const el = wrapper.get('[role="separator"]');
     await el.trigger("keydown", { key: "ArrowLeft" });
@@ -124,5 +130,31 @@ describe("Splitter", () => {
     await wrapper.setProps({ ratio: 0.7 });
     expect(wrapper.get('[role="separator"]').attributes("aria-valuenow")).toBe("70");
     wrapper.unmount();
+  });
+});
+
+describe("Splitter — 隙間の視覚切り替え（20260922-tabbar-pane-appearance。AC7）", () => {
+  it("paneGaps が既定（入）なら splitter-no-gap クラスを持たない", () => {
+    const conn = makeConnection();
+    const wrapper = mountSplitter(conn);
+    expect(wrapper.get(".splitter").classes()).not.toContain("splitter-no-gap");
+  });
+
+  it("paneGaps を切ると splitter-no-gap クラスが付く", () => {
+    const pinia = createPinia();
+    useSettingsStore(pinia).setPaneGaps(false);
+    const conn = makeConnection();
+    const wrapper = mountSplitter(conn, "right", pinia);
+    expect(wrapper.get(".splitter").classes()).toContain("splitter-no-gap");
+  });
+
+  it("paneGaps の値に関わらず dir のクラス（幅・高さを決める）は変わらない（当たり判定を変えない制約）", () => {
+    const pinia = createPinia();
+    useSettingsStore(pinia).setPaneGaps(false);
+    const conn = makeConnection();
+    const right = mountSplitter(conn, "right", pinia);
+    const down = mountSplitter(conn, "down", pinia);
+    expect(right.get(".splitter").classes()).toContain("right");
+    expect(down.get(".splitter").classes()).toContain("down");
   });
 });

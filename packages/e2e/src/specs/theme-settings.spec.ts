@@ -160,7 +160,10 @@ async function expectTerminals(page: Page, name: ThemeName, count: number): Prom
 async function expectBordersReadable(page: Page, name: ThemeName): Promise<void> {
   const bg = rgbToHex(await dialogBg(page));
   expect(bg, `${name}：ダイアログの背景`).toBe(MENU_BG[name]);
-  const input = dialog(page).locator("input.settings-path");
+  // 20260922-tabbar-pane-appearance で `.settings-path` の入力欄が増えた（tab バー右端の区切り文字。DOM 順で
+  // こちらが先に来る）。同じ CSS クラスを共有するので確認先はどちらでもよいが、**この関数がもともと確かめていた
+  // 「指定した場所のパス」欄**を引き続き対象にする（意図をすり替えない）。
+  const input = dialog(page).locator('input.settings-path[aria-label="指定した場所のパス"]');
   await expect(input).toBeEnabled();
   const border = rgbToHex(await input.evaluate((el) => getComputedStyle(el).borderTopColor));
   expect(contrastRatio(border, bg), `${name}：入力欄の枠 ${border}`).toBeGreaterThanOrEqual(3);

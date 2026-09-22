@@ -26,8 +26,14 @@ import { useViewStore } from "../store/view.js";
  *
  * `enabled` が false（モバイルの `MobileShell`・単体テスト）なら枠を描かず、ストアにも触れない（`enabled` は作った後に
  * 変えない前提。モバイルは葉を PTY の大きさの縮小の枠に置くので、縁を足すと端末がはみ出る）。
+ *
+ * `bordered`・`showLabel`（20260922-tabbar-pane-appearance）は**どちらも `PaneLayout.vue` が計算済みで
+ * 渡す単純な boolean**——このコンポーネント自身は `paneBorders`/`multiPane`/store のどれも知らない
+ * （design「振る舞いの詳細 / pane の枠・外周・隙間」）。`bordered` は「枠の色を出すか」だけを決め、
+ * `padding: 4px`（下記スタイル）は常に変えない（PTY の cols/rows に影響しないため）。選択中は `bordered`
+ * の値に関わらず既存の強調色を優先する。
  */
-const props = defineProps<{ paneId: string; enabled?: boolean }>();
+const props = defineProps<{ paneId: string; enabled?: boolean; bordered?: boolean; showLabel?: boolean }>();
 
 const actions = inject(ActionDispatcherKey, undefined);
 const registry = inject(TerminalRegistryKey, undefined);
@@ -107,7 +113,7 @@ function onKeydown(ev: KeyboardEvent): void {
       v-if="enabled"
       ref="edge"
       class="pane-frame-edge"
-      :class="{ 'pane-frame-edge-current': selected }"
+      :class="{ 'pane-frame-edge-current': selected, 'pane-frame-edge-bordered': bordered && !selected }"
       role="button"
       :tabindex="selected ? 0 : -1"
       aria-haspopup="menu"
@@ -116,7 +122,10 @@ function onKeydown(ev: KeyboardEvent): void {
       @mousedown="onMouseDown"
       @contextmenu="onContextMenu"
       @keydown="onKeydown"
-    />
+    >
+      <!-- 20260922-tabbar-pane-appearance（AC8）：装飾なので aria-hidden。読み上げは上の menu button の aria-label（`label`）が担う。 -->
+      <span v-if="showLabel && paneName" class="pane-frame-label" aria-hidden="true">{{ paneName }}</span>
+    </div>
     <div class="pane-frame-body">
       <slot />
     </div>
@@ -145,6 +154,25 @@ function onKeydown(ev: KeyboardEvent): void {
 .pane-frame-edge-current {
   /* 選ばれている pane の枠はテーマごとに背景から 3:1 に寄せた色（20260921-theme-settings の decisions D15。dracula は今と同じ #44475a）。 */
   border: 2px solid var(--wtm-pane-current, #44475a);
+}
+/* 20260922-tabbar-pane-appearance（AC5）：分割中の非選択 pane にも枠を出す設定のときの色。選択中の 2px より
+ * 細い 1px にして、選択の強調（pane-frame-edge-current）と混同しない。`Splitter.vue` の分割線と同じ色。 */
+.pane-frame-edge-bordered {
+  border: 1px solid var(--wtm-menu-border, #44475a);
+}
+/* 20260922-tabbar-pane-appearance（AC8）：pane 名の可視ラベル。枠の内側の隅に小さく置く。 */
+.pane-frame-label {
+  position: absolute;
+  top: 2px;
+  left: 6px;
+  font-size: 0.75em;
+  opacity: 0.7;
+  color: var(--wtm-fg, #f8f8f2);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 12px);
 }
 .pane-frame-edge:focus-visible {
   outline: 1px solid var(--wtm-fg, #f8f8f2);

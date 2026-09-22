@@ -13,6 +13,7 @@ import { KeyRouter, type KeyRouterClock } from "./keys/KeyRouter.js";
 import { DEFAULT_KEYMAP } from "./keys/keymap.js";
 import type { ConnectionPort } from "./net/ports.js";
 import { useSessionStore } from "./store/session.js";
+import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
 import { MouseBridge } from "./term/MouseBridge.js";
 import { RendererPool, type WebglAddonLike } from "./term/RendererPool.js";
@@ -292,5 +293,103 @@ describe("App — 再接続の後の表示と購読の張り直し（D107）", (
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();
     expect(conn.requests.map(([m]) => m)).toEqual(["client.view", "pane.subscribe"]);
+  });
+});
+
+describe("App — タブバーと pane の枠の外観（20260922-tabbar-pane-appearance）", () => {
+  it("TabBar へ settings.tabBarPosition を渡す", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    view.setView("w1", "t1");
+    settings.setTabBarPosition("bottom");
+    const provide = makeProvide(makeConnection());
+    const wrapper = mount(App, { ...provide, global: { ...provide.global, stubs: { TabBar: true, PaneLayout: true } } });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findComponent({ name: "TabBar" }).props("position")).toBe("bottom");
+  });
+
+  it("分割していないタブでは multiPane=false を PaneLayout へ渡す", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1")); // layout: { type: "pane" }
+    view.setView("w1", "t1");
+    const provide = makeProvide(makeConnection());
+    const wrapper = mount(App, { ...provide, global: { ...provide.global, stubs: { TabBar: true, PaneLayout: true } } });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findComponent({ name: "PaneLayout" }).props("multiPane")).toBe(false);
+  });
+
+  it("分割しているタブでは multiPane=true を渡す", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted({
+      id: "t1",
+      workspaceId: "w1",
+      label: "t1",
+      layout: { type: "split", id: "s1", dir: "right", ratio: 0.5, a: { type: "pane", paneId: "p1" }, b: { type: "pane", paneId: "p2" } },
+      focusedPaneId: "p1",
+      zoomedPaneId: null,
+      sizeOwnerClientId: null,
+    });
+    view.setView("w1", "t1");
+    const provide = makeProvide(makeConnection());
+    const wrapper = mount(App, { ...provide, global: { ...provide.global, stubs: { TabBar: true, PaneLayout: true } } });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findComponent({ name: "PaneLayout" }).props("multiPane")).toBe(true);
+  });
+
+  it("分割していても zoom 中は multiPane=false（実際に描かれる pane は 1 つ）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted({
+      id: "t1",
+      workspaceId: "w1",
+      label: "t1",
+      layout: { type: "split", id: "s1", dir: "right", ratio: 0.5, a: { type: "pane", paneId: "p1" }, b: { type: "pane", paneId: "p2" } },
+      focusedPaneId: "p1",
+      zoomedPaneId: "p1",
+      sizeOwnerClientId: null,
+    });
+    view.setView("w1", "t1");
+    const provide = makeProvide(makeConnection());
+    const wrapper = mount(App, { ...provide, global: { ...provide.global, stubs: { TabBar: true, PaneLayout: true } } });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findComponent({ name: "PaneLayout" }).props("multiPane")).toBe(false);
+  });
+
+  it("PaneLayout へ settings.showAgentLabelsOnPaneBorders を showLabel として渡す", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    view.setView("w1", "t1");
+    settings.setShowAgentLabelsOnPaneBorders(true);
+    const provide = makeProvide(makeConnection());
+    const wrapper = mount(App, { ...provide, global: { ...provide.global, stubs: { TabBar: true, PaneLayout: true } } });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findComponent({ name: "PaneLayout" }).props("showLabel")).toBe(true);
+  });
+
+  it("paneOuterBorders が入（既定）のとき .app-panes に外周のクラスが付く。切ると消える（AC6）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+    view.setView("w1", "t1");
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".app-panes").classes()).toContain("app-panes-outer-borders");
+    settings.setPaneOuterBorders(false);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".app-panes").classes()).not.toContain("app-panes-outer-borders");
   });
 });

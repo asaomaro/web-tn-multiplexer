@@ -6,6 +6,7 @@ import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
 import type { Action } from "../keys/actions.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import TabBar from "./TabBar.vue";
 
@@ -185,5 +186,125 @@ describe("TabBar — 新しいタブのボタン", () => {
     const list = wrapper.get('[role="tablist"]');
     expect(list.findAll(".tab-bar-new").length).toBe(0);
     expect(list.findAll('[role="tab"]').length).toBe(1);
+  });
+});
+
+describe("TabBar — 位置・自動非表示・右端のエントリ（20260922-tabbar-pane-appearance）", () => {
+  it("既定（position 省略）は上端の境界線（tab-bar-top）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar").classes()).toContain("tab-bar-top");
+  });
+
+  it("position=bottom のとき、下端の境界線（tab-bar-bottom）になる（AC1）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mount(TabBar, {
+      props: { position: "bottom" },
+      global: {
+        plugins: [pinia],
+        provide: {
+          [ConnectionKey as symbol]: makeConnection(),
+          [ActionDispatcherKey as symbol]: { openContextMenu: vi.fn(), run: vi.fn(), newTabInWorkspace: vi.fn() },
+        },
+      },
+    });
+    expect(wrapper.get(".tab-bar").classes()).toContain("tab-bar-bottom");
+    // クラス（境界線の位置）だけでなく、実際に視覚順を入れ替える `order` も確かめる（E2E で発見：クラスだけでは
+    // 見た目の位置が変わらない実装ミスを、単体テストが見落としていた）。`.app-main` の flex の並びは
+    // `order` を比較するので、数値で入れ替わることを直接確認する。
+    expect(wrapper.get(".tab-bar").attributes("style")).toContain("order: 1");
+  });
+
+  it("既定（position 省略）は order:0（先頭のまま）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar").attributes("style")).toContain("order: 0");
+  });
+
+  it("tab が 1 つで hideTabBarWhenSingleTab が入なら、バー自体が消える（AC2）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    settings.setHideTabBarWhenSingleTab(true);
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.find(".tab-bar").exists()).toBe(false);
+  });
+
+  it("tab が 2 つに増えると、hideTabBarWhenSingleTab が入でもまた表示される（AC2）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    settings.setHideTabBarWhenSingleTab(true);
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.find(".tab-bar").exists()).toBe(true);
+  });
+
+  it("右端に zoom・hostname・text エントリを区切り文字でつなげて表示する（AC3・AC4）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.host = { os: "linux", hostname: "myhost", windowsBuild: null };
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", { zoomedPaneId: "p1" }));
+    view.setView("w1", "t1");
+    settings.setTabBarRight([{ kind: "zoom" }, { kind: "hostname" }, { kind: "text", text: "hi" }]);
+    settings.setTabBarRightSeparator(" · ");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-right").text()).toBe("Z · myhost · hi");
+  });
+
+  it("zoom していない tab では zoom エントリは空文字（区切り文字だけがつながる）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    settings.setTabBarRight([{ kind: "zoom" }, { kind: "text", text: "hi" }]);
+    const wrapper = mountTabBar(makeConnection());
+    // `.text()` は前後の空白を trim する（vue-test-utils の既定）ので、内部の実際の中身は
+    // `.element.textContent` で確かめる（zoom の空文字 + 区切り文字 " " + "hi" = " hi"）。
+    expect(wrapper.get(".tab-bar-right").element.textContent).toBe(" hi");
+  });
+
+  it("右端のエントリが無ければ .tab-bar-right 自体を描かない", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.find(".tab-bar-right").exists()).toBe(false);
+  });
+
+  it("datetime エントリは formatDatetime のプリセットで表示する（AC3）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    settings.setTabBarRight([{ kind: "datetime", format: "date" }]);
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-right").text()).toMatch(/^\d{4}\/\d{2}\/\d{2}$/);
   });
 });

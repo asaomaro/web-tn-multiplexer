@@ -9,6 +9,7 @@ import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore } from "../store/settings.js";
 import { readPrefs, useViewStore } from "../store/view.js";
+import { MAX_TAB_BAR_RIGHT_ENTRIES } from "../tabbar/tabBarRight.js";
 import SettingsDialog from "./SettingsDialog.vue";
 
 let pinia: Pinia;
@@ -717,5 +718,192 @@ describe("SettingsDialog — 節「キー」への端末の種類（モバイル
     document.body.innerHTML = "";
     const desktop = await openDialog();
     expect(desktop.wrapper.find(".keys-mobile-note").exists()).toBe(false);
+  });
+});
+
+describe("SettingsDialog — タブバーと pane の枠の外観（20260922-tabbar-pane-appearance）", () => {
+  const displaySection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    w.get('section[aria-labelledby="settings-display"]');
+
+  it("位置・自動非表示・枠の3値・外周・隙間・エージェント名表示の既定値を表示する", async () => {
+    const { wrapper } = await openDialog();
+    const section = displaySection(wrapper);
+    const selects = section.findAll("select.settings-select");
+    // 1 つ目は「tab バーの位置」（値 top）、2 つ目は「pane の枠」（値 auto）。
+    expect((selects[0]!.element as HTMLSelectElement).value).toBe("top");
+    expect((selects[1]!.element as HTMLSelectElement).value).toBe("auto");
+    const sw = section.findAll('[role="switch"]');
+    // [状態を記号でも示す, tab が1つなら隠す, 外周, 隙間, エージェント名表示]
+    expect(sw.map((s) => s.attributes("aria-checked"))).toEqual(["true", "false", "true", "true", "false"]);
+  });
+
+  it("tab バーの位置を選ぶと即座に反映・保存される（AC1）", async () => {
+    const { wrapper, controller } = await openDialog();
+    const select = displaySection(wrapper).findAll("select.settings-select")[0]!;
+    await select.setValue("bottom");
+    expect(useSettingsStore(pinia).tabBarPosition).toBe("bottom");
+    expect(readPrefs()["tabBarPosition"]).toBe("bottom");
+    wrapper.unmount();
+    void controller;
+  });
+
+  it("「tab が1つなら隠す」を切り替えると即座に反映・保存される（AC2）", async () => {
+    const { wrapper } = await openDialog();
+    const sw = displaySection(wrapper).findAll('[role="switch"]')[1]!;
+    await sw.trigger("click");
+    expect(useSettingsStore(pinia).hideTabBarWhenSingleTab).toBe(true);
+    expect(readPrefs()["hideTabBarWhenSingleTab"]).toBe(true);
+  });
+
+  it("pane の枠を選ぶと即座に反映・保存される（AC5）", async () => {
+    const { wrapper } = await openDialog();
+    const select = displaySection(wrapper).findAll("select.settings-select")[1]!;
+    await select.setValue("always");
+    expect(useSettingsStore(pinia).paneBorders).toBe("always");
+    expect(readPrefs()["paneBorders"]).toBe("always");
+  });
+
+  it("外周・隙間・エージェント名表示を切り替えると即座に反映・保存される（AC6・AC7・AC8）", async () => {
+    const { wrapper } = await openDialog();
+    const sw = displaySection(wrapper).findAll('[role="switch"]');
+    await sw[2]!.trigger("click"); // 外周
+    await sw[3]!.trigger("click"); // 隙間
+    await sw[4]!.trigger("click"); // エージェント名表示
+    const settings = useSettingsStore(pinia);
+    expect(settings.paneOuterBorders).toBe(false);
+    expect(settings.paneGaps).toBe(false);
+    expect(settings.showAgentLabelsOnPaneBorders).toBe(true);
+    expect(readPrefs()).toMatchObject({ paneOuterBorders: false, paneGaps: false, showAgentLabelsOnPaneBorders: true });
+  });
+});
+
+describe("SettingsDialog — tab バー右端のエントリ（20260922-tabbar-pane-appearance。AC3・AC4）", () => {
+  const fieldset = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get(".tabbar-right-fieldset");
+
+  it("種類を選んで追加すると、末尾に既定値の行が増える", async () => {
+    const { wrapper } = await openDialog();
+    const fs = fieldset(wrapper);
+    await fs.findAll("select.settings-select")[0]!.setValue("hostname"); // 「追加する種類」select（一覧の先頭）
+    await fs.get("[data-add-entry]").trigger("click");
+    expect(useSettingsStore(pinia).tabBarRight).toEqual([{ kind: "hostname" }]);
+    expect(fs.findAll(".tabbar-right-entry")).toHaveLength(1);
+    expect(fs.get(".tabbar-right-entry-kind").text()).toBe("接続先のホスト名");
+  });
+
+  it("datetime を追加すると書式の select が出て、変えると即座に反映・保存される", async () => {
+    const { wrapper } = await openDialog();
+    const fs = fieldset(wrapper);
+    const kindSelect = fs.findAll("select.settings-select")[0]!; // 「追加する種類」（既定 zoom）
+    await kindSelect.setValue("datetime");
+    await fs.get("[data-add-entry]").trigger("click");
+    const formatSelect = fs.get('select[aria-label="日時の書式"]');
+    await formatSelect.setValue("date");
+    expect(useSettingsStore(pinia).tabBarRight).toEqual([{ kind: "datetime", format: "date" }]);
+  });
+
+  it("text を追加すると入力欄が出て、change で確定する（打ちかけでは保存しない）", async () => {
+    const { wrapper } = await openDialog();
+    const fs = fieldset(wrapper);
+    const kindSelect = fs.findAll("select.settings-select")[0]!;
+    await kindSelect.setValue("text");
+    await fs.get("[data-add-entry]").trigger("click");
+    const input = fs.get('input[aria-label="固定文字列"]');
+    (input.element as HTMLInputElement).value = "hi";
+    await input.trigger("change");
+    expect(useSettingsStore(pinia).tabBarRight).toEqual([{ kind: "text", text: "hi" }]);
+  });
+
+  it("上へ/下へで並び替える。端では disabled", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.addTabBarRightEntry("zoom");
+    settings.addTabBarRightEntry("hostname");
+    await wrapper.vm.$nextTick();
+    const fs = fieldset(wrapper);
+    const rows = fs.findAll(".tabbar-right-entry");
+    const [up0, down0] = rows[0]!.findAll("button.settings-btn").slice(0, 2);
+    expect(up0!.attributes("disabled")).toBeDefined(); // 先頭は上へ不可
+    expect(down0!.attributes("disabled")).toBeUndefined();
+    await down0!.trigger("click");
+    expect(settings.tabBarRight).toEqual([{ kind: "hostname" }, { kind: "zoom" }]);
+  });
+
+  it("削除すると、その位置に繰り上がった行の削除ボタンへフォーカスが移る（AC-I4）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.addTabBarRightEntry("zoom");
+    settings.addTabBarRightEntry("hostname");
+    settings.addTabBarRightEntry("text");
+    await wrapper.vm.$nextTick();
+    const fs = fieldset(wrapper);
+    const removeButtons = fs.findAll("[data-remove-entry]");
+    await removeButtons[0]!.trigger("click"); // 先頭（zoom）を消す
+    expect(settings.tabBarRight.map((e) => e.kind)).toEqual(["hostname", "text"]);
+    const afterRemove = fs.findAll("[data-remove-entry]");
+    expect(document.activeElement).toBe(afterRemove[0]!.element); // 繰り上がった行（元 hostname）の削除ボタン
+  });
+
+  it("最後の行を削除すると、フォーカスは「追加」ボタンへ移る", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.addTabBarRightEntry("zoom");
+    await wrapper.vm.$nextTick();
+    const fs = fieldset(wrapper);
+    await fs.get("[data-remove-entry]").trigger("click");
+    expect(document.activeElement).toBe(fs.get("[data-add-entry]").element);
+  });
+
+  it(`上限（${MAX_TAB_BAR_RIGHT_ENTRIES}件）に達すると「追加」ボタンが disabled になる`, async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    for (let i = 0; i < MAX_TAB_BAR_RIGHT_ENTRIES; i++) settings.addTabBarRightEntry("zoom");
+    await wrapper.vm.$nextTick();
+    expect(fieldset(wrapper).get("[data-add-entry]").attributes("disabled")).toBeDefined();
+  });
+
+  it("区切り文字を変えると即座に反映・保存される（AC4）", async () => {
+    const { wrapper } = await openDialog();
+    const input = fieldset(wrapper).get('input[aria-label="区切り文字"]');
+    (input.element as HTMLInputElement).value = " · ";
+    await input.trigger("change");
+    expect(useSettingsStore(pinia).tabBarRightSeparator).toBe(" · ");
+    expect(readPrefs()["tabBarRightSeparator"]).toBe(" · ");
+  });
+
+  it("区切り文字は Enter でも確定する（change 任せにしない。taskcheck T9 round1 の指摘：text 欄と非対称だった）", async () => {
+    const { wrapper } = await openDialog();
+    const input = fieldset(wrapper).get('input[aria-label="区切り文字"]');
+    (input.element as HTMLInputElement).value = " - ";
+    await input.trigger("keydown", { key: "Enter" });
+    expect(useSettingsStore(pinia).tabBarRightSeparator).toBe(" - ");
+  });
+
+  it("Enter でテキスト欄からフォーカスを外す（IME 確定と衝突しないよう change 任せ。blur で change が立つ）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.addTabBarRightEntry("text");
+    await wrapper.vm.$nextTick();
+    const fs = fieldset(wrapper);
+    const input = fs.get('input[aria-label="固定文字列"]');
+    (input.element as HTMLInputElement).value = "abc";
+    await input.trigger("keydown", { key: "Enter" });
+    expect(settings.tabBarRight).toEqual([{ kind: "text", text: "abc" }]);
+  });
+
+  it("キーボードだけで、種類を選ぶ→追加→上へ/下へ→削除まで通せる（AC-I3）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const fs = fieldset(wrapper);
+    const kindSelect = fs.findAll("select.settings-select")[0]!;
+    (kindSelect.element as HTMLSelectElement).focus();
+    await kindSelect.setValue("hostname");
+    const addBtn = fs.get("[data-add-entry]");
+    (addBtn.element as HTMLElement).focus();
+    await addBtn.trigger("click"); // Enter/Space と同じ activation（happy-dom は click で代用）
+    expect(settings.tabBarRight).toEqual([{ kind: "hostname" }]);
+    const removeBtn = fs.get("[data-remove-entry]");
+    (removeBtn.element as HTMLElement).focus();
+    await removeBtn.trigger("click");
+    expect(settings.tabBarRight).toEqual([]);
   });
 });

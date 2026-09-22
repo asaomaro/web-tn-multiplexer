@@ -188,7 +188,10 @@ test("設定：別のブラウザ（別のプロファイル）では、設定�
   await openApp(page, appServer);
   await dragDivider(page, 60);
   await openSettingsByKey(page);
-  await dialog(page).locator('section[aria-labelledby="settings-display"] [role="switch"]').click();
+  await dialog(page)
+    .locator('section[aria-labelledby="settings-display"] [role="switch"]')
+    .first() // 20260922-tabbar-pane-appearance で表示の節に switch が増えた。先頭は今までどおり「状態を記号でも示す」
+    .click();
   await radioLabels(page).filter({ hasText: /^1,000 行$/ }).click();
   // **前提の確認**：このブラウザの設定が実際に変わった。どれかの操作が効かなければ、別の context の判定は何も守らない。
   await expect(checkedRadioLabel(page)).toHaveText("1,000 行");
@@ -249,7 +252,10 @@ test("設定：何も設定しない利用者に記号が出る。入力待ち�
 
   // AC6：表示の節の switch を切ると字形が消える（色の丸に戻る）。
   await openSettingsByKey(page);
-  await dialog(page).locator('section[aria-labelledby="settings-display"] [role="switch"]').click();
+  await dialog(page)
+    .locator('section[aria-labelledby="settings-display"] [role="switch"]')
+    .first() // 20260922-tabbar-pane-appearance で表示の節に switch が増えた。先頭は今までどおり「状態を記号でも示す」
+    .click();
   await page.keyboard.press("Escape");
   await expect(agentIcon).toHaveText("");
   await expect(agentIcon).toHaveAttribute("data-symbols", "off");
@@ -274,7 +280,9 @@ test("設定：キーだけで端末の節のラジオへ入り、矢印で選�
   await openApp(page, appServer);
   await openSettingsByKey(page);
   // Tab で節をまたいで進む（通知の switch のうち、許可の状態で押せないものは飛ばされるので回数は数えない）。
-  for (let i = 0; i < 12; i++) {
+  // 20260922-tabbar-pane-appearance で「表示」の節に 10 個ほどタブで止まる部品が増えたため、上限を広げた
+  // （見つかれば早期に抜けるので、余裕を持たせても遅くならない）。
+  for (let i = 0; i < 40; i++) {
     if (await page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.name === "settings-scrollback")) break;
     await page.keyboard.press("Tab");
   }

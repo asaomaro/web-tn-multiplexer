@@ -21,12 +21,17 @@ function makePane(id: string, overrides: Partial<Pane> = {}): Pane {
   return { id, tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, ...overrides };
 }
 
-function mountFrame(opts: { enabled?: boolean; withPinia?: boolean } = {}) {
+function mountFrame(opts: { enabled?: boolean; withPinia?: boolean; bordered?: boolean; showLabel?: boolean } = {}) {
   const actions = { openContextMenu: vi.fn() };
   const registry = { focus: vi.fn() };
   const wrapper = mount(PaneFrame, {
     attachTo: document.body,
-    props: { paneId: "p1", ...(opts.enabled === false ? {} : { enabled: true }) },
+    props: {
+      paneId: "p1",
+      ...(opts.enabled === false ? {} : { enabled: true }),
+      ...(opts.bordered !== undefined ? { bordered: opts.bordered } : {}),
+      ...(opts.showLabel !== undefined ? { showLabel: opts.showLabel } : {}),
+    },
     global: {
       plugins: opts.withPinia === false ? [] : [pinia],
       provide: { [ActionDispatcherKey as symbol]: actions, [TerminalRegistryKey as symbol]: registry },
@@ -241,5 +246,83 @@ describe("PaneFrame — 枠の中にフォーカスがあるまま消えたら�
     await new Promise((r) => setTimeout(r, 10));
     expect(registry.focus).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(other);
+  });
+});
+
+describe("PaneFrame — 枠の3値・エージェント名表示（20260922-tabbar-pane-appearance）", () => {
+  it("bordered=false・非選択：枠の色クラスを持たない", () => {
+    const { wrapper } = mountFrame({ bordered: false });
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.classes()).not.toContain("pane-frame-edge-bordered");
+    expect(edge.classes()).not.toContain("pane-frame-edge-current");
+  });
+
+  it("bordered=true・非選択：pane-frame-edge-bordered（1px 色）を持つ", () => {
+    const { wrapper } = mountFrame({ bordered: true });
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.classes()).toContain("pane-frame-edge-bordered");
+    expect(edge.classes()).not.toContain("pane-frame-edge-current");
+  });
+
+  it("選択中は bordered の値に関わらず pane-frame-edge-current（既存の強調）を優先する", () => {
+    const view = useViewStore(pinia);
+    view.focusPane("p1");
+    const { wrapper } = mountFrame({ bordered: false });
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.classes()).toContain("pane-frame-edge-current");
+    expect(edge.classes()).not.toContain("pane-frame-edge-bordered"); // 二重に付けない
+  });
+
+  it("showLabel が真で手動名があれば、その名前を可視テキストとして描く（aria-hidden）", () => {
+    const session = useSessionStore(pinia);
+    session.paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame({ showLabel: true });
+    const label = wrapper.get(".pane-frame-label");
+    expect(label.text()).toBe("build");
+    expect(label.attributes("aria-hidden")).toBe("true");
+  });
+
+  it("showLabel が真でもエージェント名しか無ければそれを描く（手動名が無いときだけ）", () => {
+    const session = useSessionStore(pinia);
+    session.paneUpserted(
+      makePane("p1", {
+        agent: { instanceId: "a1", kind: "claude", label: "claude", state: "idle", completionSeq: 0, serverSeenSeq: 0, verified: true, since: 0 },
+      }),
+    );
+    const { wrapper } = mountFrame({ showLabel: true });
+    expect(wrapper.get(".pane-frame-label").text()).toBe("claude");
+  });
+
+  it("手動名があれば、showLabel が真でもエージェント名より手動名を優先する（paneNameOf の順序）", () => {
+    const session = useSessionStore(pinia);
+    session.paneUpserted(
+      makePane("p1", {
+        label: "my-pane",
+        agent: { instanceId: "a1", kind: "claude", label: "claude", state: "idle", completionSeq: 0, serverSeenSeq: 0, verified: true, since: 0 },
+      }),
+    );
+    const { wrapper } = mountFrame({ showLabel: true });
+    expect(wrapper.get(".pane-frame-label").text()).toBe("my-pane");
+  });
+
+  it("showLabel が偽なら、名前があっても可視ラベルを描かない（既定。回帰しない）", () => {
+    const session = useSessionStore(pinia);
+    session.paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame(); // showLabel 省略＝既定
+    expect(wrapper.find(".pane-frame-label").exists()).toBe(false);
+  });
+
+  it("showLabel が真でも名前が無ければ可視ラベルを描かない", () => {
+    const { wrapper } = mountFrame({ showLabel: true });
+    expect(wrapper.find(".pane-frame-label").exists()).toBe(false);
+  });
+
+  it("bordered・showLabel に関わらず padding（.pane-frame-enabled）は変わらない（PTY の cols/rows を変えない制約）", () => {
+    const a = mountFrame({ bordered: false, showLabel: false });
+    const b = mountFrame({ bordered: true, showLabel: true });
+    expect(a.wrapper.get(".pane-frame").classes()).toContain("pane-frame-enabled");
+    expect(b.wrapper.get(".pane-frame").classes()).toContain("pane-frame-enabled");
+    // クラス名が同じである以上、CSS の padding 値も両者で共有される（`.pane-frame-enabled { padding: 4px }` は
+    // bordered/showLabel の条件付きクラスの外にあり、それらに応じて外れることが無い——スタイルシートの構造で保証）。
   });
 });

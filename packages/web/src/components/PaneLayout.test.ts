@@ -1,9 +1,11 @@
 import type { LayoutNode } from "@wtm/protocol";
 import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPinia } from "pinia";
+import { createPinia, type Pinia } from "pinia";
 import { ActionDispatcherKey, ConnectionKey, ViewSyncKey } from "../injection.js";
 import type { ConnectionPort } from "../net/ports.js";
+import { useSettingsStore } from "../store/settings.js";
+import PaneFrame from "./PaneFrame.vue";
 import PaneLayout from "./PaneLayout.vue";
 
 function makeConnection(): ConnectionPort {
@@ -32,7 +34,16 @@ type FakeViewSync = { commit: ReturnType<typeof vi.fn>; attachCommitter?: (commi
 
 function mountLayout(
   layout: LayoutNode,
-  opts: { zoomedPaneId?: string | null; viewSync?: FakeViewSync; followResize?: boolean; measureSinglePane?: (paneId: string, element: HTMLElement) => { width: number; height: number } } = {},
+  opts: {
+    zoomedPaneId?: string | null;
+    viewSync?: FakeViewSync;
+    followResize?: boolean;
+    measureSinglePane?: (paneId: string, element: HTMLElement) => { width: number; height: number };
+    pinia?: Pinia;
+    multiPane?: boolean;
+    showLabel?: boolean;
+    paneFrames?: boolean;
+  } = {},
 ) {
   const conn = makeConnection();
   const viewSync = opts.viewSync ?? { commit: vi.fn() };
@@ -47,8 +58,17 @@ function mountLayout(
       zoomedPaneId: opts.zoomedPaneId ?? null,
       ...(opts.followResize ? { followResize: true } : {}),
       ...(opts.measureSinglePane ? { measureSinglePane: opts.measureSinglePane } : {}),
+      ...(opts.multiPane !== undefined ? { multiPane: opts.multiPane } : {}),
+      ...(opts.showLabel !== undefined ? { showLabel: opts.showLabel } : {}),
+      ...(opts.paneFrames !== undefined ? { paneFrames: opts.paneFrames } : {}),
     },
-    global: { provide: { [ConnectionKey as symbol]: conn, [ViewSyncKey as symbol]: provided } },
+    global: {
+      // 20260922-tabbar-pane-appearance：PaneLayout.vue が `useSettingsStore()`（`paneBorders` の解決）を
+      // 直に呼ぶようになったため、Pinia が要る（無いと "no active Pinia" で落ちる）。呼び出し側が
+      // `paneBorders` を設定済みの pinia を渡せるよう、既定は毎回新しい `createPinia()`。
+      plugins: [opts.pinia ?? createPinia()],
+      provide: { [ConnectionKey as symbol]: conn, [ViewSyncKey as symbol]: provided },
+    },
     slots: {
       pane: '<template #pane="{ paneId }"><div class="fake-pane" :data-pane-id="paneId"></div></template>',
     },
@@ -419,5 +439,71 @@ describe("PaneLayout — pane の枠（paneFrames。D110）", () => {
     const { wrapper } = mountLayout(SPLIT_LAYOUT);
     expect(wrapper.find(".pane-frame-edge").exists()).toBe(false);
     expect(wrapper.find(".pane-frame-enabled").exists()).toBe(false);
+  });
+});
+
+describe("PaneLayout — 枠の3値の解決・multiPane/showLabel の引き継ぎ（20260922-tabbar-pane-appearance）", () => {
+  function piniaWithPaneBorders(mode: "auto" | "always" | "off") {
+    const pinia = createPinia();
+    useSettingsStore(pinia).setPaneBorders(mode);
+    return pinia;
+  }
+
+  it("paneBorders=auto・multiPane=false（単独 pane）：枠は bordered=false", () => {
+    const pinia = piniaWithPaneBorders("auto");
+    const { wrapper } = mountLayout({ type: "pane", paneId: "p1" }, { pinia, paneFrames: true, multiPane: false });
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.classes()).not.toContain("pane-frame-edge-bordered");
+  });
+
+  it("paneBorders=auto・multiPane=true（分割中）：枠は bordered=true", () => {
+    const pinia = piniaWithPaneBorders("auto");
+    const { wrapper } = mountLayout(SPLIT_LAYOUT, { pinia, paneFrames: true, multiPane: true });
+    const edges = wrapper.findAll(".pane-frame-edge");
+    expect(edges.length).toBeGreaterThan(0);
+    for (const edge of edges) expect(edge.classes()).toContain("pane-frame-edge-bordered");
+  });
+
+  it("paneBorders=always：multiPane=false（単独 pane）でも bordered=true", () => {
+    const pinia = piniaWithPaneBorders("always");
+    const { wrapper } = mountLayout({ type: "pane", paneId: "p1" }, { pinia, paneFrames: true, multiPane: false });
+    expect(wrapper.get(".pane-frame-edge").classes()).toContain("pane-frame-edge-bordered");
+  });
+
+  it("paneBorders=off：multiPane=true（分割中）でも bordered=false", () => {
+    const pinia = piniaWithPaneBorders("off");
+    const { wrapper } = mountLayout(SPLIT_LAYOUT, { pinia, paneFrames: true, multiPane: true });
+    const edges = wrapper.findAll(".pane-frame-edge");
+    for (const edge of edges) expect(edge.classes()).not.toContain("pane-frame-edge-bordered");
+  });
+
+  it("multiPane・showLabel は再帰的に子の PaneLayout（したがって孫の PaneFrame）まで届く", () => {
+    const pinia = piniaWithPaneBorders("auto");
+    const NESTED: LayoutNode = {
+      type: "split",
+      id: "s1",
+      dir: "right",
+      ratio: 0.5,
+      a: { type: "pane", paneId: "p1" },
+      b: { type: "split", id: "s2", dir: "down", ratio: 0.5, a: { type: "pane", paneId: "p2" }, b: { type: "pane", paneId: "p3" } },
+    };
+    const { wrapper } = mountLayout(NESTED, { pinia, paneFrames: true, multiPane: true, showLabel: true });
+    // 3 つの葉（p1・p2・p3）全てに枠の色が届いている＝ multiPane が孫まで引き継がれている。
+    const edges = wrapper.findAll(".pane-frame-edge");
+    expect(edges).toHaveLength(3);
+    for (const edge of edges) expect(edge.classes()).toContain("pane-frame-edge-bordered");
+    // showLabel も孫まで届いていることを、葉の PaneFrame の実際の prop 値で直接確認する
+    // （taskcheck T6 round1 の指摘：枠の色だけでは showLabel の伝播を検証できていなかった）。
+    const frames = wrapper.findAllComponents(PaneFrame);
+    expect(frames).toHaveLength(3);
+    for (const frame of frames) expect(frame.props("showLabel")).toBe(true);
+  });
+
+  it("showLabel=false（既定）も孫まで正しく届く（true を混ぜて誤って通らないことの反対側）", () => {
+    const pinia = piniaWithPaneBorders("auto");
+    const { wrapper } = mountLayout(SPLIT_LAYOUT, { pinia, paneFrames: true, multiPane: true, showLabel: false });
+    const frames = wrapper.findAllComponents(PaneFrame);
+    expect(frames).toHaveLength(2);
+    for (const frame of frames) expect(frame.props("showLabel")).toBe(false);
   });
 });

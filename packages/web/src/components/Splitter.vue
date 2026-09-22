@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { inject, ref, watch } from "vue";
 import { ConnectionKey } from "../injection.js";
+import { useSettingsStore } from "../store/settings.js";
 
 /**
  * pane の境界（M2。architecture「マウス操作」・APG の Window Splitter）。Pointer Events でドラッグし、
  * 動いている間は `layout.set_split_ratio` を 50ms 間隔にまとめて送る。キーボードの矢印で 2% ずつ動かす。
+ *
+ * **隙間の視覚切り替え**（20260922-tabbar-pane-appearance。design「振る舞いの詳細 / pane の枠・外周・隙間」）：
+ * `settings.paneGaps` を**このコンポーネント自身が直接読む**——`multiPane`/`bordered`（`PaneFrame` 側）とは
+ * 違い、構造上の位置に関わらない単純なグローバル設定なので、`App.vue`/`PaneLayout.vue` を経由して prop で
+ * 通す必要が無い（decisions D4）。`paneGaps` が偽のとき、背景色を地の色（隣接する pane と同じ）に変える
+ * だけで、**`width`/`height`（4px）は変えない**（分割の当たり判定・ドラッグの掴める帯の大きさに影響しない
+ * ようにするため）。
  */
 const props = defineProps<{
   splitId: string;
@@ -15,6 +23,8 @@ const props = defineProps<{
 
 const conn = inject(ConnectionKey);
 if (!conn) throw new Error("Splitter: ConnectionKey が provide されていません");
+
+const settings = useSettingsStore();
 
 const STEP = 0.02;
 const SEND_INTERVAL_MS = 50;
@@ -97,7 +107,7 @@ function onKeydown(ev: KeyboardEvent): void {
     aria-valuemax="95"
     tabindex="0"
     class="splitter"
-    :class="dir"
+    :class="[dir, { 'splitter-no-gap': !settings.paneGaps }]"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
@@ -125,5 +135,12 @@ function onKeydown(ev: KeyboardEvent): void {
 .splitter.down {
   height: 4px;
   cursor: row-resize;
+}
+/* 20260922-tabbar-pane-appearance（AC7）：隙間を切ると、地続きに見えるよう地の色に変える
+ * （`width`/`height` は変えない——ドラッグで掴める帯の大きさ・分割の当たり判定を変えないため）。
+ * `.splitter:focus-visible`（上）の詳細度（0,2,0）が `.splitter-no-gap`（0,1,0）より高いため、
+ * キーボード操作で場所が分かる既存の色は、隙間の設定に関わらずそのまま勝つ（追加のルール不要）。 */
+.splitter-no-gap {
+  background: var(--wtm-bg, #1e1f29);
 }
 </style>

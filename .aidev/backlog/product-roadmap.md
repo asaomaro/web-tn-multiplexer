@@ -25,7 +25,13 @@ parent: 20260918-web-terminal-multiplexer
   **既定を持つ**操作——scrollback を `$EDITOR` で開く（`edit_scrollback`＝herdr の既定 `prefix+e`）・設定の再読み込み（`reload_config`＝`prefix+shift+r`）は、いま「後続」の案内としてそのキーを使っている
   （`packages/web/src/keys/keymap.ts` の `NOT_YET_BINDINGS`）ので、実装したら**その案内を置き換える**。**実装の本体は別の行**（`edit_scrollback` は「端末機能の拡張」・`reload_config` は「外観と設定の残り」の設定の再読み込み）で、
   この行は「キーの割り当てに載せる分」だけ（同じ機能を 2 行で掴まない）。操作を足す work であって、割り当てを変える work ではない（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
-- [ ] 独自コマンドのキー: herdr の `[[keys.command]]`（`type` が `popup`・`pane`・`shell`・`plugin_action`）。サーバで任意のコマンドを走らせる仕組みと、その権限の設計が要る。`docs/herdr-parity.md` の H12（ポップアップ端末・独自コマンドのキー割り当て）（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+- [ ] 独自コマンドのキー: herdr の `[[keys.command]]`（`type` が `popup`・`pane`・`shell`・`plugin_action`）。サーバで任意のコマンドを走らせる仕組みと、その権限の設計が要る。`docs/herdr-parity.md` の H12（ポップアップ端末・独自コマンドのキー割り当て）（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）。
+  同じ「サーバで任意コマンドを走らせる仕組みと権限の設計」が要る後続として、herdr の tab バー右端の
+  `Command` エントリ（任意コマンドを定期実行して表示。20260922-tabbar-pane-appearance の requirements で
+  対象外）もこの基盤ができてから足せる（出典: .aidev/works/20260922-tabbar-pane-appearance/requirements.md の対象外）
+- [ ] pane のスクロールバー: herdr の `ui.pane_scrollbars`（インタラクティブなスクロールバーを端末の pane の
+  脇に描く）。本製品にスクロールバーの UI 自体が無く、新規のウィジェット実装が要る（トグル1つでは済まない）。
+  `docs/herdr-parity.md` の H23（出典: .aidev/works/20260922-tabbar-pane-appearance/requirements.md の対象外）
 - [ ] サイドバー・tab バーのボタン（`@keydown.stop`）や pane の枠にフォーカスがある間も、prefix・直接のキーを効かせる: いまはそのボタンにフォーカスが残ると、端末をクリックするまで届かない（prefix でも同じ既存の挙動）。
   ボタンの Enter/Space と入力欄への入力を守ったまま、修飾キー付き・prefix のキーだけを window へ通す形が要る（出典: .aidev/works/20260921-keybinding-customization/decisions.md D11）
 - [ ] キーの設定の使い勝手: 節「キー」の操作の絞り込み（いまは 34 個の `<details>` を順に開く）、衝突したときの「こちらへ移す」、macOS の非 US 配列で Option の chord の表示を押した字に合わせる
@@ -61,7 +67,19 @@ parent: 20260918-web-terminal-multiplexer
   17 テーマとも WCAG のコントラスト（文字 4.5・状態の記号 3 等）を満たすよう寄せ、単体テストで総当たり。既定は今までと同じ Dracula。
   実測: 単体 protocol 57・server 616・web 1203 本、E2E `theme-settings.spec.ts` 8 本（ほかの影響を受ける spec を含め一式で確認）。
   色の個別の上書き・明暗の変化をアプリへ知らせる（DSR 996・mode 2031）・選択の背景の見やすさは下の別の行に起こした
-- [ ] 外観と設定の残り: サイドバー行のカスタマイズ、tab バーの状態表示、pane の枠の設定、設定画面・再読み込み〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
+- [x] 外観と設定の残り（一部）: tab バーの位置・自動非表示・右端の状態表示、pane の枠・外周・隙間・
+  エージェント名表示の設定 → 20260922-tabbar-pane-appearance（設定の節「表示」に8項目を足した。herdr の
+  `ui.tab_bar_*`/`ui.pane_*` 相当。**herdr との違い**は docs/herdr-parity.md H22・H23 参照。
+  実測: 単体（全パッケージ）2230 本・E2E 一式 123 本（うち `tabbar-pane-appearance.spec.ts` 7 本）・
+  smoke pass。test 工程で既存 E2E 3 spec（4本）への退行を発見して直した（decisions D8）。回帰テストは
+  結線（`store/settings.ts` の `return` から8項目を外す等）を外して落ちることを確かめ、生出力を
+  `.aidev/works/20260922-tabbar-pane-appearance/test-result.md` に貼った。独立点検はタスク単位
+  （T1〜T10）＋cross の計11回・レビュー1ラウンド（must 3・should 4・nit 5 を解消。すべてタスク点検・cross
+  で解消し、レビュー本体は0件）)
+- [ ] 外観と設定の残り（残り）: サイドバー行のカスタマイズ（herdr の独自トークン・条件付き色のルールエンジン
+  相当。20260922-tabbar-pane-appearance の requirements で対象外にした理由: この work 単体よりずっと大きい
+  独立した機能）、設定画面・再読み込み〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典:
+  .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）、エージェントの会話の再開、名前付き session、更新時の引き継ぎ〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 配布と運用: 自己更新・更新チャネル、ログ、シェル補完〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）

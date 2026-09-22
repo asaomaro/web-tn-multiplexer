@@ -14,6 +14,16 @@ import {
 import { resolveKeymap, type ResolvedKeymap } from "../keys/keymap.js";
 import { loadThemePrefs, resolveTheme } from "../theme/themes.js";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
+import {
+  loadPaneBordersMode,
+  loadTabBarPosition,
+  loadTabBarRightEntries,
+  loadTabBarRightSeparator,
+  MAX_TAB_BAR_RIGHT_ENTRIES,
+  type PaneBordersMode,
+  type TabBarPosition,
+  type TabBarRightEntry,
+} from "../tabbar/tabBarRight.js";
 import { readPrefs, writePrefs } from "./view.js";
 
 /**
@@ -31,6 +41,31 @@ import { readPrefs, writePrefs } from "./view.js";
  */
 export function loadStatusSymbols(raw: unknown): boolean {
   return typeof raw === "boolean" ? raw : true;
+}
+
+/** 保存された boolean を読む。boolean でなければ渡した既定値（20260922-tabbar-pane-appearance の 4 つの入切に使う）。 */
+function loadFlag(raw: unknown, fallback: boolean): boolean {
+  return typeof raw === "boolean" ? raw : fallback;
+}
+
+/** tab が 1 つなら tab バーを自動的に隠すか。既定は herdr と同じ「切」（AC2）。 */
+export function loadHideTabBarWhenSingleTab(raw: unknown): boolean {
+  return loadFlag(raw, false);
+}
+
+/** pane 領域の外周の枠の有無。既定は herdr と同じ「入」（AC6）。 */
+export function loadPaneOuterBorders(raw: unknown): boolean {
+  return loadFlag(raw, true);
+}
+
+/** pane 間の隙間の有無。既定は herdr と同じ「入」（AC7）。 */
+export function loadPaneGaps(raw: unknown): boolean {
+  return loadFlag(raw, true);
+}
+
+/** pane の枠へのエージェント名表示。既定は herdr と同じ「切」（AC8）。 */
+export function loadShowAgentLabelsOnPaneBorders(raw: unknown): boolean {
+  return loadFlag(raw, false);
 }
 
 /**
@@ -161,6 +196,21 @@ export const useSettingsStore = defineStore("settings", () => {
   const keymap = computed<ResolvedKeymap>(() => resolveKeymap(keyPrefs.value).keymap);
 
   /**
+   * tab バーと pane の枠の外観（20260922-tabbar-pane-appearance。herdr の `ui.tab_bar_*`/`ui.pane_*` 相当。
+   * design「インターフェース / データ構造」）。**既定との差だけを持つ複合値（`keyPrefs`・`themeOverrides` の
+   * ような「差が無くなれば消す」構造）にはしない**——8 項目とも単純なプリミティブ/配列で、既存の `statusSymbols`・
+   * `newCwdPolicy` 等と同じ「常に書く」形に揃える（decisions D6）。
+   */
+  const tabBarPosition = ref<TabBarPosition>(loadTabBarPosition(initial["tabBarPosition"]));
+  const hideTabBarWhenSingleTab = ref(loadHideTabBarWhenSingleTab(initial["hideTabBarWhenSingleTab"]));
+  const tabBarRight = ref<TabBarRightEntry[]>(loadTabBarRightEntries(initial["tabBarRight"]));
+  const tabBarRightSeparator = ref(loadTabBarRightSeparator(initial["tabBarRightSeparator"]));
+  const paneBorders = ref<PaneBordersMode>(loadPaneBordersMode(initial["paneBorders"]));
+  const paneOuterBorders = ref(loadPaneOuterBorders(initial["paneOuterBorders"]));
+  const paneGaps = ref(loadPaneGaps(initial["paneGaps"]));
+  const showAgentLabelsOnPaneBorders = ref(loadShowAgentLabelsOnPaneBorders(initial["showAgentLabelsOnPaneBorders"]));
+
+  /**
    * 差し替えて保存する。**保存する形（`serializeKeyPrefs`）を読み直した結果を採る**——呼び出し側が検証（`validateAssignment`）を済ませているが、**読めない値**（構文が通らない文字列・
    * 送れない prefix）を渡されても反映せず捨てる（読み込みと同じ落とし方。二重の守り）。衝突・予約は読み込みの段では見ず、解決（`resolveKeymap`）が同じ規則で落とす（保存は残る）。
    * 状態も保存も同じなら何もしない（keymap を作り直さない・書かない）。**保存が状態と違うとき（壊れた `keys` が残っている等）は、状態はそのまま保存だけを直す**。差が無くなれば `keys` ごと消す。
@@ -217,6 +267,121 @@ export const useSettingsStore = defineStore("settings", () => {
     replaceKeyPrefs(emptyKeyPrefs());
   }
 
+  /** 反映と保存を同時に行う（AC1）。 */
+  function setTabBarPosition(v: TabBarPosition): void {
+    tabBarPosition.value = v;
+    writePrefs({ tabBarPosition: v });
+  }
+
+  /** 反映と保存を同時に行う（AC2）。 */
+  function setHideTabBarWhenSingleTab(v: boolean): void {
+    hideTabBarWhenSingleTab.value = v;
+    writePrefs({ hideTabBarWhenSingleTab: v });
+  }
+
+  /**
+   * `tabBarRight` を丸ごと差し替える。`loadTabBarRightEntries` を通して正規化・上限の切り詰めをしてから、
+   * **状態にも保存にも同じ内容が既にあれば何もしない**（`replaceKeyPrefs` と同じ二重の比較——メモリの
+   * 状態だけを見ると、別のタブが保存だけを直後に書き換えた場合に保存側のずれに気付けない。taskcheck
+   * T3 で指摘）。`add`/`remove`/`move`/`update` の各操作からもこれを経由する。
+   */
+  function setTabBarRight(entries: readonly TabBarRightEntry[]): void {
+    const normalized = loadTabBarRightEntries(entries);
+    const serialized = JSON.stringify(normalized);
+    const sameState = serialized === JSON.stringify(tabBarRight.value);
+    const sameStored = serialized === JSON.stringify(readPrefs()["tabBarRight"] ?? []);
+    if (sameState && sameStored) return;
+    if (!sameState) tabBarRight.value = normalized;
+    writePrefs({ tabBarRight: normalized });
+  }
+
+  /** 末尾に既定値のエントリを追加する（上限に達していたら何もしない。AC3）。 */
+  function addTabBarRightEntry(kind: TabBarRightEntry["kind"]): void {
+    if (tabBarRight.value.length >= MAX_TAB_BAR_RIGHT_ENTRIES) return;
+    const entry: TabBarRightEntry =
+      kind === "datetime" ? { kind, format: "time" } : kind === "text" ? { kind, text: "" } : { kind };
+    setTabBarRight([...tabBarRight.value, entry]);
+  }
+
+  /** 指定した位置のエントリを消す（AC3）。 */
+  function removeTabBarRightEntry(index: number): void {
+    setTabBarRight(tabBarRight.value.filter((_, i) => i !== index));
+  }
+
+  /** 指定した位置のエントリを 1 つ隣と入れ替える。端では何もしない（AC3）。 */
+  function moveTabBarRightEntry(index: number, direction: -1 | 1): void {
+    const next = index + direction;
+    if (index < 0 || index >= tabBarRight.value.length || next < 0 || next >= tabBarRight.value.length) return;
+    const reordered = [...tabBarRight.value];
+    const moved = reordered[index]!;
+    reordered[index] = reordered[next]!;
+    reordered[next] = moved;
+    setTabBarRight(reordered);
+  }
+
+  /** 指定した位置のエントリを差し替える（datetime の書式・text の文字列の変更。AC3・AC4）。 */
+  function updateTabBarRightEntry(index: number, entry: TabBarRightEntry): void {
+    if (index < 0 || index >= tabBarRight.value.length) return;
+    const next = [...tabBarRight.value];
+    next[index] = entry;
+    setTabBarRight(next);
+  }
+
+  /** 反映と保存を同時に行う（AC4）。 */
+  function setTabBarRightSeparator(v: string): void {
+    const normalized = loadTabBarRightSeparator(v);
+    tabBarRightSeparator.value = normalized;
+    writePrefs({ tabBarRightSeparator: normalized });
+  }
+
+  /** 反映と保存を同時に行う（AC5）。 */
+  function setPaneBorders(v: PaneBordersMode): void {
+    paneBorders.value = v;
+    writePrefs({ paneBorders: v });
+  }
+
+  /** 反映と保存を同時に行う（AC6）。 */
+  function setPaneOuterBorders(v: boolean): void {
+    paneOuterBorders.value = v;
+    writePrefs({ paneOuterBorders: v });
+  }
+
+  /** 反映と保存を同時に行う（AC7）。 */
+  function setPaneGaps(v: boolean): void {
+    paneGaps.value = v;
+    writePrefs({ paneGaps: v });
+  }
+
+  /** 反映と保存を同時に行う（AC8）。 */
+  function setShowAgentLabelsOnPaneBorders(v: boolean): void {
+    showAgentLabelsOnPaneBorders.value = v;
+    writePrefs({ showAgentLabelsOnPaneBorders: v });
+  }
+
+  /**
+   * 同じブラウザの別のウィンドウ・タブでの変更に追従する（`keys` の listener と同じ理由。20260922-tabbar-pane-appearance
+   * の 8 項目はどれも単純な値の「常に書く」形なので、保存値を読み直して違えば置き換えるだけでよい）。
+   */
+  window.addEventListener("storage", () => {
+    const prefs = readPrefs();
+    const nextPosition = loadTabBarPosition(prefs["tabBarPosition"]);
+    if (nextPosition !== tabBarPosition.value) tabBarPosition.value = nextPosition;
+    const nextHide = loadHideTabBarWhenSingleTab(prefs["hideTabBarWhenSingleTab"]);
+    if (nextHide !== hideTabBarWhenSingleTab.value) hideTabBarWhenSingleTab.value = nextHide;
+    const nextRight = loadTabBarRightEntries(prefs["tabBarRight"]);
+    if (JSON.stringify(nextRight) !== JSON.stringify(tabBarRight.value)) tabBarRight.value = nextRight;
+    const nextSeparator = loadTabBarRightSeparator(prefs["tabBarRightSeparator"]);
+    if (nextSeparator !== tabBarRightSeparator.value) tabBarRightSeparator.value = nextSeparator;
+    const nextBorders = loadPaneBordersMode(prefs["paneBorders"]);
+    if (nextBorders !== paneBorders.value) paneBorders.value = nextBorders;
+    const nextOuter = loadPaneOuterBorders(prefs["paneOuterBorders"]);
+    if (nextOuter !== paneOuterBorders.value) paneOuterBorders.value = nextOuter;
+    const nextGaps = loadPaneGaps(prefs["paneGaps"]);
+    if (nextGaps !== paneGaps.value) paneGaps.value = nextGaps;
+    const nextShowLabels = loadShowAgentLabelsOnPaneBorders(prefs["showAgentLabelsOnPaneBorders"]);
+    if (nextShowLabels !== showAgentLabelsOnPaneBorders.value) showAgentLabelsOnPaneBorders.value = nextShowLabels;
+  });
+
   return {
     statusSymbols,
     scrollback,
@@ -230,6 +395,14 @@ export const useSettingsStore = defineStore("settings", () => {
     effectiveTheme,
     keyPrefs,
     keymap,
+    tabBarPosition,
+    hideTabBarWhenSingleTab,
+    tabBarRight,
+    tabBarRightSeparator,
+    paneBorders,
+    paneOuterBorders,
+    paneGaps,
+    showAgentLabelsOnPaneBorders,
     setStatusSymbols,
     setScrollback,
     setNewCwdPolicy,
@@ -244,5 +417,17 @@ export const useSettingsStore = defineStore("settings", () => {
     resetKeyAction,
     resetKeyPrefix,
     resetAllKeys,
+    setTabBarPosition,
+    setHideTabBarWhenSingleTab,
+    setTabBarRight,
+    addTabBarRightEntry,
+    removeTabBarRightEntry,
+    moveTabBarRightEntry,
+    updateTabBarRightEntry,
+    setTabBarRightSeparator,
+    setPaneBorders,
+    setPaneOuterBorders,
+    setPaneGaps,
+    setShowAgentLabelsOnPaneBorders,
   };
 });

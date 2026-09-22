@@ -2,6 +2,7 @@
 import type { LayoutNode } from "@wtm/protocol";
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, onUpdated, reactive } from "vue";
 import { ViewSyncKey } from "../injection.js";
+import { useSettingsStore } from "../store/settings.js";
 import { createTrailingThrottle, RESIZE_COMMIT_INTERVAL_MS } from "../term/resizeThrottle.js";
 import type { MeasuredSize } from "../term/ViewSync.js";
 import PaneFrame from "./PaneFrame.vue";
@@ -51,6 +52,11 @@ import Splitter from "./Splitter.vue";
  * 開く縁。design M7）は葉の外に描く——葉は今までどおり端末を置く要素のままなので、`ViewSync` が葉で測る cols/rows に枠の太さは
  * 入らない（枠を `TerminalPane` の中に置くと、測った大きさより端末の置き場が狭くなり、右端・下端の文字が切れる）。`:key` は
  * 外側の `PaneFrame` に付ける（表示する pane が替わったら枠ごと葉を作り直す。上の D86 と同じ）。葉の ref は D105 のまま。
+ *
+ * **枠の 3 値の解決はここで行う**（20260922-tabbar-pane-appearance。design「振る舞いの詳細 / pane の枠・外周・隙間」）。
+ * `multiPane`（そのタブが分割されているか。`App.vue` が 1 回だけ計算し、`paneFrames` と同じ要領で子の
+ * `PaneLayout` へ再帰的に引き継ぐ）と `settings.paneBorders` から `bordered` を算出し、葉の `PaneFrame` へ
+ * 計算済みの boolean として渡す——`PaneFrame` 自身は `paneBorders`/`multiPane`/store のどれも知らない。
  */
 const props = defineProps<{
   workspaceId: string;
@@ -77,6 +83,13 @@ const props = defineProps<{
    * モバイルの `MobileShell` は付けない（葉を PTY の大きさの縮小の枠に置くので、縁を足すと端末がはみ出る）。
    */
   paneFrames?: boolean;
+  /**
+   * そのタブが分割されているか（20260922-tabbar-pane-appearance）。`App.vue` が 1 回だけ計算し、
+   * `paneFrames` と同じ要領で子の `PaneLayout` へそのまま渡す。`paneBorders==="auto"` の判定に使う。
+   */
+  multiPane?: boolean;
+  /** pane の枠へエージェント名を表示するか（`settings.showAgentLabelsOnPaneBorders`）。子へそのまま渡す。 */
+  showLabel?: boolean;
 }>();
 
 defineSlots<{ pane(props: { paneId: string }): unknown }>();
@@ -109,6 +122,23 @@ function observeLeaf(el: HTMLElement, attached: boolean): void {
 /** zoom 中はそれ、そうでなければ `layout` が pane 単体のときのその id（分割ノードなら null）。 */
 const singlePaneId = computed<string | null>(() => props.zoomedPaneId ?? (props.layout.type === "pane" ? props.layout.paneId : null));
 const splitLayout = computed(() => (props.layout.type === "split" ? props.layout : null));
+
+/**
+ * 枠を出すか（20260922-tabbar-pane-appearance）。`paneBorders` が "always"/"off" ならそれに従い、
+ * "auto" なら `multiPane`（分割されているか）に従う。`props.paneFrames` が false（モバイル等）のときは
+ * `PaneFrame` 自体が `enabled=false` になり描かないので、ここでは `paneBorders` の解決だけを行う。
+ */
+const settings = useSettingsStore();
+const bordered = computed(() => {
+  switch (settings.paneBorders) {
+    case "always":
+      return true;
+    case "off":
+      return false;
+    case "auto":
+      return !!props.multiPane;
+  }
+});
 
 function registerLeaf(paneId: string, el: HTMLElement, attached: boolean): void {
   if (props.registerLeaf) {
@@ -175,20 +205,36 @@ defineExpose({ commitView });
 </script>
 
 <template>
-  <PaneFrame v-if="singlePaneId" :key="singlePaneId" :pane-id="singlePaneId" :enabled="paneFrames">
+  <PaneFrame v-if="singlePaneId" :key="singlePaneId" :pane-id="singlePaneId" :enabled="paneFrames" :bordered="bordered" :show-label="showLabel">
     <div class="pane-layout-leaf" :class="{ 'pane-layout-zoomed': !!zoomedPaneId }" :ref="leafRef(singlePaneId)">
       <slot name="pane" :pane-id="singlePaneId" />
     </div>
   </PaneFrame>
   <div v-else-if="splitLayout" class="pane-layout-split" :class="splitLayout.dir">
     <div class="pane-layout-side" :style="{ flexBasis: `${splitLayout.ratio * 100}%` }">
-      <PaneLayout :workspace-id="workspaceId" :tab-id="tabId" :layout="splitLayout.a" :register-leaf="registerLeaf" :pane-frames="paneFrames">
+      <PaneLayout
+        :workspace-id="workspaceId"
+        :tab-id="tabId"
+        :layout="splitLayout.a"
+        :register-leaf="registerLeaf"
+        :pane-frames="paneFrames"
+        :multi-pane="multiPane"
+        :show-label="showLabel"
+      >
         <template #pane="slotProps"><slot name="pane" :pane-id="slotProps.paneId" /></template>
       </PaneLayout>
     </div>
     <Splitter :split-id="splitLayout.id" :tab-id="tabId" :ratio="splitLayout.ratio" :dir="splitLayout.dir" />
     <div class="pane-layout-side" :style="{ flexBasis: `${(1 - splitLayout.ratio) * 100}%` }">
-      <PaneLayout :workspace-id="workspaceId" :tab-id="tabId" :layout="splitLayout.b" :register-leaf="registerLeaf" :pane-frames="paneFrames">
+      <PaneLayout
+        :workspace-id="workspaceId"
+        :tab-id="tabId"
+        :layout="splitLayout.b"
+        :register-leaf="registerLeaf"
+        :pane-frames="paneFrames"
+        :multi-pane="multiPane"
+        :show-label="showLabel"
+      >
         <template #pane="slotProps"><slot name="pane" :pane-id="slotProps.paneId" /></template>
       </PaneLayout>
     </div>

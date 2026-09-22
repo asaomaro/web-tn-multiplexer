@@ -3,11 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, watch } from "vue";
 import {
   buildNewCwd,
+  loadHideTabBarWhenSingleTab,
   loadNewCwdPath,
   loadNewCwdPolicy,
+  loadPaneGaps,
+  loadPaneOuterBorders,
+  loadShowAgentLabelsOnPaneBorders,
   loadStatusSymbols,
   useSettingsStore,
 } from "./settings.js";
+import { MAX_TAB_BAR_RIGHT_ENTRIES } from "../tabbar/tabBarRight.js";
 import { readPrefs, writePrefs } from "./view.js";
 
 let pinia: Pinia;
@@ -432,5 +437,195 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
     expect(b.keymap.prefix).toBe("ctrl+b");
     b.setKeyPrefix(null);
     expect(readPrefs()).not.toHaveProperty("keys");
+  });
+});
+
+describe("loadHideTabBarWhenSingleTab・loadPaneOuterBorders・loadPaneGaps・loadShowAgentLabelsOnPaneBorders（AC2・AC6・AC7・AC8）", () => {
+  it("boolean はそのまま", () => {
+    expect(loadHideTabBarWhenSingleTab(true)).toBe(true);
+    expect(loadPaneOuterBorders(false)).toBe(false);
+    expect(loadPaneGaps(false)).toBe(false);
+    expect(loadShowAgentLabelsOnPaneBorders(true)).toBe(true);
+  });
+  it("boolean でなければ、それぞれの既定へ（herdr と同じ）", () => {
+    for (const raw of [undefined, null, "true", 0, {}, []]) {
+      expect(loadHideTabBarWhenSingleTab(raw), String(raw)).toBe(false);
+      expect(loadPaneOuterBorders(raw), String(raw)).toBe(true);
+      expect(loadPaneGaps(raw), String(raw)).toBe(true);
+      expect(loadShowAgentLabelsOnPaneBorders(raw), String(raw)).toBe(false);
+    }
+  });
+});
+
+describe("useSettingsStore — タブバーと pane の枠の外観（20260922-tabbar-pane-appearance）", () => {
+  it("何も保存されていなければ、herdr と同じ既定値（AC9）", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.tabBarPosition).toBe("top");
+    expect(store.hideTabBarWhenSingleTab).toBe(false);
+    expect(store.tabBarRight).toEqual([]);
+    expect(store.tabBarRightSeparator).toBe(" ");
+    expect(store.paneBorders).toBe("auto");
+    expect(store.paneOuterBorders).toBe(true);
+    expect(store.paneGaps).toBe(true);
+    expect(store.showAgentLabelsOnPaneBorders).toBe(false);
+  });
+
+  it("setTabBarPosition・setHideTabBarWhenSingleTab は反映と保存を同時に行う（AC1・AC2）", () => {
+    const store = useSettingsStore(pinia);
+    store.setTabBarPosition("bottom");
+    expect(store.tabBarPosition).toBe("bottom");
+    expect(readPrefs()["tabBarPosition"]).toBe("bottom");
+    store.setHideTabBarWhenSingleTab(true);
+    expect(store.hideTabBarWhenSingleTab).toBe(true);
+    expect(readPrefs()["hideTabBarWhenSingleTab"]).toBe(true);
+  });
+
+  it("setPaneBorders・setPaneOuterBorders・setPaneGaps・setShowAgentLabelsOnPaneBorders は反映と保存を同時に行う（AC5〜AC8）", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneBorders("always");
+    expect(store.paneBorders).toBe("always");
+    expect(readPrefs()["paneBorders"]).toBe("always");
+    store.setPaneOuterBorders(false);
+    expect(store.paneOuterBorders).toBe(false);
+    expect(readPrefs()["paneOuterBorders"]).toBe(false);
+    store.setPaneGaps(false);
+    expect(store.paneGaps).toBe(false);
+    expect(readPrefs()["paneGaps"]).toBe(false);
+    store.setShowAgentLabelsOnPaneBorders(true);
+    expect(store.showAgentLabelsOnPaneBorders).toBe(true);
+    expect(readPrefs()["showAgentLabelsOnPaneBorders"]).toBe(true);
+  });
+
+  it("addTabBarRightEntry は既定値で末尾に追加する（種類ごとの既定値。AC3）", () => {
+    const store = useSettingsStore(pinia);
+    store.addTabBarRightEntry("zoom");
+    store.addTabBarRightEntry("hostname");
+    store.addTabBarRightEntry("datetime");
+    store.addTabBarRightEntry("text");
+    expect(store.tabBarRight).toEqual([
+      { kind: "zoom" },
+      { kind: "hostname" },
+      { kind: "datetime", format: "time" },
+      { kind: "text", text: "" },
+    ]);
+    expect(readPrefs()["tabBarRight"]).toEqual(store.tabBarRight);
+  });
+
+  it(`addTabBarRightEntry は上限（${MAX_TAB_BAR_RIGHT_ENTRIES}件）に達したら何もしない`, () => {
+    const store = useSettingsStore(pinia);
+    for (let i = 0; i < MAX_TAB_BAR_RIGHT_ENTRIES; i++) store.addTabBarRightEntry("zoom");
+    expect(store.tabBarRight).toHaveLength(MAX_TAB_BAR_RIGHT_ENTRIES);
+    store.addTabBarRightEntry("hostname");
+    expect(store.tabBarRight).toHaveLength(MAX_TAB_BAR_RIGHT_ENTRIES); // 増えない
+  });
+
+  it("removeTabBarRightEntry は指定した位置だけを消す", () => {
+    const store = useSettingsStore(pinia);
+    store.addTabBarRightEntry("zoom");
+    store.addTabBarRightEntry("hostname");
+    store.addTabBarRightEntry("text");
+    store.removeTabBarRightEntry(1);
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }, { kind: "text", text: "" }]);
+  });
+
+  it("removeTabBarRightEntry・updateTabBarRightEntry は範囲外の index・空配列でも落ちない（タスク点検で追加）", () => {
+    const store = useSettingsStore(pinia);
+    // 空配列に対して：filter は何もヒットせず、update は範囲チェックで no-op。
+    store.removeTabBarRightEntry(0);
+    expect(store.tabBarRight).toEqual([]);
+    store.updateTabBarRightEntry(0, { kind: "zoom" });
+    expect(store.tabBarRight).toEqual([]);
+
+    store.addTabBarRightEntry("zoom");
+    store.removeTabBarRightEntry(-1); // filter は該当しないので何も消えない
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }]);
+    store.removeTabBarRightEntry(99); // 範囲外
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }]);
+    store.updateTabBarRightEntry(-1, { kind: "hostname" }); // 範囲外 index は何もしない
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }]);
+    store.updateTabBarRightEntry(5, { kind: "hostname" });
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }]);
+  });
+
+  it("moveTabBarRightEntry は隣と入れ替える。端では何もしない", () => {
+    const store = useSettingsStore(pinia);
+    store.addTabBarRightEntry("zoom");
+    store.addTabBarRightEntry("hostname");
+    store.moveTabBarRightEntry(1, 1); // 末尾を下へは動かせない
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }, { kind: "hostname" }]);
+    store.moveTabBarRightEntry(1, -1);
+    expect(store.tabBarRight).toEqual([{ kind: "hostname" }, { kind: "zoom" }]);
+    store.moveTabBarRightEntry(0, -1); // 先頭を上へは動かせない
+    expect(store.tabBarRight).toEqual([{ kind: "hostname" }, { kind: "zoom" }]);
+  });
+
+  it("updateTabBarRightEntry は指定した位置だけを差し替える（datetime の書式・text の文字列）", () => {
+    const store = useSettingsStore(pinia);
+    store.addTabBarRightEntry("datetime");
+    store.addTabBarRightEntry("text");
+    store.updateTabBarRightEntry(0, { kind: "datetime", format: "date-time" });
+    store.updateTabBarRightEntry(1, { kind: "text", text: "hello" });
+    expect(store.tabBarRight).toEqual([
+      { kind: "datetime", format: "date-time" },
+      { kind: "text", text: "hello" },
+    ]);
+  });
+
+  it("setTabBarRight は壊れた要素を個別に落として保存する（AC10）", () => {
+    const store = useSettingsStore(pinia);
+    store.setTabBarRight([{ kind: "zoom" }, { kind: "unknown" } as never, { kind: "hostname" }]);
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }, { kind: "hostname" }]);
+  });
+
+  it("setTabBarRightSeparator は制御文字を除去・上限で切り詰める（AC4）", () => {
+    const store = useSettingsStore(pinia);
+    store.setTabBarRightSeparator(" · ");
+    expect(store.tabBarRightSeparator).toBe(" · ");
+    expect(readPrefs()["tabBarRightSeparator"]).toBe(" · ");
+  });
+
+  it("同じ値を書いても setItem を呼ばない（無駄な保存をしない）", () => {
+    const store = useSettingsStore(pinia);
+    store.addTabBarRightEntry("zoom");
+    const setItem = vi.spyOn(localStorage, "setItem");
+    try {
+      store.setTabBarRight([{ kind: "zoom" }]); // 同じ内容
+      expect(setItem).not.toHaveBeenCalled();
+      store.setTabBarPosition("top"); // 既定と同じ値でも、setter は無条件で書く（他の設定項目と同じ仕様）
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it("他の設定を消さない（併合して書く）", () => {
+    writePrefs({ statusSymbols: false, theme: "nord" });
+    const store = useSettingsStore(pinia);
+    store.setTabBarPosition("bottom");
+    expect(readPrefs()["statusSymbols"]).toBe(false);
+    expect(readPrefs()["theme"]).toBe("nord");
+    expect(readPrefs()["tabBarPosition"]).toBe("bottom");
+  });
+
+  it("別のウィンドウでの変更に storage イベントで追従する（8項目とも）", () => {
+    const store = useSettingsStore(pinia);
+    writePrefs({
+      tabBarPosition: "bottom",
+      hideTabBarWhenSingleTab: true,
+      tabBarRight: [{ kind: "zoom" }],
+      tabBarRightSeparator: " · ",
+      paneBorders: "off",
+      paneOuterBorders: false,
+      paneGaps: false,
+      showAgentLabelsOnPaneBorders: true,
+    });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.tabBarPosition).toBe("bottom");
+    expect(store.hideTabBarWhenSingleTab).toBe(true);
+    expect(store.tabBarRight).toEqual([{ kind: "zoom" }]);
+    expect(store.tabBarRightSeparator).toBe(" · ");
+    expect(store.paneBorders).toBe("off");
+    expect(store.paneOuterBorders).toBe(false);
+    expect(store.paneGaps).toBe(false);
+    expect(store.showAgentLabelsOnPaneBorders).toBe(true);
   });
 });
