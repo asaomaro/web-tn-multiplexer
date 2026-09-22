@@ -63,7 +63,9 @@ const helpGroups = computed<HelpGroup[]>(() => [
     entries: [
       { keys: settings.keymap.prefix, label: "prefix（押したあと、次のキーで操作します）" },
       ...actionEntries("全体"),
-      ...notYetEntry("shift+r"),
+      // shift+r は 20260922-appearance-settings-rest T7 で reload_config（全体）の既定割り当てに
+      // 昇格したので、上の actionEntries("全体") が既にこの行を出す（`notYetEntry("shift+r")` は
+      // 呼ぶ必要が無くなった——常に空を返すだけになる）。
     ],
   },
   { name: "移動", entries: NAVIGATE_ENTRIES },

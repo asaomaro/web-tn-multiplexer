@@ -70,6 +70,7 @@ export type Action =
   | { type: "nextNotification" } // 同（prefix+o）
   | { type: "detach" }
   | { type: "notYet"; work: string } // 後続のキー
+  | { type: "reloadConfig" } // prefix+shift+r（20260922-appearance-settings-rest の herdr `reload_config` 相当）
   | { type: "navigate"; op: "up" | "down" | "paneDir" | "activate" | "cancel"; dir?: Dir }
   | { type: "resizeBy"; dir: Dir; amount: number }
   | { type: "copy"; cmd: CopyCommand };

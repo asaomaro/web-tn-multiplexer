@@ -227,7 +227,14 @@ test("pane の枠はキーボードでも開ける：tab バーから Tab で枠
   await page.goto(`${appServer.origin}/#token=${appServer.token}`);
   await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
 
-  await page.locator(".tab-bar-item").first().click(); // 端末の外（端末の中では Tab は端末へ届く）
+  // tab バー自体が無いと Tab で辿り着けない（20260922-appearance-settings-rest の自動非表示・AC4。
+  // この work 以前は tab が1個でも常に表示されていた）ので、もう1つ tab を作って表示させる。
+  await focusTerminal(page);
+  await prefixKey(page, "c");
+  await page.keyboard.press("Enter"); // 名前は既定のまま
+  await expect(page.locator(".tab-bar-item")).toHaveCount(2);
+
+  await page.locator(".tab-bar-item").last().click(); // 端末の外（端末の中では Tab は端末へ届く）。最後の項目から始めると「＋」まで Tab 1回で着く（tab-bar-item が1個の頃と同じ）
   await page.keyboard.press("Tab"); // tab バーの「＋」（20260920-sidebar-tabbar-controls で足した）
   await expect(page.locator(".tab-bar-new")).toBeFocused();
   await page.keyboard.press("Tab");
@@ -276,8 +283,24 @@ test("分割した 2 つ目の pane も、prefix のキーで選んでから、t
   await page.goto(`${appServer.origin}/#token=${appServer.token}`);
   await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
   await focusTerminal(page);
+
+  // tab バー自体が無いと、この後 tab バーへフォーカスを置けない（20260922-appearance-settings-rest
+  // の自動非表示・AC4。この work 以前は tab が1個でも常に表示されていた）ので、もう1つ tab を作って
+  // 表示させ、**最初の tab（これから分割する方）へ戻る**（作った直後は新しい方が選ばれているため）。
+  const newTabCreated = client.waitForEvent("pane.created");
+  await prefixKey(page, "c");
+  await page.keyboard.press("Enter"); // 名前は既定のまま
+  const newTabPaneId = (await newTabCreated).data.pane.id; // 分割の pane.created と取り違えないよう捕まえておく
+  await expect(page.locator(".tab-bar-item")).toHaveCount(2);
+  await page.keyboard.press("Control+b");
+  await page.keyboard.press("1");
+  await focusTerminal(page);
+
   const p1 = client.helloSnapshot()!.panes[0]!.id;
-  const created = client.waitForEvent("pane.created");
+  // `waitForEvent` は述語を付けないと「直前に届いた最後の pane.created」を即座に返す（`wsClient.ts`）。
+  // 上の tab 作成自身の pane.created が既に「最後」になっているので、述語でそれを除く
+  // （さもないと分割ではなく tab 作成の方の pane を拾ってしまう）。
+  const created = client.waitForEvent("pane.created", (e) => e.data.pane.id !== newTabPaneId);
   await prefixKey(page, "v"); // 右へ分割（焦点は新しい p2）
   const p2 = (await created).data.pane.id;
   await expect.poll(shown).toContain(p2);
@@ -293,7 +316,10 @@ test("分割した 2 つ目の pane も、prefix のキーで選んでから、t
 
   // 端末の外へ出る。実際にはブラウザのキー（アドレスバーへ出てページへ戻る等）で出るが、ヘッドレスのブラウザでは押せないので、
   // tab バーへフォーカスを置いて代える。そこから Tab で進む順を記録する。
-  await page.locator(".tab-bar-item").first().focus();
+  // 最後の tab 項目（さっき作った2つ目の tab）から始めると「＋」まで Tab 1回で着き、下の期待値は変わらない
+  // （DOM の順は tab-bar-item が先、いま表示中の tab の内容はその後ろに続く——どちらの tab-bar-item から
+  // 始めても、続く Tab は同じ「＋」→表示中の内容、という順になる）。
+  await page.locator(".tab-bar-item").last().focus();
   const order: string[] = [];
   for (let i = 0; i < 5 && order.at(-1) !== "frame@pane2"; i++) {
     await page.keyboard.press("Tab");
@@ -472,23 +498,32 @@ test("全体のメニュー：キーボードだけで開いて閉じ、開い�
   await page.goto(`${appServer.origin}/#token=${appServer.token}`);
   await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
 
+  // tab バー自体が無いと、この後の Tab の並びに tab-bar-item が出てこない（20260922-appearance-settings-rest
+  // の自動非表示・AC4。この work 以前は tab が1個でも常に表示されていた）ので、もう1つ tab を作って表示させる。
+  await focusTerminal(page);
+  await prefixKey(page, "c");
+  await page.keyboard.press("Enter"); // 名前は既定のまま
+  await expect(page.locator(".tab-bar-item")).toHaveCount(2);
+
   // **Tab で到達できること自体を確かめる**（`.focus()` で飛ばすと「キーボードだけで」を確かめたことにならない）。
   // サイドバーは DOM の先頭側にあるので、焦点を外した状態から Tab を押すと足したボタンが順に出る。
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   const reached: string[] = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 8; i++) {
     await page.keyboard.press("Tab");
     reached.push(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.className ?? ""));
   }
   const trail = reached.join(" → ");
-  // 足した 4 つのボタンが、この順に Tab で出る（DOM の順＝新規・メニュー・ソート・折りたたみ）。
+  // 5 つのボタンが、この順に Tab で出る（DOM の順＝spaces の並び順・＋新規・メニュー・agents の並び順・折りたたみ。
+  // 20260922-appearance-settings-rest で spaces 区画にも並び順ボタンが増えた）。
   // 先頭にはクラス名を持たない要素が挟まることがあるので、見たい要素だけを抜き出して順序を見る。
   const btns = reached.filter((c) => c.includes("sidebar-btn") || c.includes("tab-bar-item"));
-  expect(btns[0], trail).toBe("sidebar-btn");
-  expect(btns[1], trail).toContain("sidebar-btn-right");
-  expect(btns[2], trail).toContain("sidebar-sort-btn");
-  expect(btns[3], trail).toContain("sidebar-collapse-btn");
-  expect(btns[4], trail).toContain("tab-bar-item"); // サイドバーを抜けるとタブへ
+  expect(btns[0], trail).toContain("sidebar-sort-btn"); // spaces の並び順
+  expect(btns[1], trail).toBe("sidebar-btn"); // ＋ 新規
+  expect(btns[2], trail).toContain("sidebar-btn-right"); // メニュー
+  expect(btns[3], trail).toContain("sidebar-sort-btn"); // agents の並び順
+  expect(btns[4], trail).toContain("sidebar-collapse-btn");
+  expect(btns[5], trail).toContain("tab-bar-item"); // サイドバーを抜けるとタブへ
 
   // 「メニュー」へ戻って Enter で開く。
   const menuBtn = page.locator(".sidebar-section-footer .sidebar-btn-right");
@@ -511,12 +546,14 @@ test("agents の並び順は、切り替えると再読み込みしても残る�
   await page.goto(`${appServer.origin}/#token=${appServer.token}`);
   await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
 
-  const sortBtn = page.locator(".sidebar-section-header .sidebar-sort-btn");
+  // `.sidebar-agents` に絞る——20260922-appearance-settings-rest で spaces 区画にも同じ形の
+  // 並び順ボタン（`.sidebar-sort-btn`）が増えたので、絞らないと2つに一致してしまう。
+  const sortBtn = page.locator(".sidebar-agents .sidebar-section-header .sidebar-sort-btn");
   await expect(sortBtn).toHaveText("グループ順"); // 既定（内部の値は grouped）
   await sortBtn.click();
   await expect(sortBtn).toHaveText("優先度順");
 
   await page.reload();
   await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
-  await expect(page.locator(".sidebar-section-header .sidebar-sort-btn")).toHaveText("優先度順");
+  await expect(page.locator(".sidebar-agents .sidebar-section-header .sidebar-sort-btn")).toHaveText("優先度順");
 });

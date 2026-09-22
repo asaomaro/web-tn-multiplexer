@@ -217,14 +217,22 @@ describe("validateAssignment — prefix の後のキー（AC4・AC6 (a)(b)(c)）
     ).toContain("貼り付け");
   });
 
-  it("「後続」の案内のキー（shift+r・e）は空いているものとして通る（別の操作が優先される）", () => {
+  it("「後続」の案内のキー（e）は空いているものとして通る（別の操作が優先される）", () => {
+    // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てに昇格した
+    // ので、「後続」の案内として残っているのは e だけ（下のテストで、shift+r は既に
+    // reload_config が使っている＝空いていないことを確かめる）。
     expect(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "e" }))).toEqual({
       ok: true,
       binding: "prefix+e",
     });
+  });
+
+  it("shift+r は reload_config が既定で使っているので、別の操作への割り当ては拒否する", () => {
     expect(
-      validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "R", shift: true })),
-    ).toEqual({ ok: true, binding: "prefix+shift+r" });
+      reason(
+        validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "R", shift: true })),
+      ),
+    ).toContain("設定を読み直す");
   });
 });
 

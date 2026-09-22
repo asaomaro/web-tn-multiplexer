@@ -5,7 +5,10 @@ import {
   buildNewCwd,
   loadNewCwdPath,
   loadNewCwdPolicy,
+  loadPaneAgentNameVisible,
+  loadPaneFrameThickness,
   loadStatusSymbols,
+  PANE_FRAME_THICKNESS_PX,
   useSettingsStore,
 } from "./settings.js";
 import { readPrefs, writePrefs } from "./view.js";
@@ -31,6 +34,67 @@ describe("loadStatusSymbols（AC3・AC7）", () => {
     for (const raw of [undefined, null, "false", 0, 1, {}, []]) {
       expect(loadStatusSymbols(raw), String(raw)).toBe(true);
     }
+  });
+});
+
+// 20260922-appearance-settings-rest T3。
+describe("loadPaneFrameThickness・loadPaneAgentNameVisible（AC9〜AC12 の下地）", () => {
+  it("3つのどれかはそのまま", () => {
+    expect(loadPaneFrameThickness("thin")).toBe("thin");
+    expect(loadPaneFrameThickness("default")).toBe("default");
+    expect(loadPaneFrameThickness("thick")).toBe("thick");
+  });
+
+  it("3つのどれでもなければ既定（default）", () => {
+    for (const raw of [undefined, null, "medium", 4, {}, true]) {
+      expect(loadPaneFrameThickness(raw), String(raw)).toBe("default");
+    }
+  });
+
+  it("PANE_FRAME_THICKNESS_PX は3段階とも既定 4px を挟んで単調に増える", () => {
+    expect(PANE_FRAME_THICKNESS_PX.thin).toBeLessThan(PANE_FRAME_THICKNESS_PX.default);
+    expect(PANE_FRAME_THICKNESS_PX.default).toBe(4); // 今までの固定値（回帰なし）
+    expect(PANE_FRAME_THICKNESS_PX.default).toBeLessThan(PANE_FRAME_THICKNESS_PX.thick);
+  });
+
+  it("エージェント名表示は boolean はそのまま、それ以外は既定の「切」", () => {
+    expect(loadPaneAgentNameVisible(true)).toBe(true);
+    expect(loadPaneAgentNameVisible(false)).toBe(false);
+    for (const raw of [undefined, null, "true", 1, {}]) {
+      expect(loadPaneAgentNameVisible(raw), String(raw)).toBe(false);
+    }
+  });
+});
+
+describe("useSettingsStore — pane の枠・隙間の太さ／エージェント名表示（20260922-appearance-settings-rest）", () => {
+  it("何も保存されていなければ、太さは既定・エージェント名表示は無効", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.paneFrameThickness).toBe("default");
+    expect(store.paneAgentNameVisible).toBe(false);
+  });
+
+  it("太さを変えると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneFrameThickness("thick");
+    expect(store.paneFrameThickness, "押した時点で反映").toBe("thick");
+    expect(readPrefs()["paneFrameThickness"]).toBe("thick");
+    expect(useSettingsStore(createPinia()).paneFrameThickness).toBe("thick");
+  });
+
+  it("エージェント名表示を有効にすると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneAgentNameVisible(true);
+    expect(store.paneAgentNameVisible, "押した時点で反映").toBe(true);
+    expect(readPrefs()["paneAgentNameVisible"]).toBe(true);
+    expect(useSettingsStore(createPinia()).paneAgentNameVisible).toBe(true);
+  });
+
+  // `statusSymbols`/`newCwdPolicy` と同じ形（AC3 相当）：壊れた値でも起動できる。
+  it("保存された値が壊れていれば既定で起動する", () => {
+    writePrefs({ paneFrameThickness: "medium", paneAgentNameVisible: "yes" });
+    const store = useSettingsStore(createPinia());
+    expect(store.paneFrameThickness).toBe("default");
+    expect(store.paneAgentNameVisible).toBe(false);
   });
 });
 

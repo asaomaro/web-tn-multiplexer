@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, ref } from "vue";
 import { ActionDispatcherKey, TerminalRegistryKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import PaneFrame from "./PaneFrame.vue";
 
@@ -163,6 +164,56 @@ describe("PaneFrame（pane の枠。M7 の後半・D110）", () => {
     expect(frame.attributes("aria-current")).toBeUndefined();
   });
 });
+
+// 20260922-appearance-settings-rest T4（design「振る舞いの詳細」US4）。
+describe("PaneFrame — エージェント名の可視表示（AC11・AC12）", () => {
+  it("既定（設定が無効）では、名前があっても画面に出さない（aria-label だけ。AC12）", () => {
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(false);
+    expect(wrapper.get(".pane-frame-edge").attributes("aria-label")).toBe("pane「build」のメニュー");
+  });
+
+  it("設定を有効にすると、名前が可視のテキストで出る（AC11）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name");
+    expect(name.text()).toBe("build");
+    expect(name.attributes("aria-hidden")).toBe("true"); // aria-label と二重に読み上げない
+  });
+
+  it("設定が有効でも、名前が無い pane では何も出さない", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1")); // label なし・agent なし
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(false);
+  });
+
+  it("有効にした後、無効に戻すと消える", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(true);
+    settings.setPaneAgentNameVisible(false);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(false);
+  });
+
+  it("enabled でなければ設定に触れず、名前も出さない（モバイル）", () => {
+    const { wrapper } = mountFrame({ enabled: false, withPinia: false });
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(false);
+  });
+});
+
+// 枠・隙間の太さ（AC9）の実際の反映は、happy-dom が `var()` を解決しないため単体テストでは
+// 確かめられない（`getComputedStyle` の戻り値が信頼できない）。E2E（T8）で実測する。
 
 // AC4・AC5：強調はマウスの位置ではなく選択で決まる（以前は `:hover` だけが枠を塗っていた）。
 describe("PaneFrame — 強調は選ばれている pane に付く", () => {

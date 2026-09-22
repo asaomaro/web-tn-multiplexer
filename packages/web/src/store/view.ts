@@ -35,6 +35,10 @@ function saveStoredView(v: StoredView): void {
 /** agents の並び順（20260920-sidebar-tabbar-controls）。`grouped` は並べ替えない（既定）。 */
 export type AgentSort = "grouped" | "priority";
 
+/** workspace（spaces 区画）の並び順（20260922-appearance-settings-rest）。`opened` は今までどおり
+ *  サーバから届いた順（既定）。`name` は workspace のラベルの文字列順。 */
+export type WorkspaceSort = "opened" | "name";
+
 /**
  * 表示位置（`STORAGE_KEY`）と違い、**タブの寿命を越えて残す好み**なので `localStorage` に置く。
  * 同じ流儀の先例：`store/seen.ts`（`wtm.seen.v1`）・`components/Toast.vue`（`wtm.hint.prefixHelp.v1`）。
@@ -68,8 +72,14 @@ export function writePrefs(patch: Record<string, unknown>): void {
   }
 }
 
-function loadAgentSort(): AgentSort {
-  const v = readPrefs()["agentSort"];
+// `export` する（20260922-appearance-settings-rest T7。decisions D7）——`loadSidebarWidth`/
+// `loadSidebarCollapsed`/`loadWorkspaceSort` と違って本来は自己完結型（`readPrefs()` を自分で
+// 呼ぶ）だが、reload_config が `ActionDispatcher` から呼び直せるように公開する。
+// `raw` は省略可（省略時はこれまでどおり自分で `readPrefs()` を呼ぶ。store 初期化時の呼び出しは
+// 変えない）。T7 の taskcheck 指摘で追加——`reload_config` は他の設定のために既に `readPrefs()` を
+// 1回呼んでいるので、ここでも省略無しで自分で呼び直すと `localStorage` への読み出しが実質2回になる。
+export function loadAgentSort(raw?: Record<string, unknown>): AgentSort {
+  const v = (raw ?? readPrefs())["agentSort"];
   return v === "priority" || v === "grouped" ? v : "grouped"; // 壊れた値は既定へ落とす
 }
 
@@ -95,6 +105,15 @@ export function loadSidebarWidth(raw: unknown): number {
 /** 保存された折りたたみを読む。`true` のときだけ畳む（壊れた値は展開＝既定。20260921-herdr-settings-gaps の AC3）。 */
 export function loadSidebarCollapsed(raw: unknown): boolean {
   return raw === true;
+}
+
+/** 保存された workspace の並び順を読む（壊れた値は `"opened"` へ。20260922-appearance-settings-rest の AC3）。 */
+export function loadWorkspaceSort(raw: unknown): WorkspaceSort {
+  return raw === "name" || raw === "opened" ? raw : "opened";
+}
+
+function saveWorkspaceSort(v: WorkspaceSort): void {
+  writePrefs({ workspaceSort: v });
 }
 
 let nextToastId = 1;
@@ -188,6 +207,7 @@ export const useViewStore = defineStore("view", () => {
    */
   const sidebarWidth = ref(loadSidebarWidth(initialPrefs["sidebarWidth"]));
   const agentSort = ref(loadAgentSort());
+  const workspaceSort = ref(loadWorkspaceSort(initialPrefs["workspaceSort"]));
   const toasts = ref<Toast[]>([]);
 
   /**
@@ -289,6 +309,12 @@ export const useViewStore = defineStore("view", () => {
     saveAgentSort(agentSort.value);
   }
 
+  /** workspace（spaces 区画）の並び順を 2 値で行き来する（`toggleAgentSort` と同じ形。AC3）。 */
+  function toggleWorkspaceSort(): void {
+    workspaceSort.value = workspaceSort.value === "opened" ? "name" : "opened";
+    saveWorkspaceSort(workspaceSort.value);
+  }
+
   function toggleSidebar(): void {
     sidebarCollapsed.value = !sidebarCollapsed.value;
     writePrefs({ sidebarCollapsed: sidebarCollapsed.value });
@@ -335,6 +361,8 @@ export const useViewStore = defineStore("view", () => {
     sidebarWidth,
     agentSort,
     toggleAgentSort,
+    workspaceSort,
+    toggleWorkspaceSort,
     toasts,
     isPrefixWaiting,
     restoreView,

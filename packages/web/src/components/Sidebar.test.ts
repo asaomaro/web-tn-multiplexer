@@ -245,17 +245,46 @@ describe("Sidebar — ボタン", () => {
   });
 
   // AC7：herdr と同じく「順序名そのものがボタン」。表示が現在値で、押すと切り替わる。
+  // `.sidebar-sort-btn` は agents・spaces（20260922-appearance-settings-rest T2）の両方にあるので、
+  // `.sidebar-agents` の中に絞る（`.sidebar-spaces` 側は別の describe で確認する）。
   it("ソートのボタンは現在の並び順を表示し、押すと切り替わる（AC7）", async () => {
     const view = useViewStore(pinia);
     const wrapper = mountSidebar(makeConnection());
-    const btn = wrapper.get(".sidebar-sort-btn");
+    const btn = wrapper.get(".sidebar-agents .sidebar-sort-btn");
     expect(btn.text()).toBe("グループ順"); // 内部の値（grouped / priority）はそのまま出さない
     await btn.trigger("click");
     expect(view.agentSort).toBe("priority");
     await wrapper.vm.$nextTick();
-    expect(wrapper.get(".sidebar-sort-btn").text()).toBe("優先度順");
-    await wrapper.get(".sidebar-sort-btn").trigger("click");
+    expect(wrapper.get(".sidebar-agents .sidebar-sort-btn").text()).toBe("優先度順");
+    await wrapper.get(".sidebar-agents .sidebar-sort-btn").trigger("click");
     expect(view.agentSort).toBe("grouped");
+  });
+});
+
+// 20260922-appearance-settings-rest T2（design「振る舞いの詳細」US1）。agents の並び順（上）と同じ形。
+describe("Sidebar — spaces の並び順（AC1〜AC3）", () => {
+  it("ソートのボタンは現在の並び順を表示し、押すと切り替わる。spaces 区画の表示順も実際に変わる", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "banana" }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "apple" }));
+    const wrapper = mountSidebar(makeConnection());
+    const labelsInOrder = (): string[] =>
+      wrapper.findAll(".sidebar-spaces .sidebar-label").map((w) => w.text());
+    expect(labelsInOrder()).toEqual(["banana", "apple"]); // AC3：既定は開いた順（サーバから届いた順）
+
+    const btn = wrapper.get(".sidebar-spaces .sidebar-sort-btn");
+    expect(btn.text()).toBe("開いた順"); // 内部の値（opened / name）はそのまま出さない
+    await btn.trigger("click");
+    expect(view.workspaceSort).toBe("name"); // AC3：切り替えた値は保存される（store が読み戻すことは view.test.ts で確認済み）
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".sidebar-spaces .sidebar-sort-btn").text()).toBe("名前順");
+    expect(labelsInOrder()).toEqual(["apple", "banana"]); // AC2：名前順（文字列比較）
+
+    await wrapper.get(".sidebar-spaces .sidebar-sort-btn").trigger("click");
+    expect(view.workspaceSort).toBe("opened");
+    await wrapper.vm.$nextTick();
+    expect(labelsInOrder()).toEqual(["banana", "apple"]); // 開いた順に戻る
   });
 });
 
