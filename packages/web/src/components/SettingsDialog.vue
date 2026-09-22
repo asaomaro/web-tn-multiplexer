@@ -10,6 +10,8 @@ import { DISPLAY_STATES, stateGlyph, stateLabel } from "../store/stateIndicator.
 import { useViewStore } from "../store/view.js";
 import { effectiveScrollback, scrollbackChoices, type ScrollbackPref } from "../term/scrollback.js";
 import { siblingThemes, THEME_LABELS } from "../theme/themes.js";
+import { CSS_VAR_LABELS, isValidCssColor, type ThemeOverrideBucket } from "../theme/themeOverrides.js";
+import { CSS_VARS, type CssVar } from "../theme/uiTokens.js";
 import KeySettings from "./KeySettings.vue";
 
 /**
@@ -94,12 +96,15 @@ watch(
     if (ctx?.kind === "settings") {
       refreshPermission(); // 開くたびに読み直す（前回開いてから外で変わっているかもしれない）
       pathDraft.value = settings.newCwdPath; // 開くたびに保存値から始める
+      syncOverrideDrafts();
       void nextTick(() => {
         dialogEl.value?.showModal();
         firstSwitch.value?.focus();
       });
     } else {
       dialogEl.value?.close();
+      confirmingOverrideReset.value = false; // 開き直したとき、確認が出たままにならない
+      overrideMessage.value = ""; // 前回の結果の文を持ち越さない
     }
   },
 );
@@ -228,6 +233,93 @@ function chooseThemeFor(which: "light" | "dark", ev: Event): void {
   else settings.setThemeDark(name);
 }
 
+/**
+ * 色の個別の上書き（20260922-theme-custom-overrides。herdr の `[theme.custom]` 相当。design「`SettingsDialog.vue`（変更）」）。
+ * 押した色がそのまま反映・保存される（確定ボタンを置かない。既存の節と同じ）。「明るいとき」「暗いとき」の 2 層だけ持ち、
+ * herdr の `.light`/`.dark` と違って自動切替の有無に関わらず、いま画面に当たっている明暗（`colorScheme`）で選ばれる（`ThemeController`
+ * 側の decisions 参照）。
+ */
+const THEME_OVERRIDE_BUCKETS = ["light", "dark"] as const;
+const bucketLabel = (b: ThemeOverrideBucket): string => (b === "light" ? "明るいとき" : "暗いとき");
+const draftKey = (bucket: ThemeOverrideBucket, key: CssVar): string => `${bucket}:${key}`;
+
+/** 各入力の draft（ローカルの文字列。`pathDraft` と同じ形）。上書き無しは空文字列。 */
+const overrideDrafts = ref<Record<string, string>>({});
+const overrideMessage = ref("");
+const confirmingOverrideReset = ref(false);
+
+/** 開くたびに保存値から始める（`pathDraft` と同じ）。 */
+function syncOverrideDrafts(): void {
+  const drafts: Record<string, string> = {};
+  for (const bucket of THEME_OVERRIDE_BUCKETS)
+    for (const key of CSS_VARS) drafts[draftKey(bucket, key)] = settings.themeOverrides[bucket][key] ?? "";
+  overrideDrafts.value = drafts;
+}
+
+function isOverridden(bucket: ThemeOverrideBucket, key: CssVar): boolean {
+  return settings.themeOverrides[bucket][key] !== undefined;
+}
+
+/** 確定（`change`／`Enter`）：空欄なら既定へ戻す、無効なら理由を示して元の値へ戻す、妥当なら反映・保存する（AC2・AC5・AC6）。 */
+function commitOverride(bucket: ThemeOverrideBucket, key: CssVar): void {
+  const dk = draftKey(bucket, key);
+  const raw = (overrideDrafts.value[dk] ?? "").trim();
+  if (raw === "") {
+    if (!isOverridden(bucket, key)) return; // 既に上書き無し。メッセージを出さない
+    settings.resetThemeOverride(bucket, key);
+    overrideDrafts.value[dk] = "";
+    overrideMessage.value = `「${CSS_VAR_LABELS[key]}」（${bucketLabel(bucket)}）の上書きを外しました。`;
+    return;
+  }
+  if (!isValidCssColor(raw)) {
+    overrideMessage.value = `「${CSS_VAR_LABELS[key]}」（${bucketLabel(bucket)}）：${raw} は色として読めません。`;
+    overrideDrafts.value[dk] = settings.themeOverrides[bucket][key] ?? ""; // 元の値へ戻す（AC5）
+    return;
+  }
+  settings.setThemeOverride(bucket, key, raw);
+  overrideDrafts.value[dk] = raw;
+  overrideMessage.value = `「${CSS_VAR_LABELS[key]}」（${bucketLabel(bucket)}）を ${raw} にしました。`;
+}
+
+/** IME の変換を確定する Enter では確定しない（`onPathEnter` と同じ）。 */
+function onOverrideEnter(bucket: ThemeOverrideBucket, key: CssVar, ev: KeyboardEvent): void {
+  if (ev.isComposing || ev.keyCode === 229) return;
+  commitOverride(bucket, key);
+}
+
+/** 1 項目だけ既定へ戻す（AC6・AC-I4：ボタンが消えるので、フォーカスは同じ行の入力欄へ）。 */
+function resetOverride(bucket: ThemeOverrideBucket, key: CssVar): void {
+  settings.resetThemeOverride(bucket, key);
+  const dk = draftKey(bucket, key);
+  overrideDrafts.value[dk] = "";
+  overrideMessage.value = `「${CSS_VAR_LABELS[key]}」（${bucketLabel(bucket)}）の上書きを外しました。`;
+  void nextTick(() =>
+    dialogEl.value?.querySelector<HTMLInputElement>(`[data-override-input="${dk}"]`)?.focus(),
+  );
+}
+
+/** すべての上書きを既定へ戻す（取り消せないので、インラインの確認を挟む。「キー」節と同じ形）。 */
+function askResetAllOverrides(): void {
+  confirmingOverrideReset.value = true;
+  void nextTick(() =>
+    dialogEl.value?.querySelector<HTMLElement>("[data-confirm-no-overrides]")?.focus(),
+  );
+}
+
+function endResetAllOverridesConfirm(): void {
+  confirmingOverrideReset.value = false;
+  void nextTick(() =>
+    dialogEl.value?.querySelector<HTMLElement>("[data-reset-all-overrides]")?.focus(),
+  );
+}
+
+function confirmResetAllOverrides(): void {
+  settings.resetAllThemeOverrides();
+  syncOverrideDrafts();
+  overrideMessage.value = "すべての色の上書きを既定へ戻しました。";
+  endResetAllOverridesConfirm();
+}
+
 function cancel(): void {
   commitNewCwdPath(); // 「指定した場所」以外では入力欄が使えず、下書きは保存値のまま（開くたびに戻す）なので何もしない
   view.closeDialog();
@@ -348,6 +440,69 @@ function onNativeCancel(ev: Event): void {
           </label>
         </template>
         <p id="settings-theme-note" class="settings-note" aria-live="polite">{{ themeNowNote }}</p>
+
+        <details class="settings-theme-overrides">
+          <summary>色の個別の上書き（上級者向け）</summary>
+          <p class="settings-note">
+            押した色がそのまま反映・保存されます。既定のコントラスト調整はかかりません。空欄にして確定すると既定へ戻ります。
+          </p>
+          <ul class="theme-override-list">
+            <li v-for="key in CSS_VARS" :key="key" class="theme-override-row">
+              <div class="theme-override-label">
+                <code>{{ key }}</code>
+                <span>{{ CSS_VAR_LABELS[key] }}</span>
+              </div>
+              <div v-for="bucket in THEME_OVERRIDE_BUCKETS" :key="bucket" class="theme-override-field">
+                <span class="theme-override-bucket-label">{{ bucketLabel(bucket) }}</span>
+                <input
+                  type="text"
+                  class="theme-override-input"
+                  :data-override-input="draftKey(bucket, key)"
+                  v-model="overrideDrafts[draftKey(bucket, key)]"
+                  :aria-label="`「${CSS_VAR_LABELS[key]}」の${bucketLabel(bucket)}の色`"
+                  autocomplete="off"
+                  spellcheck="false"
+                  @change="commitOverride(bucket, key)"
+                  @keydown.enter="onOverrideEnter(bucket, key, $event)"
+                />
+                <button
+                  v-if="isOverridden(bucket, key)"
+                  type="button"
+                  class="settings-btn"
+                  :aria-label="`「${CSS_VAR_LABELS[key]}」の${bucketLabel(bucket)}を既定に戻す`"
+                  @click="resetOverride(bucket, key)"
+                >
+                  既定に戻す
+                </button>
+              </div>
+            </li>
+          </ul>
+          <button
+            v-if="!confirmingOverrideReset"
+            type="button"
+            class="settings-btn"
+            data-reset-all-overrides
+            @click="askResetAllOverrides"
+          >
+            すべての上書きを既定に戻す
+          </button>
+          <div
+            v-else
+            class="theme-override-confirm"
+            role="group"
+            aria-label="すべての上書きを既定に戻す確認"
+            @keydown.esc.stop.prevent="endResetAllOverridesConfirm"
+          >
+            <span>すべての色の上書きを既定へ戻します。取り消せません。</span>
+            <button type="button" class="settings-btn" data-confirm-yes-overrides @click="confirmResetAllOverrides">
+              戻す
+            </button>
+            <button type="button" class="settings-btn" data-confirm-no-overrides @click="endResetAllOverridesConfirm">
+              やめる
+            </button>
+          </div>
+          <p class="settings-note theme-override-message" role="status" aria-live="polite">{{ overrideMessage }}</p>
+        </details>
       </div>
     </section>
     <section class="settings-section" aria-labelledby="settings-display">
@@ -574,5 +729,72 @@ function onNativeCancel(ev: Event): void {
   margin: 1em 0 0;
   font-size: 0.85em;
   opacity: 0.7;
+}
+/* 20260922-theme-custom-overrides：`.keys-btn`（`KeySettings.vue`）と同じ見た目（`scoped` なので共有できず、値をそろえるだけ）。 */
+.settings-btn {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.15em 0.7em;
+  min-height: 1.75rem;
+  cursor: pointer;
+}
+.settings-theme-overrides {
+  margin-top: 0.8em;
+}
+.theme-override-list {
+  list-style: none;
+  margin: 0.5em 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+.theme-override-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3em 0.8em;
+  border-top: 1px solid var(--wtm-menu-border, #44475a);
+  padding-top: 0.5em;
+}
+.theme-override-label {
+  flex: 1 1 12em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1em;
+}
+.theme-override-label code {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.theme-override-field {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+}
+.theme-override-bucket-label {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.theme-override-input {
+  box-sizing: border-box;
+  width: 8em;
+  font: inherit;
+  font-family: monospace;
+  padding: 0.15em 0.4em;
+  min-height: 1.75rem;
+}
+.theme-override-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em 0.6em;
+  margin-top: 0.5em;
+}
+.theme-override-message {
+  min-height: 1.2em;
 }
 </style>
