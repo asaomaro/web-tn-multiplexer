@@ -86,7 +86,7 @@ function seedAndMount() {
   const registry = makeRegistry(conn);
   // 実物の ViewSync（セルの寸法だけ固定。happy-dom にはレイアウトが無い）。hello が通るまで（`onConnectionOpened`）は何も送らない（D107）。
   const viewSync = new ViewSync({ conn, registry, getScrollbackLines: () => 1000, getCellSize: () => CELL });
-  const keys = { injectKey: vi.fn(), setPendingModifier: vi.fn() };
+  const keys = { injectKey: vi.fn(), injectPrefix: vi.fn(), setPendingModifier: vi.fn() };
   const wrapper = mount(MobileShell, {
     global: {
       plugins: [pinia],

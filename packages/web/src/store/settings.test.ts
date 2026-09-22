@@ -1,5 +1,6 @@
 import { createPinia, type Pinia } from "pinia";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextTick, watch } from "vue";
 import {
   buildNewCwd,
   loadNewCwdPath,
@@ -241,5 +242,195 @@ describe("useSettingsStore — テーマ（20260921-theme-settings）", () => {
     store.setTheme("one-dark");
     store.setThemeLight("solarized-light");
     expect(readPrefs()).toMatchObject({ statusSymbols: false, newCwdPolicy: "home", theme: "one-dark", themeLight: "solarized-light" });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260921-keybinding-customization：キーの割り当て（AC3・AC4・AC8・AC9）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("useSettingsStore — キーの割り当て（AC8）", () => {
+  it("何も保存されていなければ既定の表（prefix は ctrl+b・割り当ては既定）", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    expect(store.keymap.prefix).toBe("ctrl+b");
+    expect(store.keymap.bindingsOf("split_vertical")).toEqual(["prefix+v"]);
+    expect(store.keymap.directMap.size).toBe(0);
+  });
+
+  it("prefix・割り当てを変えると、解決した表が即時に変わり、wtm.prefs.v1 の keys に差だけが保存される", () => {
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("ctrl+a");
+    store.setKeyBindings("split_vertical", ["prefix+v", "ctrl+alt+d"]);
+    expect(store.keymap.prefix).toBe("ctrl+a");
+    expect(store.keymap.bindingsOf("split_vertical")).toEqual(["prefix+v", "ctrl+alt+d"]);
+    expect(store.keymap.directMap.get("ctrl+alt+d")).toEqual({ type: "split", dir: "right" });
+    expect(readPrefs()["keys"]).toEqual({ prefix: "ctrl+a", bindings: { split_vertical: ["prefix+v", "ctrl+alt+d"] } });
+  });
+
+  it("再読み込みで残る（別の pinia で読み直す）", () => {
+    const first = useSettingsStore(pinia);
+    first.setKeyPrefix("alt+x");
+    first.setKeyBindings("help", []);
+    const second = useSettingsStore(createPinia());
+    expect(second.keymap.prefix).toBe("alt+x");
+    expect(second.keymap.bindingsOf("help")).toEqual([]);
+    expect(second.keymap.hintFor("help")).toBeNull();
+  });
+
+  it("壊れた保存値は値ごとに落として既定へ戻し、残りは生かして起動する", () => {
+    writePrefs({ keys: { prefix: "cmd+b", bindings: { zoom: ["prefix+y"], bogus: ["prefix+q"], goto: 42 } } });
+    const store = useSettingsStore(pinia);
+    expect(store.keymap.prefix).toBe("ctrl+b"); // 送れない形の prefix は既定へ
+    expect(store.keymap.bindingsOf("zoom")).toEqual(["prefix+y"]); // 有効な上書きは生きる
+    expect(store.keymap.bindingsOf("goto")).toEqual(["prefix+g"]); // 配列でない値は既定へ
+  });
+
+  it("JSON でない・形が違う keys は既定（起動できる）", () => {
+    for (const keys of ["x", 42, [], null]) {
+      localStorage.clear();
+      writePrefs({ keys });
+      expect(useSettingsStore(createPinia()).keymap.prefix, JSON.stringify(keys)).toBe("ctrl+b");
+    }
+  });
+
+  it("既定と同じ内容に戻せば上書きを消し、差が無くなれば keys ごと消える", () => {
+    const store = useSettingsStore(pinia);
+    store.setKeyBindings("zoom", ["prefix+y"]);
+    expect(readPrefs()["keys"]).toBeDefined();
+    store.setKeyBindings("zoom", ["prefix+z"]);
+    expect(store.keyPrefs.bindings).toEqual({});
+    expect(readPrefs()).not.toHaveProperty("keys");
+  });
+
+  it("通らない値は反映せず捨てる（二重の守り）：無効な文字列・送れない prefix・全部無効な入力", () => {
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("cmd+b");
+    expect(store.keymap.prefix).toBe("ctrl+b");
+    store.setKeyBindings("zoom", ["nonsense"]);
+    expect(store.keyPrefs.bindings).toEqual({});
+    expect(readPrefs()).not.toHaveProperty("keys");
+    store.setKeyBindings("zoom", ["prefix+y", "nonsense"]); // 有効な分だけ反映
+    expect(store.keymap.bindingsOf("zoom")).toEqual(["prefix+y"]);
+  });
+
+  it("replaceKeyPrefs を直に呼んでも、読めない値は反映も保存もしない（二重の守り。setKeyPrefix・setKeyBindings は手前で弾くので、ここでしか届かない）", () => {
+    const store = useSettingsStore(pinia);
+    store.replaceKeyPrefs({ prefix: "cmd+b", bindings: { zoom: ["nonsense"] } });
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    expect(store.keymap.prefix).toBe("ctrl+b");
+    expect(readPrefs()).not.toHaveProperty("keys");
+    // 一部だけ読めないなら、読める分だけ（状態にも保存にも）残る。
+    store.replaceKeyPrefs({ prefix: "cmd+b", bindings: { zoom: ["prefix+y", "nonsense"] } });
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: { zoom: ["prefix+y"] } });
+    expect(readPrefs()["keys"]).toEqual({ bindings: { zoom: ["prefix+y"] } });
+  });
+
+  it("別のウィンドウで割り当てが変わったら（storage イベント）追従し、古い状態から別の変更をしても先の変更を上書きしない", () => {
+    const store = useSettingsStore(pinia);
+    store.setKeyBindings("zoom", ["prefix+y"]);
+    // 別のウィンドウが prefix を変えて保存した（自分の書き込みでは storage は発火しない。ここでは書いてから発火させる）。
+    writePrefs({ keys: { prefix: "alt+x", bindings: { zoom: ["prefix+y"] } } });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.keymap.prefix).toBe("alt+x");
+    const km = store.keymap;
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" })); // 変わっていなければ表を作り直さない
+    expect(store.keymap).toBe(km);
+    // このウィンドウで別の操作を変えても、先に保存された prefix は残る。
+    store.setKeyBindings("help", ["prefix+u"]);
+    expect(readPrefs()["keys"]).toEqual({
+      prefix: "alt+x",
+      bindings: { zoom: ["prefix+y"], help: ["prefix+u"] },
+    });
+  });
+
+  it("他の設定を消さない（keys は併合して書く）", () => {
+    writePrefs({ statusSymbols: false, theme: "nord" });
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("ctrl+a");
+    expect(readPrefs()["statusSymbols"]).toBe(false);
+    expect(readPrefs()["theme"]).toBe("nord");
+    expect(readPrefs()["keys"]).toEqual({ prefix: "ctrl+a" });
+  });
+});
+
+describe("useSettingsStore — キーの戻し（AC9）", () => {
+  it("操作ごと・prefix・すべてを既定へ戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("ctrl+a");
+    store.setKeyBindings("zoom", ["prefix+y"]);
+    store.setKeyBindings("help", []);
+    store.resetKeyAction("zoom");
+    expect(store.keymap.bindingsOf("zoom")).toEqual(["prefix+z"]);
+    expect(store.keymap.bindingsOf("help")).toEqual([]); // 他の操作は変わらない
+    store.resetKeyPrefix();
+    expect(store.keymap.prefix).toBe("ctrl+b");
+    expect(store.keymap.bindingsOf("help")).toEqual([]);
+    store.resetAllKeys();
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    expect(store.keymap.bindingsOf("help")).toEqual(["prefix+?"]);
+    expect(readPrefs()).not.toHaveProperty("keys");
+  });
+
+  it("すべて戻すは、prefix を変えたままでも prefix も戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("ctrl+a");
+    store.setKeyBindings("zoom", ["prefix+y"]);
+    store.resetAllKeys();
+    expect(store.keymap.prefix).toBe("ctrl+b");
+    expect(store.keymap.bindingsOf("zoom")).toEqual(["prefix+z"]);
+    expect(readPrefs()).not.toHaveProperty("keys");
+  });
+
+  it("replaceKeyPrefs：戻し・おすすめの結果（KeyPrefs）をそのまま採る", () => {
+    const store = useSettingsStore(pinia);
+    store.replaceKeyPrefs({ prefix: "alt+x", bindings: { zoom: ["ctrl+alt+z", "prefix+z"] } });
+    expect(store.keymap.prefix).toBe("alt+x");
+    expect(store.keymap.bindingsOf("zoom")).toEqual(["ctrl+alt+z", "prefix+z"]);
+  });
+
+  it("同じ内容を渡し直しても、書かず、keymap も作り直さない（購読は変えたときだけ動く。押すたびに作り直さない）", async () => {
+    const store = useSettingsStore(pinia);
+    const next = { prefix: "alt+x", bindings: { zoom: ["ctrl+alt+z", "prefix+z"] } };
+    store.replaceKeyPrefs(next);
+    const km = store.keymap;
+    let fired = 0;
+    watch(
+      () => store.keymap,
+      () => (fired += 1),
+      { flush: "sync" },
+    );
+    const setItem = vi.spyOn(localStorage, "setItem");
+    try {
+      store.replaceKeyPrefs({ prefix: "alt+x", bindings: { zoom: ["ctrl+alt+z", "prefix+z"] } });
+      store.setKeyPrefix("alt+x");
+      store.setKeyBindings("zoom", ["ctrl+alt+z", "prefix+z"]);
+      await nextTick();
+      expect(store.keymap, "同じ表のまま").toBe(km);
+      expect(fired).toBe(0);
+      expect(setItem).not.toHaveBeenCalled();
+      store.setKeyPrefix("alt+y"); // 変えれば作り直され、購読が動き、保存される
+      expect(store.keymap).not.toBe(km);
+      expect(fired).toBe(1);
+      expect(setItem).toHaveBeenCalledTimes(1);
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it("壊れた keys が保存に残っていても、すべて戻す・prefix を戻す操作で保存が直る（状態は既定のまま・表は作り直さない）", () => {
+    writePrefs({ keys: "x" });
+    const a = useSettingsStore(pinia);
+    expect(a.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    const km = a.keymap;
+    a.resetAllKeys();
+    expect(readPrefs()).not.toHaveProperty("keys");
+    expect(a.keymap).toBe(km);
+
+    writePrefs({ keys: { prefix: "cmd+b" } }); // 送れない prefix（読み込みで落ちる）
+    const b = useSettingsStore(createPinia());
+    expect(b.keymap.prefix).toBe("ctrl+b");
+    b.setKeyPrefix(null);
+    expect(readPrefs()).not.toHaveProperty("keys");
   });
 });

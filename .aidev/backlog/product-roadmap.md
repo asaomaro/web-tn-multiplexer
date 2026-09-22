@@ -8,7 +8,28 @@ parent: 20260918-web-terminal-multiplexer
 
 <!-- 項目は行頭の `- [ ]` で書く（見出しに書くと aidev status の未着手件数から漏れる） -->
 - [ ] 外部操作 API / CLI: herdr の socket API / CLI 相当（workspace 作成・分割・入力送信・出力読取・状態購読を外部から） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
-- [ ] キーバインドのカスタマイズ: 割り当ての変更・保存、herdr 互換以外のプリセット (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
+- [x] キーバインドのカスタマイズ: 割り当ての変更・保存（prefix の変更・操作ごとの割り当て・prefix なしの直接のキー）（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
+  → 着地: 20260921-keybinding-customization（feature/keybinding-customization）。prefix と 34 の操作の割り当てを、設定画面の節「キー」で**押したキーを取り込んで**変えられる
+  （`packages/web/src/components/KeySettings.vue`）。1 つの操作に複数持てて、prefix の後のキーに加えて**直接のキー**（`ctrl+alt+d` のように prefix なしの 1 打。terminal モードだけ。
+  `packages/web/src/keys/KeyRouter.ts` の `handleDirect`）も付けられる。衝突・予約・使えない形は理由を出して拒否（`packages/web/src/keys/assign.ts` の `validateAssignment`）、
+  保存はブラウザごとに既定との差だけ（`wtm.prefs.v1` の `keys`。`packages/web/src/keys/keyPrefs.ts`）で、壊れた値は値ごとに落として既定へ戻す。キー一覧・トースト・通知の案内文・
+  モバイルの Prefix ボタンは同じ解決した表（`packages/web/src/keys/keymap.ts` の `resolveKeymap`）から作り、herdr の `ctrl+alt` の一式も 1 操作で足せる。既定のままなら
+  今までのキー操作は変わらない（旧 `DEFAULT_KEYMAP` を固定した値との 1:1 を単体テストで守る。例外は decisions D8 の CapsLock＋Shift）。サーバ・protocol は変えていない。
+  実測: 単体（全パッケージ）2138 本・E2E 一式 116 本（うち `key-bindings.spec.ts` 14 本・`settings.spec.ts` 11 本）・smoke pass。回帰テストは変異で落ちることを確かめ、生出力を `.aidev/works/20260921-keybinding-customization/test-result.md` に貼った（AltGr の判定は 97 個の変異を網羅）。独立 review 3 ラウンド（must 0・should 4・nit 9 を解消。差し戻しは上限の 3 回）。herdr 互換以外のプリセットは下の別の行に残した
+- [ ] キーバインドのプリセット（herdr 互換以外）: tmux 風などの割り当ての一式を選べるようにする。20260921-keybinding-customization で割り当ての変更・保存は済んだので、残りはプリセット（herdr の既定・herdr の文書の
+  `ctrl+alt` の直接のキーの一式〔いまは「足す」ボタン〕に加え、tmux 風の `%`・`"`・`o`・`x` 等）。プリセットは `keys/bindings.ts` の `ActionDef.defaults` と同じ形の表で持てる（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+- [ ] navigate モードの移動キーを変えられるようにする: herdr の `navigate_workspace_up/down`・`navigate_pane_left/down/up/right`（prefix なしの素のキーを書ける別の表。`esc`・`enter`・`tab`・左右の矢印・素の `1`〜`9` は予約）。
+  いまの navigate・resize・copy モードの中のキーは固定（`NavigateMode.ts`・`ResizeMode.ts`・`CopyMode.ts`）。herdr でも copy・resize の中は固定なので、対象は navigate の 6 キー（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+- [ ] herdr にあって本製品に操作自体が無いものを足して割り当てられるようにする: **既定なし**の操作——前後の workspace への移動（`previous_workspace`・`next_workspace`）・直前の pane（`last_pane`）・
+  tab の並べ替え（`move_tab_previous/next`）・pane の resize の直接のキー（`resize_pane_*`。`resizeBy` の操作は既にある）・agent への移動（`previous_agent`・`next_agent`・`focus_agent`）。
+  **既定を持つ**操作——scrollback を `$EDITOR` で開く（`edit_scrollback`＝herdr の既定 `prefix+e`）・設定の再読み込み（`reload_config`＝`prefix+shift+r`）は、いま「後続」の案内としてそのキーを使っている
+  （`packages/web/src/keys/keymap.ts` の `NOT_YET_BINDINGS`）ので、実装したら**その案内を置き換える**。**実装の本体は別の行**（`edit_scrollback` は「端末機能の拡張」・`reload_config` は「外観と設定の残り」の設定の再読み込み）で、
+  この行は「キーの割り当てに載せる分」だけ（同じ機能を 2 行で掴まない）。操作を足す work であって、割り当てを変える work ではない（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+- [ ] 独自コマンドのキー: herdr の `[[keys.command]]`（`type` が `popup`・`pane`・`shell`・`plugin_action`）。サーバで任意のコマンドを走らせる仕組みと、その権限の設計が要る。`docs/herdr-parity.md` の H12（ポップアップ端末・独自コマンドのキー割り当て）（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+- [ ] サイドバー・tab バーのボタン（`@keydown.stop`）や pane の枠にフォーカスがある間も、prefix・直接のキーを効かせる: いまはそのボタンにフォーカスが残ると、端末をクリックするまで届かない（prefix でも同じ既存の挙動）。
+  ボタンの Enter/Space と入力欄への入力を守ったまま、修飾キー付き・prefix のキーだけを window へ通す形が要る（出典: .aidev/works/20260921-keybinding-customization/decisions.md D11）
+- [ ] キーの設定の使い勝手: 節「キー」の操作の絞り込み（いまは 34 個の `<details>` を順に開く）、衝突したときの「こちらへ移す」、macOS の非 US 配列で Option の chord の表示を押した字に合わせる
+  （`navigator.keyboard.getLayoutMap()`。Chromium 系だけ。decisions D7）、ブラウザが先に受けるキーを全画面のときだけ届ける（Keyboard Lock API。実験的。research F27）（出典: .aidev/works/20260921-keybinding-customization/decisions.md の D7・research.md の F27。操作の絞り込みと「こちらへ移す」は、この work の実装で出た改善案）
 - [x] Git worktree の作成と一覧（上の項目のうち worktree そのものを扱う部分）: 20260920-git-worktree-actions で対応。
       workspace の右クリックメニューに「新しい worktree」「worktree を開く…」、キーは `prefix+G`。
       作成先は `~/.wtm/worktrees/<repo>/<branch-slug>`（`packages/protocol/src/worktreePath.ts:37-41`）。

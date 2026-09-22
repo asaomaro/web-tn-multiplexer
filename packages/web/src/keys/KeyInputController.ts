@@ -2,6 +2,7 @@ import type { Terminal } from "@xterm/xterm";
 import type { ConnectionPort } from "../net/ports.js";
 import { readClipboard } from "../term/clipboard.js";
 import type { KeyInput, Mode } from "./actions.js";
+import { keyInputOf, type KeyboardEventLike } from "./chord.js";
 import type { KeyRouter } from "./KeyRouter.js";
 
 export interface Disposable {
@@ -18,32 +19,11 @@ export interface ModeSink {
   onModeChange(m: Mode): void;
 }
 
-/** `Terminal.attachCustomKeyEventHandler` に渡す形の最小限（テストで差し替える）。 */
-export interface KeyboardEventLike {
-  key: string;
-  code: string;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  metaKey: boolean;
-  type: string;
-  isComposing: boolean;
-  keyCode: number;
-  preventDefault(): void;
-}
-
-function toKeyInput(ev: KeyboardEventLike): KeyInput {
-  return {
-    key: ev.key,
-    code: ev.code,
-    ctrl: ev.ctrlKey,
-    alt: ev.altKey,
-    shift: ev.shiftKey,
-    meta: ev.metaKey,
-    type: ev.type === "keyup" ? "keyup" : ev.type === "keypress" ? "keypress" : "keydown",
-    composing: ev.isComposing || ev.keyCode === 229,
-  };
-}
+/**
+ * `Terminal.attachCustomKeyEventHandler` に渡す形の最小限（テストで差し替える）。**定義と `KeyInput` への変換（`keyInputOf`）は `chord.ts`**——設定画面の取り込みが
+ * 同じ変換を使う（20260921-keybinding-customization）。ここからは互換のため再エクスポートする。
+ */
+export type { KeyboardEventLike } from "./chord.js";
 
 /** `Ctrl+Shift+V`（Windows/Linux）。macOS の `Cmd+V` はブラウザの標準の貼り付けなので、xterm.js が自分で拾う（design「貼り付け」）。 */
 function isManualPasteShortcut(ev: KeyboardEventLike): boolean {
@@ -129,7 +109,7 @@ export class KeyInputController {
   /**
    * 既に実物の ctrl/alt を持つキー（例：`ExtraKeys` の Prefix ボタン自体が送る `ctrl+b`）には重ねない
    * （04-mobile レビューで発見。`Alt` を armed にしたまま Prefix ボタンを押すと `ctrl+alt+b` になり、
-   * `KeyRouter` の `combo === "ctrl+b"` 判定に一致せず、対応表にも無いキーとして黙って握りつぶされ、
+   * `KeyRouter` の prefix の判定（当時は `combo === "ctrl+b"`）に一致せず、対応表にも無いキーとして黙って握りつぶされ、
    * prefix に入れなくなる不具合があった）。pending の状態自体はここでは消費しない——「次に実際に入力される
    * 無修飾のキー」に重ねるための状態であり、Prefix のような既に完成した特殊キーの注入で消費してしまうと、
    * 直後に打つはずだった本来のキーから Ctrl/Alt が失われる。
@@ -150,7 +130,7 @@ export class KeyInputController {
   /** 端末以外（サイドバー等）にフォーカスがあるときの keydown。`true` なら既定の動作のままでよい。 */
   handleDomKey(ev: KeyboardEventLike): boolean {
     if (isManualPasteShortcut(ev)) return true; // 端末にフォーカスが無ければ貼り付け先が無い
-    const decision = this.router.handle(this.applyPendingModifier(toKeyInput(ev)));
+    const decision = this.router.handle(this.applyPendingModifier(keyInputOf(ev)));
     return this.dispatch(decision, null);
   }
 
@@ -160,8 +140,13 @@ export class KeyInputController {
    * {@link INJECT_PASSTHROUGH_BYTES} の対応表で直接バイト列を送る（対応表に無いキーは何もしない）。
    */
   injectKey(k: KeyInput): void {
-    const activeModifier = this.pendingModifier; // applyPendingModifier が one-shot なら消してしまう前に控える
-    const applied = this.applyPendingModifier(k);
+    this.inject(k, true);
+  }
+
+  /** `injectKey` の本体。`applyPending` が偽なら、待機中の Ctrl/Alt を重ねない（{@link injectPrefix}）。 */
+  private inject(k: KeyInput, applyPending: boolean): void {
+    const activeModifier = applyPending ? this.pendingModifier : null; // applyPendingModifier が one-shot なら消してしまう前に控える
+    const applied = applyPending ? this.applyPendingModifier(k) : k;
     const decision = this.router.handle(applied);
     if (decision.kind === "pass") {
       const target = this.focus?.focusedPaneId() ?? null;
@@ -173,6 +158,20 @@ export class KeyInputController {
       return;
     }
     this.dispatch(decision, null);
+  }
+
+  /**
+   * モバイルの Prefix ボタン（`ExtraKeys`）：**いまの prefix**（設定で変えた prefix。20260921-keybinding-customization）のキーを注入する。
+   * 実物の `KeyboardEvent` を通らないので、prefix を 2 回押したときの送出（`prefixBytes`）も `injectKey` の経路と同じ。
+   */
+  injectPrefix(): void {
+    // **prefix に入れるモード（terminal・copy・prefix 中）でだけ働く**：navigate・resize モードは `k.key` だけを見て修飾キーを見ないので、変えた prefix のキー
+    // （`ctrl+l`・`alt+j` 等）を注入すると意図しない操作（pane の移動・resize）になる。物理の prefix はそのモードでは prefix に入らない（何も起きない）ので、ボタンも何もしない。
+    const mode = this.router.mode;
+    if (mode !== "terminal" && mode !== "copy" && mode !== "prefix") return;
+    // **待機中の Ctrl/Alt は重ねない**：prefix が ctrl・alt を含まない形（F キー）のとき、重ねると別のキーになって prefix に入れなくなる
+    // （pending の状態もここでは消費しない。モバイルの `ExtraKeys` は注入のあとに one-shot を自分で解除する——lock は残る。）
+    this.inject(this.router.prefixKeyInput(), false);
   }
 
   setMode(m: Mode): void {
@@ -204,7 +203,7 @@ export class KeyInputController {
       });
       return false;
     }
-    const raw = toKeyInput(ev);
+    const raw = keyInputOf(ev);
     const activeModifier = this.pendingModifier; // applyPendingModifier が one-shot なら消してしまう前に控える
     const decision = this.router.handle(this.applyPendingModifier(raw));
     if (decision.kind === "pass" && activeModifier && !raw.ctrl && !raw.alt) {

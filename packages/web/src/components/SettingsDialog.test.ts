@@ -261,10 +261,10 @@ const checkedRadio = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
   radios(w).filter((r) => (r.element as HTMLInputElement).checked);
 const radioLabel = (r: ReturnType<typeof radios>[number]) => r.element.parentElement!.textContent!.trim();
 
-describe("SettingsDialog — 4 つの節（AC12）", () => {
-  it("見出し「通知」「テーマ」「表示」「端末」の 4 節が、この順で 1 枚に並ぶ（テーマは 20260921-theme-settings で足した）", async () => {
+describe("SettingsDialog — 5 つの節（AC12）", () => {
+  it("見出し「通知」「テーマ」「表示」「端末」「キー」の 5 節が、この順で 1 枚に並ぶ（テーマは 20260921-theme-settings、キーは 20260921-keybinding-customization で足した）", async () => {
     const { wrapper } = await openDialog();
-    expect(wrapper.findAll("section h3").map((h) => h.text())).toEqual(["通知", "テーマ", "表示", "端末"]);
+    expect(wrapper.findAll("section h3").map((h) => h.text())).toEqual(["通知", "テーマ", "表示", "端末", "キー"]);
     // 節は見出しで名前が付いている（読み上げで節の名前が分かる）。
     for (const sec of wrapper.findAll("section")) {
       const id = sec.attributes("aria-labelledby")!;
@@ -648,5 +648,74 @@ describe("SettingsDialog — テーマの節（名前付けと値の束縛）", 
     settings.setThemeLight(null);
     await wrapper.vm.$nextTick();
     expect((light!.element as HTMLSelectElement).value).toBe("");
+  });
+});
+
+// 20260921-keybinding-customization：節「キー」の取り込み待ちの間は、ネイティブの cancel（Esc）で設定画面を閉じない（AC-I5）。
+describe("SettingsDialog — 節「キー」の取り込み待ちと Esc（AC-I1・AC-I5）", () => {
+  const nativeCancel = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]): Event => {
+    const ev = new Event("cancel", { cancelable: true });
+    w.find("dialog").element.dispatchEvent(ev);
+    return ev;
+  };
+
+  it("取り込み待ちの間にネイティブの cancel が来ても、設定画面を閉じない。取り込みを終えれば、いつもどおり閉じる", async () => {
+    const { wrapper, view } = await openDialog();
+    await wrapper.find("[data-prefix-change]").trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".keys-capture").exists()).toBe(true);
+    const ev = nativeCancel(wrapper);
+    await wrapper.vm.$nextTick();
+    expect(ev.defaultPrevented).toBe(true); // 既定の close は止める
+    expect(view.openDialog).toBe("settings"); // 閉じない
+    expect(wrapper.find(".keys-capture").exists()).toBe(true); // 取り込み待ちのまま（Esc の取り消しは取り込みの部品の keydown が受ける）
+
+    // Esc の keydown で取り込みを取り消したあとは、cancel でいつもどおり閉じる
+    await wrapper.find(".keys-capture").trigger("keydown", { key: "Escape" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".keys-capture").exists()).toBe(false);
+    expect(view.openDialog).toBe("settings"); // Esc 1 回で閉じない
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 利用者が次に押した Esc（次のタスク）
+    nativeCancel(wrapper);
+    await wrapper.vm.$nextTick();
+    expect(view.openDialog).toBeNull();
+  });
+
+  it("Esc の keydown で取り込みを取り消した直後に cancel が来ても（Firefox・Safari で起きうる順序）、設定画面は閉じない", async () => {
+    const { wrapper, view } = await openDialog();
+    await wrapper.find("[data-prefix-change]").trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    await wrapper.find(".keys-capture").trigger("keydown", { key: "Escape" });
+    const ev = nativeCancel(wrapper); // 同じタスクの中で、keydown の既定動作として来る
+    await wrapper.vm.$nextTick();
+    expect(ev.defaultPrevented).toBe(true);
+    expect(view.openDialog).toBe("settings"); // 閉じない
+    // 次のタスク以降（利用者が次に押した Esc）は、いつもどおり閉じる
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    nativeCancel(wrapper);
+    await wrapper.vm.$nextTick();
+    expect(view.openDialog).toBeNull();
+  });
+
+  it("取り込み待ちでなければ、cancel（Esc）で閉じる（既存の挙動）", async () => {
+    const { wrapper, view } = await openDialog();
+    nativeCancel(wrapper);
+    await wrapper.vm.$nextTick();
+    expect(view.openDialog).toBeNull();
+  });
+});
+
+// 20260921-keybinding-customization：設定画面から節「キー」へ端末の種類が渡る（D11。`:kind="kind"` の結線）。
+describe("SettingsDialog — 節「キー」への端末の種類（モバイルの一言）", () => {
+  it("モバイルのときだけ、節「キー」に画面のキーボードでは取り込めない旨の一言が出る", async () => {
+    const mobile = await openDialog(makeController(), "mobile");
+    expect(mobile.wrapper.find(".keys-mobile-note").exists()).toBe(true);
+    expect(mobile.wrapper.find(".keys-mobile-note").text()).toContain("画面のキーボードでは割り当てを取り込めません");
+    mobile.wrapper.unmount();
+    document.body.innerHTML = "";
+    const desktop = await openDialog();
+    expect(desktop.wrapper.find(".keys-mobile-note").exists()).toBe(false);
   });
 });

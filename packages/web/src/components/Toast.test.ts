@@ -1,6 +1,7 @@
 import { mount } from "@vue/test-utils";
 import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import Toast from "./Toast.vue";
 
@@ -52,12 +53,48 @@ describe("Toast — 初回 pane フォーカスの案内", () => {
     expect(view.toasts).toHaveLength(0);
     view.focusPane("p1");
     await wrapper.vm.$nextTick();
-    expect(view.toasts.map((t) => t.message)).toContain("Ctrl+B ? でキー一覧");
+    expect(view.toasts.map((t) => t.message)).toContain("ctrl+b ? でキー一覧");
 
     const countAfterFirst = view.toasts.length;
     view.focusPane("p2");
     await wrapper.vm.$nextTick();
     expect(view.toasts).toHaveLength(countAfterFirst); // 増えない（一度だけ）
+  });
+
+  it("キー一覧の割り当てを変えていれば、その割り当てで案内する（prefix・直接のキー。AC11）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyPrefix("alt+x");
+    settings.setKeyBindings("help", ["prefix+h"]);
+    const view = useViewStore(pinia);
+    const wrapper = mount(Toast, { global: { plugins: [pinia] } });
+    view.focusPane("p1");
+    await wrapper.vm.$nextTick();
+    expect(view.toasts.map((t) => t.message)).toEqual(["alt+x h でキー一覧"]);
+  });
+
+  it("直接のキーが先頭なら、prefix を付けずに案内する", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyBindings("help", ["ctrl+alt+/", "prefix+?"]);
+    const view = useViewStore(pinia);
+    const wrapper = mount(Toast, { global: { plugins: [pinia] } });
+    view.focusPane("p1");
+    await wrapper.vm.$nextTick();
+    expect(view.toasts.map((t) => t.message)).toEqual(["ctrl+alt+/ でキー一覧"]);
+  });
+
+  it("キー一覧の割り当てが無ければ案内を出さず、表示済みにもしない（割り当てたあと、次に別の pane へフォーカスが移ったときに出る）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setKeyBindings("help", []);
+    const view = useViewStore(pinia);
+    const wrapper = mount(Toast, { global: { plugins: [pinia] } });
+    view.focusPane("p1");
+    await wrapper.vm.$nextTick();
+    expect(view.toasts).toHaveLength(0);
+    expect(localStorage.getItem("wtm.hint.prefixHelp.v1")).toBeNull();
+    settings.setKeyBindings("help", ["prefix+?"]);
+    view.focusPane("p2");
+    await wrapper.vm.$nextTick();
+    expect(view.toasts.map((t) => t.message)).toEqual(["ctrl+b ? でキー一覧"]);
   });
 
   it("localStorage に既に表示済みが記録されていれば出さない", async () => {

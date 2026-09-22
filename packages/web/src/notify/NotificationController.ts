@@ -1,8 +1,9 @@
 import type { AgentInfo } from "@wtm/protocol";
 import type { Pinia } from "pinia";
-import { nextTick } from "vue";
+import { nextTick, watch } from "vue";
 import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import { describeParts, describeTarget } from "./describe.js";
 import { notifyKeyOf, routesFor, shouldQueue, snapshotKeys, type Audience, type NotifyKey, type NotifyKind } from "./policy.js";
@@ -30,7 +31,14 @@ const TOAST_SUFFIX: Record<NotifyKind, string> = { blocked: "が入力待ちで�
 const TITLE_PREFIX: Record<NotifyKind, string> = { blocked: "入力待ち", done: "完了" };
 /** 対象が消えていたときの文言。**`prefix+o` と［移動］で同じ状況なので、同じ言い方にする**。 */
 const CLOSED_TARGET_MESSAGE = "知らせの対象はすでに閉じられていました。";
-const HINT_MESSAGE = "エージェントの入力待ち・完了を、OS の通知でも受け取れますか？（後から prefix+s でも変えられます）";
+/**
+ * OS 通知の案内の文。**「後から〜でも変えられます」のキーは現在の割り当て**（`settings.keymap.hintFor("settings")`。20260921-keybinding-customization の AC11）。
+ * 設定を開く割り当てが無ければ、キーを書かずに「設定」と言う（設定はサイドバーのメニュー・モバイルの上部バーからも開ける）。
+ */
+function hintMessage(settingsKey: string | null): string {
+  const how = settingsKey === null ? "設定" : ` ${settingsKey} `;
+  return `エージェントの入力待ち・完了を、OS の通知でも受け取れますか？（後から${how}でも変えられます）`;
+}
 
 /**
  * 検知 → 判定 → 遅延 → 配送（design 振る舞い 1〜4）。
@@ -45,6 +53,11 @@ export class NotificationController {
 
   constructor(opts: NotificationControllerOptions) {
     this.#opts = opts;
+    // 案内は sticky で残るので、出ている間に設定でキーを変えうる——文言を現在の割り当てへ追従させる（AC11）。
+    watch(
+      () => this.#settings.keymap.hintFor("settings"),
+      () => this.#refreshHintMessage(),
+    );
   }
 
   get #store() {
@@ -55,6 +68,9 @@ export class NotificationController {
   }
   get #view() {
     return useViewStore(this.#opts.pinia);
+  }
+  get #settings() {
+    return useSettingsStore(this.#opts.pinia);
   }
 
   /** エージェントの状態が変わった（`StoreAdapter.onAgentChanged`）。 */
@@ -307,7 +323,7 @@ export class NotificationController {
     // **重ねない**。持たないと、押さずに放置したままフォーカスのたびに 1 枚ずつ増える（`sticky` なので消えない）。
     if (store.hintToastId != null && this.#view.toasts.some((t) => t.id === store.hintToastId)) return;
 
-    store.hintToastId = this.#view.toast(HINT_MESSAGE, {
+    store.hintToastId = this.#view.toast(hintMessage(this.#settings.keymap.hintFor("settings")), {
       kind: "sticky",
       wrap: true, // 問いかけ＋ボタン 2 つ。畳むと狭い画面で読めない
       actions: [
@@ -315,6 +331,14 @@ export class NotificationController {
         { label: "あとで", run: () => this.#consumeHint() },
       ],
     });
+  }
+
+  /** 出ている案内の文を、現在の割り当てで書き直す（出ていなければ何もしない）。 */
+  #refreshHintMessage(): void {
+    const id = this.#store.hintToastId;
+    if (id == null) return;
+    const toast = this.#view.toasts.find((t) => t.id === id);
+    if (toast !== undefined) toast.message = hintMessage(this.#settings.keymap.hintFor("settings"));
   }
 
   /** 案内が（ボタンでも本体のクリックでも）消えたら消費する。`syncToasts` から呼ぶ。 */

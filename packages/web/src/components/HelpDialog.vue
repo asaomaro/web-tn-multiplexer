@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { DEFAULT_KEYMAP } from "../keys/keymap.js";
+import { ACTIONS, type ActionGroup } from "../keys/bindings.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 
 /**
  * キー一覧（T24。design「ダイアログ」「ヘルプ」。herdr `src/input/keybind_help.rs`
  * `keybind_help_groups()`/`filter_keybind_help_groups()` を移植——群（全体・移動・workspace / tab・pane）
- * ごとの一覧、`custom` 群は本製品にカスタムキーバインドが無いので常に出さない（D56 の訂正 8）。
+ * ごとの一覧、`custom` 群は本製品にカスタムキーバインド（独自コマンド）が無いので常に出さない（D56 の訂正 8）。
+ * **キーは現在の割り当て（`settings.keymap`）から作る**（20260921-keybinding-customization。design「案内の追従」・D8）——prefix の後のキーは `prefix+v`、直接のキーは
+ * `ctrl+alt+d`、割り当てなしは「なし」。移動の群（navigate モードの中のキー）は変えられない固定の表記。
  * 絞り込みは herdr と同じくキー表記・説明の部分一致（大小無視）で、一致 0 件の群は丸ごと消える。
  *
  * Esc/Enter/スクロールの分岐は herdr の `route_overlay_key`（`overlay_input.rs:773-873`）を実測して
@@ -25,68 +28,48 @@ interface HelpGroup {
   entries: HelpEntry[];
 }
 
-/** `keymap.ts` の `notYet` の案内文をそのまま使う（design「後続のキーは灰色」）。 */
-function notYet(rawKey: string, displayKeys: string): HelpEntry {
-  const action = DEFAULT_KEYMAP.get(rawKey);
-  const work = action?.type === "notYet" ? action.work : "";
-  return { keys: displayKeys, label: `未対応（後続: ${work}）`, grayed: true };
+const settings = useSettingsStore();
+
+/** 「後続」の案内（`notYet`）。**そのキーがまだ「後続」の案内のときだけ**出す（別の操作に割り当てたら出さない）。 */
+function notYetEntry(chord: string): HelpEntry[] {
+  const action = settings.keymap.prefixMap.get(chord);
+  if (action?.type !== "notYet") return [];
+  return [{ keys: `prefix+${chord}`, label: `未対応（後続: ${action.work}）`, grayed: true }];
 }
 
-// herdr の keybind_help_groups() の群分けに合わせる（D76。本製品の縮小版キー表に合わせて中身は書き直す）。
-// H/J/K/L（swap）は herdr のヘルプにも出てこないので、ここでも出さない（D76）。
-const HELP_GROUPS: HelpGroup[] = [
+/**
+ * 操作の行。表記は現在の割り当て。割り当てなしは「なし」（灰色）。
+ * H/J/K/L（swap）は herdr のヘルプにも出てこないので、ここでも出さない（`helpHidden`。D76。編集は設定の節「キー」でできる）。
+ */
+function actionEntries(group: ActionGroup): HelpEntry[] {
+  return ACTIONS.filter((d) => d.group === group && !("helpHidden" in d)).map((d) => {
+    const list = settings.keymap.bindingsOf(d.id);
+    return list.length === 0 ? { keys: "なし", label: d.label, grayed: true } : { keys: list.join(" / "), label: d.label };
+  });
+}
+
+/** 移動の群：navigate モード（`prefix+w`）の中のキー。**固定**で変えられない（herdr でも `navigate_*` 以外は固定）。 */
+const NAVIGATE_ENTRIES: HelpEntry[] = [
+  { keys: "esc", label: "戻る" },
+  { keys: "↑ / ↓", label: "workspace の一覧を選ぶ" },
+  { keys: "h / j / k / l ・← / →", label: "pane を選ぶ" },
+  { keys: "enter", label: "選んだ workspace を開く" },
+];
+
+// herdr の keybind_help_groups() の群分けに合わせる（D76）。先頭に prefix 自身の行（herdr の「prefix mode」の行と同じ）。
+const helpGroups = computed<HelpGroup[]>(() => [
   {
     name: "全体",
     entries: [
-      { keys: "?", label: "キー一覧" },
-      { keys: "q", label: "このブラウザを切り離す" },
-      { keys: "s", label: "設定" },
-      notYet("R", "shift+r"),
-      { keys: "o", label: "次の知らせへ移る" },
+      { keys: settings.keymap.prefix, label: "prefix（押したあと、次のキーで操作します）" },
+      ...actionEntries("全体"),
+      ...notYetEntry("shift+r"),
     ],
   },
-  {
-    name: "移動",
-    entries: [
-      { keys: "esc", label: "戻る" },
-      { keys: "↑ / ↓", label: "workspace の一覧を選ぶ" },
-      { keys: "h / j / k / l ・← / →", label: "pane を選ぶ" },
-      { keys: "tab / shift+tab", label: "pane を巡回する" },
-      { keys: "enter", label: "選んだ workspace を開く" },
-    ],
-  },
-  {
-    name: "workspace / tab",
-    entries: [
-      { keys: "w", label: "workspace の一覧へ（navigate モード）" },
-      { keys: "g", label: "goto（workspace・tab・pane から探す）" },
-      { keys: "shift+n", label: "新規 workspace" },
-      { keys: "shift+w", label: "workspace の名前を変更" },
-      { keys: "shift+d", label: "workspace を閉じる" },
-      { keys: "shift+g", label: "新しい worktree" },
-      { keys: "c", label: "新規 tab" },
-      { keys: "n / p", label: "次 / 前の tab" },
-      { keys: "1..9", label: "tab を切り替え" },
-      { keys: "shift+t", label: "tab の名前を変更" },
-      { keys: "shift+x", label: "tab を閉じる" },
-    ],
-  },
-  {
-    name: "pane",
-    entries: [
-      { keys: "v", label: "右へ分割" },
-      { keys: "-", label: "下へ分割" },
-      { keys: "h / j / k / l", label: "隣の pane へフォーカス" },
-      { keys: "x", label: "pane を閉じる" },
-      { keys: "shift+p", label: "pane の名前を変更" },
-      { keys: "z", label: "拡大表示" },
-      { keys: "r", label: "resize モード" },
-      { keys: "[", label: "copy モード" },
-      { keys: "b", label: "サイドバーの折りたたみ" },
-      notYet("e", "e"),
-    ],
-  },
-];
+  { name: "移動", entries: NAVIGATE_ENTRIES },
+  { name: "workspace / tab", entries: actionEntries("workspace / tab") },
+  { name: "pane", entries: [...actionEntries("pane"), ...notYetEntry("e")] },
+]);
 
 const SCROLL_LINE = 32;
 const SCROLL_PAGE = 240;
@@ -100,8 +83,8 @@ const query = ref("");
 
 const filteredGroups = computed<HelpGroup[]>(() => {
   const q = query.value.trim().toLowerCase();
-  if (!q) return HELP_GROUPS;
-  return HELP_GROUPS.map((g) => ({ name: g.name, entries: g.entries.filter((e) => e.keys.toLowerCase().includes(q) || e.label.toLowerCase().includes(q)) })).filter(
+  if (!q) return helpGroups.value;
+  return helpGroups.value.map((g) => ({ name: g.name, entries: g.entries.filter((e) => e.keys.toLowerCase().includes(q) || e.label.toLowerCase().includes(q)) })).filter(
     (g) => g.entries.length > 0,
   );
 });

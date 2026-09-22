@@ -75,6 +75,15 @@ pnpm --filter @wtm/e2e test
   いるテーマの対。対の無い Dracula・Nord・Vesper の明るいときは Catppuccin Latte）。選んだ内容はこのブラウザに残り、次に開いたときは最初の
   描画からそのテーマで出る。端末の中のアプリが色を問い合わせる（`OSC 11` 等。nvim が背景の明暗を調べる等）と、その tab の大きさを決めて
   いるブラウザのテーマの色で答える。
+- **prefix と各操作のキーを、ブラウザごとに変えられる**（herdr のキー設定。20260921-keybinding-customization）：設定の節「キー」で、prefix と
+  34 の操作の割り当てを、押したキーを取り込んで変える（Esc で取り消し）。1 つの操作に複数持てて、prefix の後のキーに加えて**直接のキー**
+  （`ctrl+alt+d` のように prefix を押さない 1 打。`ctrl`・`alt`・`cmd` を含むか F キー。端末に入力が向いている通常の状態でだけ効く）も付けられる。
+  すでに使われているキー・prefix と同じキー・貼り付け（`Ctrl+Shift+V`。直接のキーにも prefix の後にも）・AltGr で合成された文字は、理由を出して拒否する
+  （取り込み待ちの Esc は取り消しで、割り当てにはならない）。AltGr で合成された文字は、実行時にも直接のキーに当てず端末へ通す。
+  ［既定に戻す］は操作ごと・prefix・すべて（確認あり）。［herdr のおすすめの直接のキー（ctrl+alt）を足す］で herdr の文書の一式を足せる（環境で届かないキーがある——Linux のデスクトップの一部の `Ctrl+Alt+L`・AltGr で `[` `]` を打つ配列の `Ctrl+Alt+[` `]`。ボタンの脇に注記があり、［変更］で付け替える）。何も変えなければ
+  今までのキーのまま（CapsLock を入れて Shift を押した文字キーだけは、shift 付きとして引く。20260921-keybinding-customization の decisions D8）。キー一覧（`prefix+?`）・最初のトースト・
+  OS 通知の案内文・モバイルの Prefix ボタンは現在の割り当てに従う。同じブラウザの別のウィンドウで変えた割り当ては、再読み込みなしで（`storage` イベントで）こちらにも届く。**ブラウザ・OS が先に受けるキー（`Ctrl+T`・`Ctrl+N`・`Ctrl+W` 等）は画面に届かないので
+  割り当てられない**。
 
 ## Linux（CI・手元）
 
@@ -151,6 +160,22 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       `printf '\e]11;?\a'; read -rs -t 1 -d $'\a' a; echo "${a#*;}"` を実行する（答えは入力として届くので、BEL まで読んで表示する）。
       期待：`rgb:fbfb/f1f1/c7c7` のように、そのテーマの背景（Gruvbox Light なら `#fbf1c7`）。テーマを替えてもう一度実行すると新しいテーマの背景に
       なる。nvim を起動すると、明るいテーマでは `:set background?` が `light` になる。
+- [ ] キーの割り当て（20260921-keybinding-customization）：
+      （1）`prefix+s` で設定を開き、節「キー」の prefix の［変更］を押して `Ctrl+A` を押す。期待：「prefix を ctrl+a にしました。」が出て、取り込みの部品が消え、
+      フォーカスが［変更］へ戻る。Esc で設定を閉じる。
+      （2）pane で `cat -v` を起動する。`Ctrl+B` を押す。期待：`^B` が出る（旧い prefix は端末へ届き、prefix には入らない）。`Ctrl+A` を押す。期待：画面の下の中央に「PREFIX」の帯が出る。
+      続けて `Ctrl+A` を押す。期待：帯が消えて `^A` が出る（2 度押しは prefix のキー自身を端末へ送る）。もう一度 `Ctrl+A` → `c`。期待：新しい tab の名前を尋ねるダイアログが出る（Esc で閉じる）。
+      （3）`Ctrl+A` → `s` で設定を開き（prefix は ctrl+a になっている）、右へ分割の行を開いて［追加：直接］→ `Ctrl+Alt+D`。期待：「「右へ分割」に ctrl+alt+d を割り当てました。」
+      （設定の中で押しているので、分割はされない）。Esc で閉じ、pane で `Ctrl+Alt+D` を押す。期待：prefix なしの 1 打で右へ分割され、`cat -v` に文字は出ない。
+      （4）設定を開き直し、goto の行を開いて（行の見出しを押す）［追加：prefix の後］→ `v`。期待：「右へ分割」が使っていると理由が出て、goto の割り当ては変わらない。
+      （5）［すべて既定に戻す］→［戻す］。期待：prefix が ctrl+b に戻る。
+      （6）同じブラウザで 2 つ目のウィンドウを開き、片方で prefix を `Ctrl+A` に変える。期待：もう片方も再読み込みなしで `Ctrl+A` で prefix に入る（別のウィンドウの変更は `storage` イベントで届く。単体は合成のイベントまで）。
+      **自動のテストは Linux の Chromium だけなので、次を環境ごとに手で確かめる**：
+      **Firefox・Safari**——（1）の取り込み待ちで Esc を 1 回押し、取り込みだけが取り消されて**設定画面が閉じない**こと。［すべて既定に戻す］の確認が出ているときの Esc も、確認だけが閉じて設定画面が閉じないこと。
+      **Windows（特に Firefox）**——`Ctrl+Alt+D` と `Ctrl+Alt+Shift+D`（大文字で届く）が取り込めること（Ctrl+Alt は AltGr と同じに見えるので、拒否されないこと）。［herdr のおすすめ］を足したあと `Ctrl+Alt+Shift+D` で下へ分割できること。ドイツ語などの AltGr の配列では `AltGr+Q`（`@`）が
+      「AltGr で入力する文字は…」と拒否されること。［herdr のおすすめの直接のキー］を足したあとも、`AltGr+8`・`AltGr+9`（`[`・`]`）が端末に打てること。**Windows・Linux**——取り込み待ちで `Ctrl+T`・`Ctrl+W` を押しても何も取り込まれない（ブラウザが先に処理する）こと。
+      **macOS**——`Option+D`（QWERTY 配列）が `alt+d` として取り込まれ、`∂` にならないこと。`Cmd+T`・`Cmd+W` はブラウザが先に受けるので取り込まれず、`Ctrl+T` は画面に届いて取り込める
+      （`ctrl+t` として。端末のアプリが使うキーなので、割り当てる前に確かめる）こと。IME を有効にしたまま取り込み待ちに入り、変換中のキーが取り込まれないこと。
 - [ ] workspace の自動の名前（20260921-workspace-auto-label）：設定の「端末」の「新しく開く場所」が「引き継ぐ」（既定）で、ホームが git の
       リポジトリでないこと（`~` を見る手順のため）を前提に、
       pane で `mkdir -p /tmp/wtm-repo/sub && git -C /tmp/wtm-repo init -q && cd /tmp/wtm-repo/sub` を実行してから `Ctrl+B N`
@@ -743,6 +768,22 @@ pnpm --filter @wtm/e2e exec playwright test performance agent-detection --headed
   まだ応えていない。後続）。
 - **テーマは画面の枠の色をコントラストのために寄せる**ので、画面の枠の文字・状態の色・選ばれている pane の枠・選択の面（表示中の tab・行）は、
   herdr の配色より明るいテーマでは濃く、暗いテーマでは明るく見えることがある（例 Solarized Dark の文字。WCAG 2.2 の 4.5:1・3:1 に足りるまで。端末の中の 16 色は上流の配色のまま）。
+
+- **キーの割り当て：ブラウザ・OS が先に受けるキーは割り当てられない／環境で変わる**（20260921-keybinding-customization）。`Ctrl+T`・`Ctrl+N`・`Ctrl+W`・
+  `Ctrl+Tab` 等はブラウザが先に受けて画面に届かないので、取り込みにも現れない（全画面のときだけ届ける Keyboard Lock API は使わない）。macOS の Option は文字を別の文字に化かすので
+  （`Option+D` → `∂`）、macOS のときだけ物理キーの位置（`code`）で元の英字・数字へ戻す。**Dvorak・QWERTZ・AZERTY の macOS では、化けた Option の chord の表示が押した字と食い違う**
+  （押せば効く。同 decisions D7）。Windows の AltGr は Ctrl+Alt と同じに見えるため、AltGr で**合成された文字**（`@`・`[` が別のキーにある配列）だけを拒否し、英数字と US 配列の記号は通す（記号は、同じ物理キーを同じ shift の状態で押した US 配列の文字と比べる。**記号の位置が US と違う配列**〔Dvorak 等〕では、Firefox・Windows で記号が「AltGr で入力する文字」として拒否されうる〔英数字は通る〕。逆に、**AltGr で打つ記号が US 配列と同じ物理キーにある配列**では合成と判定できない。どちらも実機は未確認）。
+  修飾キー付きの句読点は環境次第（herdr の文書と同じ）。
+- **キーの割り当て：`keydown` を止めるボタンにフォーカスがある間は、prefix も直接のキーも届かない**（既存の挙動。20260921-keybinding-customization の decisions D11）。サイドバーの［＋新規］［メニュー］［並び順］［«］・
+  tab バーの［＋］は `keydown` を止め、pane の枠は Enter・Space・↓ を止める。マウスで押したあとにフォーカスが残っていると、端末をクリックするまで prefix・直接のキーが効かない
+  （端末・サイドバーの行・フォーカスできない要素をクリックした後では効く）。
+- **キーの割り当て：おすすめ一式には、環境によって届かないキーがある**（20260921-keybinding-customization の decisions D13）。`Ctrl+Alt+L` は Linux のデスクトップの一部（KDE 等）が画面のロックに使い、herdr の文書も「避けるもの」に挙げる。`Ctrl+Alt+[`・`]` は、`[`・`]` を AltGr で打つ配列（ドイツ語等）では AltGr で合成された文字として端末へ通す。
+  届かないキーは、設定の［変更］で別のキーに付け替える。
+- **キーの割り当て：navigate・resize モードの中のキーは修飾キーを見ない**（既存の挙動。20260921-keybinding-customization の AC12〔そのモードの中のキーは変えない〕）。prefix を `ctrl+l`・`alt+j` のように文字を含む形へ変えても、prefix は terminal・copy モードで
+  だけ効き、navigate・resize モードの中では、そのキーの文字（`l`・`j`）として扱われる（pane の移動・resize になる）。モバイルの Prefix ボタンはそのモードでは何もしない（20260921-keybinding-customization の decisions D9）。
+- **キーの割り当て：CapsLock を入れて Shift を押した文字キーは、shift 付きとして引く**（20260921-keybinding-customization の decisions D8。以前は shift を無視して小文字として引いていた）。CapsLock を入れたまま
+  文字キーを押して大文字で届く環境（未確認）では、大文字は shift 付きとして引く既存の規則（prefix の後の `n`→`N` も同じ）が直接のキーにも及び、`Ctrl+Alt+D` も `Ctrl+Alt+Shift+D` も `ctrl+alt+shift+d`（下へ分割）になって、おすすめ一式の右へ分割（`ctrl+alt+d`）に届かなくなる（20260921-keybinding-customization の decisions D13）。キー一覧の並び・行の粒度が
+  操作ごとに変わった（同 decisions D10。内容は同じ）。画面のキーボード（モバイル）では割り当てを取り込めない（物理キーボードをつないだときに使える）。
 
 ほかに、各節に書いた制約：xterm.js のモバイルの未解決課題（「実機（iOS Safari・Android Chrome。AC12）」の「既知の未解決課題」）・
 リバースプロキシの無通信のタイムアウト（`docs/tls-setup.md`「リバースプロキシの後ろに置く」）。

@@ -68,8 +68,9 @@ const injectSimpleKey = (key: string): void => {
   resetOneShotAfterUse();
 };
 
+// Prefix ボタンは**いまの prefix**（設定で変えた prefix。20260921-keybinding-customization の AC11）を注入する。どのキーかは `KeyInputController.injectPrefix()` が Router から得る。
 const injectPrefix = (): void => {
-  keys.injectKey({ key: "b", code: "KeyB", ctrl: true, alt: false, shift: false, meta: false, type: "keydown", composing: false });
+  keys.injectPrefix();
   resetOneShotAfterUse();
 };
 </script>

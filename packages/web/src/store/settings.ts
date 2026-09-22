@@ -1,6 +1,17 @@
 import type { NewCwd, ThemeName } from "@wtm/protocol";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
+import type { ActionId } from "../keys/bindings.js";
+import {
+  emptyKeyPrefs,
+  loadKeyPrefs,
+  serializeKeyPrefs,
+  withBindings,
+  withoutBindings,
+  withPrefix,
+  type KeyPrefs,
+} from "../keys/keyPrefs.js";
+import { resolveKeymap, type ResolvedKeymap } from "../keys/keymap.js";
 import { loadThemePrefs, resolveTheme } from "../theme/themes.js";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
 import { readPrefs, writePrefs } from "./view.js";
@@ -138,6 +149,74 @@ export const useSettingsStore = defineStore("settings", () => {
     writePrefs({ themeDark: v });
   }
 
+  /**
+   * キーの割り当て（20260921-keybinding-customization。design「store」・D2）。**既定との差だけ**を持つ（`keys/keyPrefs.ts`）。読み込みは値ごとに落とす（AC8）。
+   * ブラウザごと（herdr のキー設定はクライアントの機器の設定）。
+   */
+  const keyPrefs = ref<KeyPrefs>(loadKeyPrefs(initial["keys"]));
+  /**
+   * 解決した割り当ての表。`KeyRouter`（`main.ts` が変わるたびに差し替える）・キー一覧・トースト・通知の案内文が**同じ表**を見る。
+   * 割り当てが変わったときだけ作り直す（押すたびには作らない）。
+   */
+  const keymap = computed<ResolvedKeymap>(() => resolveKeymap(keyPrefs.value).keymap);
+
+  /**
+   * 差し替えて保存する。**保存する形（`serializeKeyPrefs`）を読み直した結果を採る**——呼び出し側が検証（`validateAssignment`）を済ませているが、**読めない値**（構文が通らない文字列・
+   * 送れない prefix）を渡されても反映せず捨てる（読み込みと同じ落とし方。二重の守り）。衝突・予約は読み込みの段では見ず、解決（`resolveKeymap`）が同じ規則で落とす（保存は残る）。
+   * 状態も保存も同じなら何もしない（keymap を作り直さない・書かない）。**保存が状態と違うとき（壊れた `keys` が残っている等）は、状態はそのまま保存だけを直す**。差が無くなれば `keys` ごと消す。
+   */
+  function replaceKeyPrefs(next: KeyPrefs): void {
+    const normalized = loadKeyPrefs(serializeKeyPrefs(next));
+    const serialized = serializeKeyPrefs(normalized);
+    const sameState =
+      JSON.stringify(serialized ?? null) ===
+      JSON.stringify(serializeKeyPrefs(keyPrefs.value) ?? null);
+    const sameStored =
+      JSON.stringify(serialized ?? null) === JSON.stringify(readPrefs()["keys"] ?? null);
+    if (sameState && sameStored) return;
+    if (!sameState) keyPrefs.value = normalized;
+    writePrefs({ keys: serialized });
+  }
+
+  /**
+   * 同じブラウザの別のウィンドウ・タブで割り当てが変わったら追従する。`writePrefs` は書くたびに保存された全体を読んで項目だけ差し替えるので、ほかの設定は先の変更を消さないが、
+   * `keys` は 1 つのまとまりをメモリの状態から丸ごと書く——追従しないと、古い状態から別の変更をしたとき、先に保存された変更を上書きしてしまう。
+   * `storage` は**ほかの**ウィンドウの書き込みでだけ発火する（自分の書き込みでは来ない）。
+   */
+  window.addEventListener("storage", () => {
+    const fresh = loadKeyPrefs(readPrefs()["keys"]);
+    if (
+      JSON.stringify(serializeKeyPrefs(fresh) ?? null) !==
+      JSON.stringify(serializeKeyPrefs(keyPrefs.value) ?? null)
+    )
+      keyPrefs.value = fresh;
+  });
+
+  /** prefix を変える（chord。null は既定へ）。反映と保存を同時に行う（確定ボタンを置かない。AC8）。 */
+  function setKeyPrefix(chord: string | null): void {
+    replaceKeyPrefs(withPrefix(keyPrefs.value, chord));
+  }
+
+  /** ある操作の割り当てを差し替える（空配列は「割り当てなし」）。既定と同じ内容になれば上書きを消す。 */
+  function setKeyBindings(id: ActionId, bindings: readonly string[]): void {
+    replaceKeyPrefs(withBindings(keyPrefs.value, id, bindings));
+  }
+
+  /** ある操作の上書きを消す（既定へ戻す。AC9）。 */
+  function resetKeyAction(id: ActionId): void {
+    replaceKeyPrefs(withoutBindings(keyPrefs.value, id));
+  }
+
+  /** prefix を既定へ戻す（AC9）。 */
+  function resetKeyPrefix(): void {
+    replaceKeyPrefs(withPrefix(keyPrefs.value, null));
+  }
+
+  /** すべてを既定へ戻す（AC9。`keys` を消す）。 */
+  function resetAllKeys(): void {
+    replaceKeyPrefs(emptyKeyPrefs());
+  }
+
   return {
     statusSymbols,
     scrollback,
@@ -149,6 +228,8 @@ export const useSettingsStore = defineStore("settings", () => {
     themeDark,
     systemDark,
     effectiveTheme,
+    keyPrefs,
+    keymap,
     setStatusSymbols,
     setScrollback,
     setNewCwdPolicy,
@@ -157,5 +238,11 @@ export const useSettingsStore = defineStore("settings", () => {
     setThemeAuto,
     setThemeLight,
     setThemeDark,
+    replaceKeyPrefs,
+    setKeyPrefix,
+    setKeyBindings,
+    resetKeyAction,
+    resetKeyPrefix,
+    resetAllKeys,
   };
 });

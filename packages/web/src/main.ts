@@ -13,7 +13,7 @@ import { KeyRouter } from "./keys/KeyRouter.js";
 import { CopyMode } from "./keys/CopyMode.js";
 import { NavigateMode } from "./keys/NavigateMode.js";
 import { ResizeMode } from "./keys/ResizeMode.js";
-import { DEFAULT_KEYMAP } from "./keys/keymap.js";
+import { setOptionComposes } from "./keys/chord.js";
 import { isCoarsePointer } from "./mobile/detect.js";
 import { clientErrorMessage } from "./net/clientError.js";
 import { DesktopNotifier } from "./notify/DesktopNotifier.js";
@@ -27,7 +27,7 @@ import { useSeenStore } from "./store/seen.js";
 import { useSessionStore } from "./store/session.js";
 import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
-import { MouseBridge } from "./term/MouseBridge.js";
+import { isMacPlatform, MouseBridge } from "./term/MouseBridge.js";
 import { RendererPool } from "./term/RendererPool.js";
 import { TerminalRegistry } from "./term/TerminalRegistry.js";
 import { effectiveScrollback } from "./term/scrollback.js";
@@ -95,11 +95,15 @@ const conn: ConnectionPort = connection;
 // 新しい workspace の応答を待つ間の入力を溜め、新しい pane へ流す（D99）。
 const inputGate = new InputGate(conn);
 
+// キーの割り当て（20260921-keybinding-customization）：prefix と割り当ては**設定（`settings.keymap`）から解決した表**で、設定画面で変えると即時に差し替える（AC8）。
+// macOS の Option は文字を別の文字に化かすので、macOS のときだけ `code` で元へ戻す（D6b。ほかの環境で入力を書き換えない）。
+setOptionComposes(isMacPlatform());
 const router = new KeyRouter(
-  DEFAULT_KEYMAP,
+  settings.keymap,
   { now: () => Date.now(), setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (h) => window.clearTimeout(h as number) },
   { navigate: new NavigateMode(), copy: new CopyMode(), resize: new ResizeMode() },
 );
+watch(() => settings.keymap, (keymap) => router.setKeymap(keymap));
 const keys = new KeyInputController(router, inputGate);
 
 const renderers = new RendererPool({ capacity: webglCapacity });
