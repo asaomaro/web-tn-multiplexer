@@ -8,6 +8,7 @@ import {
 } from "../keys/assign.js";
 import { ACTIONS, actionDef, type ActionGroup, type ActionId } from "../keys/bindings.js";
 import { keyInputOf, type KeyboardEventLike } from "../keys/chord.js";
+import { KEY_PRESETS } from "../keys/presets.js";
 import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 
@@ -246,19 +247,23 @@ function resetPrefix(): void {
   void nextTick(() => root.value?.querySelector<HTMLElement>("[data-prefix-change]")?.focus());
 }
 
-/** herdr が文書で勧める `ctrl+alt` の直接のキーの一式を足す（冪等）。足せなかった分は理由つきで知らせる。 */
-function addRecommended(): void {
-  const r = applyRecommended(settings.keymap, settings.keyPrefs);
+/** いま選んでいるプリセットの id（既定は先頭＝herdr のおすすめ）。20260922-keybinding-presets・design「振る舞いの詳細」。 */
+const selectedPresetId = ref(KEY_PRESETS[0]!.id);
+
+/** 選んだプリセットの一式を足す（AC10。冪等）。足せなかった分は理由つきで知らせる（design「`KeySettings.vue` の変更」）。 */
+function addPreset(): void {
+  const preset = KEY_PRESETS.find((p) => p.id === selectedPresetId.value) ?? KEY_PRESETS[0]!;
+  const r = applyRecommended(settings.keymap, settings.keyPrefs, preset.bindings);
   settings.replaceKeyPrefs(r.prefs);
   const parts: string[] = [];
   if (r.added.length > 0)
-    parts.push(`直接のキーを ${r.added.length} 個足しました：${r.added.join("、")}。`);
+    parts.push(`${preset.label}を ${r.added.length} 個足しました：${r.added.join("、")}。`);
   if (r.added.length === 0 && r.skipped.length === 0)
-    parts.push("おすすめの直接のキーは、すでに全部入っています。");
+    parts.push(`${preset.label}は、すでに全部入っています。`);
   else if (r.already.length > 0) parts.push(`すでにあった分：${r.already.join("、")}。`);
   if (r.skipped.length > 0)
     parts.push(
-      `足さなかった分：${r.skipped.map((k) => describeSkip(k.chord, k.reason)).join("、")}。`,
+      `足さなかった分：${r.skipped.map((k) => describeSkip(k.binding, k.reason)).join("、")}。`,
     );
   message.value = parts.join("");
 }
@@ -420,14 +425,18 @@ watch(
     </div>
 
     <div class="keys-bulk">
+      <label class="keys-preset-label" for="keys-preset-select">プリセット</label>
+      <select id="keys-preset-select" v-model="selectedPresetId" class="keys-select">
+        <option v-for="p in KEY_PRESETS" :key="p.id" :value="p.id">{{ p.label }}</option>
+      </select>
       <button
         type="button"
         class="keys-btn"
-        data-recommended
+        data-add-preset
         aria-describedby="keys-recommended-note"
-        @click="addRecommended"
+        @click="addPreset"
       >
-        herdr のおすすめの直接のキー（ctrl+alt）を足す
+        足す
       </button>
       <button
         v-if="!confirmingReset"
@@ -456,8 +465,8 @@ watch(
     </div>
 
     <p id="keys-recommended-note" class="settings-note keys-recommended-note">
-      おすすめの一式には、環境によって届かないキーがあります（Linux のデスクトップの一部では
-      Ctrl+Alt+L を OS が先に使います。AltGr で [ ] を打つキー配列では Ctrl+Alt+[ ]
+      プリセットには、環境によって届かないキーがあります（Linux のデスクトップの一部では Ctrl+Alt+L
+      を OS が先に使います。AltGr で [ ] を打つキー配列では Ctrl+Alt+[ ]
       は使えません）。届かないキーは［変更］で付け替えてください。
     </p>
 
@@ -590,6 +599,18 @@ watch(
   align-items: center;
   gap: 0.5em;
   margin-top: 0.8em;
+}
+.keys-preset-label {
+  font-size: 0.9em;
+}
+.keys-select {
+  font: inherit;
+  color: inherit;
+  background: var(--wtm-menu-bg, #282a36);
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  min-height: 1.75rem;
 }
 .keys-confirm {
   display: flex;

@@ -349,8 +349,10 @@ test("おすすめの直接のキー（ctrl+alt）を足すと、prefix なし�
 }) => {
   await openApp(page, appServer);
   await openSettings(page);
-  await keysSection(page).locator("[data-recommended]").click();
-  await expect(status(page)).toContainText("直接のキーを 10 個足しました");
+  await keysSection(page).locator("[data-add-preset]").click();
+  await expect(status(page)).toContainText(
+    "herdr のおすすめの直接のキー（ctrl+alt）を 10 個足しました",
+  );
   await expect(actionRow(page, "focus_pane_left").locator(".keys-bindings")).toHaveText(
     "prefix+h / ctrl+alt+h",
   );
@@ -367,6 +369,25 @@ test("おすすめの直接のキー（ctrl+alt）を足すと、prefix なし�
   // 拡大表示（ctrl+alt+z）も prefix なしで効く。
   await page.keyboard.press("Control+Alt+z");
   await expect(page.locator(".tab-bar-zoomed")).toHaveCount(1);
+});
+
+test("「tmux 風」プリセットを選んで足すと、prefix+% で右へ分割できる（20260922-keybinding-presets。AC1・AC2）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  await keysSection(page).locator("#keys-preset-select").selectOption("tmux");
+  await keysSection(page).locator("[data-add-preset]").click();
+  await expect(status(page)).toContainText("tmux 風を");
+  await expect(actionRow(page, "split_vertical").locator(".keys-bindings")).toHaveText(
+    "prefix+v / prefix+%",
+  );
+  await page.keyboard.press("Escape");
+
+  await focusTerminal(page);
+  await prefixKey(page, "%"); // tmux 風の右へ分割
+  await expect.poll(() => paneCount(page)).toBe(2);
 });
 
 test("キー一覧とトーストは現在の割り当てを出す（AC11）", async ({ browser, appServer }) => {

@@ -16,8 +16,14 @@ parent: 20260918-web-terminal-multiplexer
   モバイルの Prefix ボタンは同じ解決した表（`packages/web/src/keys/keymap.ts` の `resolveKeymap`）から作り、herdr の `ctrl+alt` の一式も 1 操作で足せる。既定のままなら
   今までのキー操作は変わらない（旧 `DEFAULT_KEYMAP` を固定した値との 1:1 を単体テストで守る。例外は decisions D8 の CapsLock＋Shift）。サーバ・protocol は変えていない。
   実測: 単体（全パッケージ）2138 本・E2E 一式 116 本（うち `key-bindings.spec.ts` 14 本・`settings.spec.ts` 11 本）・smoke pass。回帰テストは変異で落ちることを確かめ、生出力を `.aidev/works/20260921-keybinding-customization/test-result.md` に貼った（AltGr の判定は 97 個の変異を網羅）。独立 review 3 ラウンド（must 0・should 4・nit 9 を解消。差し戻しは上限の 3 回）。herdr 互換以外のプリセットは下の別の行に残した
-- [ ] キーバインドのプリセット（herdr 互換以外）: tmux 風などの割り当ての一式を選べるようにする。20260921-keybinding-customization で割り当ての変更・保存は済んだので、残りはプリセット（herdr の既定・herdr の文書の
+- [x] キーバインドのプリセット（herdr 互換以外）: tmux 風などの割り当ての一式を選べるようにする。20260921-keybinding-customization で割り当ての変更・保存は済んだので、残りはプリセット（herdr の既定・herdr の文書の
   `ctrl+alt` の直接のキーの一式〔いまは「足す」ボタン〕に加え、tmux 風の `%`・`"`・`o`・`x` 等）。プリセットは `keys/bindings.ts` の `ActionDef.defaults` と同じ形の表で持てる（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+  → 着地: 20260922-keybinding-presets（feature/keybinding-presets）。`.keys-bulk` の単一目的ボタンを、プリセットを選ぶ `<select>` + ［足す］ボタンへ一般化（`packages/web/src/components/KeySettings.vue`）。
+  プリセットの表は `packages/web/src/keys/presets.ts` の `KEY_PRESETS`（`[ActionId, binding][]`。`assign.ts` の `applyRecommended` を `via` 決め打ちから `parseBinding` 経由の一般化へ）。新規「tmux 風」は
+  tmux 公式 man page（`tmux.1` の DEFAULT KEY BINDINGS）の既定のうち本製品と 1:1 対応する 14 組だけを採用（`o` によるカーソル移動・`{`/`}` のレイアウト順入れ替え等、対応の薄いものは含めない——research F11・F12）。
+  実測: 単体（全パッケージ）2150 本・E2E 一式 117 本（1 回目は無関係な既存テスト `mobile.spec.ts` D105 が負荷依存で 1 件不安定、単独 3 回・一式 2 回目はいずれも pass）・smoke pass。
+  独立点検（doccheck×3・taskcheck T1〜T4+cross）は合計 must 0・should 2・nit 4（いずれも解消）。回帰テストは変異で落ちることを確かめた（`test-result.md`）。
+  「節「キー」の操作の絞り込み・衝突時の「こちらへ移す」・macOS の Option 表示・Keyboard Lock API」は別行（31 行目）へ残した（decisions D2）。
 - [ ] navigate モードの移動キーを変えられるようにする: herdr の `navigate_workspace_up/down`・`navigate_pane_left/down/up/right`（prefix なしの素のキーを書ける別の表。`esc`・`enter`・`tab`・左右の矢印・素の `1`〜`9` は予約）。
   いまの navigate・resize・copy モードの中のキーは固定（`NavigateMode.ts`・`ResizeMode.ts`・`CopyMode.ts`）。herdr でも copy・resize の中は固定なので、対象は navigate の 6 キー（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
 - [ ] herdr にあって本製品に操作自体が無いものを足して割り当てられるようにする: **既定なし**の操作——前後の workspace への移動（`previous_workspace`・`next_workspace`）・直前の pane（`last_pane`）・

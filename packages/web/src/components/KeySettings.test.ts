@@ -79,8 +79,8 @@ describe("KeySettings — 一覧（AC1）", () => {
     expect(note).toContain("Ctrl+Alt+L");
     expect(note).toContain("AltGr");
     expect(note).toContain("［変更］で付け替えてください");
-    // おすすめのボタンから注記へ結ばれている（Tab だけで辿る利用者にも、ボタンの説明として届く）。
-    const btn = document.querySelector<HTMLElement>("[data-recommended]")!;
+    // ［足す］ボタンから注記へ結ばれている（Tab だけで辿る利用者にも、ボタンの説明として届く）。
+    const btn = document.querySelector<HTMLElement>("[data-add-preset]")!;
     const id = btn.getAttribute("aria-describedby")!;
     expect(document.getElementById(id)?.textContent).toBe(note);
   });
@@ -437,8 +437,9 @@ const resetPrefixBtn = (): HTMLElement | null =>
   document.querySelector<HTMLElement>("[data-reset-prefix]");
 const resetAllBtn = (): HTMLElement | null =>
   document.querySelector<HTMLElement>("[data-reset-all]");
-const recommendedBtn = (): HTMLElement =>
-  document.querySelector<HTMLElement>("[data-recommended]")!;
+const presetAddBtn = (): HTMLElement => document.querySelector<HTMLElement>("[data-add-preset]")!;
+const presetSelect = (): HTMLSelectElement =>
+  document.querySelector<HTMLSelectElement>("#keys-preset-select")!;
 const confirmYes = (): HTMLElement | null =>
   document.querySelector<HTMLElement>("[data-confirm-yes]");
 const confirmNo = (): HTMLElement | null =>
@@ -587,7 +588,7 @@ describe("KeySettings — すべてを既定へ戻す（インラインの確認
 describe("KeySettings — herdr のおすすめの直接のキー（AC10）", () => {
   it("押すと 10 個の直接のキーが足され、足した数と一覧が出る。prefix の後のキーは残る", async () => {
     const { settings } = await mountKeys();
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
     expect(settings.keymap.directMap.size).toBe(10);
     expect(settings.keymap.bindingsOf("focus_pane_left")).toEqual(["prefix+h", "ctrl+alt+h"]);
@@ -598,20 +599,20 @@ describe("KeySettings — herdr のおすすめの直接のキー（AC10）", ()
 
   it("もう一度押すと、すでに全部入っていることを知らせる（冪等）", async () => {
     const { settings } = await mountKeys();
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
     const before = JSON.stringify(settings.keyPrefs);
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
     expect(JSON.stringify(settings.keyPrefs)).toBe(before);
-    expect(status()).toBe("おすすめの直接のキーは、すでに全部入っています。");
+    expect(status()).toBe("herdr のおすすめの直接のキー（ctrl+alt）は、すでに全部入っています。");
   });
 
   it("別の操作が使っている chord は足さず、理由（持ち主の名前）を出す。残りは足す（足した数・キーが二重に出ない）", async () => {
     const { settings } = await mountKeys();
     settings.setKeyBindings("help", ["prefix+?", "ctrl+alt+z"]);
     await settle();
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
     expect(settings.keymap.bindingsOf("zoom")).toEqual(["prefix+z"]);
     expect(settings.keymap.directMap.size).toBe(10); // help の ctrl+alt+z を含めて 10（zoom の分は足さない）
@@ -625,21 +626,21 @@ describe("KeySettings — herdr のおすすめの直接のキー（AC10）", ()
     const { settings } = await mountKeys();
     settings.setKeyBindings("zoom", ["prefix+z", "ctrl+alt+z"]); // 一式の 1 つをすでに持っている
     await settle();
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
-    expect(status()).toContain("直接のキーを 9 個足しました"); // すでにあった 1 個は数えない
+    expect(status()).toContain("herdr のおすすめの直接のキー（ctrl+alt）を 9 個足しました"); // すでにあった 1 個は数えない
     expect(status()).toContain("すでにあった分：ctrl+alt+z");
     expect(status()).not.toContain("足さなかった分");
   });
 
   it("すでに全部あるうえで 1 個が別の操作の持ち物になったときは、「全部入っています」と言わず、足さなかった分を出す", async () => {
     const { settings } = await mountKeys();
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
     settings.setKeyBindings("zoom", ["prefix+z"]); // 拡大表示から ctrl+alt+z を外す
     settings.setKeyBindings("help", ["prefix+?", "ctrl+alt+z"]); // その chord を別の操作が持つ
     await settle();
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
     expect(status()).not.toContain("すでに全部入っています");
     expect(status()).toContain("すでにあった分");
@@ -651,12 +652,77 @@ describe("KeySettings — herdr のおすすめの直接のキー（AC10）", ()
     const { settings } = await mountKeys();
     settings.setKeyPrefix("ctrl+alt+h");
     await settle();
-    recommendedBtn().click();
+    presetAddBtn().click();
     await settle();
     expect(settings.keymap.bindingsOf("focus_pane_left")).toEqual(["prefix+h"]);
     expect(status()).toContain("足さなかった分");
     expect(status()).toContain("prefix");
     expect(status()).toContain("9 個足しました");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-keybinding-presets：プリセットを選べる（design「振る舞いの詳細」・「受け入れ基準との対応」）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("KeySettings — プリセットを選ぶ（AC1・AC2・AC-I1・AC-I3）", () => {
+  it("herdr のおすすめ（ctrl+alt）・tmux 風の 2 つから選べる。既定は先頭（herdr）", async () => {
+    await mountKeys();
+    const options = Array.from(presetSelect().options).map((o) => o.value);
+    expect(options).toEqual(["herdr-ctrl-alt", "tmux"]);
+    expect(presetSelect().value).toBe("herdr-ctrl-alt");
+  });
+
+  it("「tmux 風」を選んで足すと、tmux 風の割り当てが足され、案内文にプリセット名が出る（AC2）", async () => {
+    const { settings } = await mountKeys();
+    presetSelect().value = "tmux";
+    await presetSelect().dispatchEvent(new Event("change"));
+    await settle();
+    presetAddBtn().click();
+    await settle();
+    expect(settings.keymap.bindingsOf("split_vertical")).toEqual(["prefix+v", "prefix+%"]);
+    expect(settings.keymap.bindingsOf("focus_pane_left")).toEqual(["prefix+h", "prefix+left"]);
+    expect(status()).toContain("tmux 風を");
+    expect(status()).toContain("prefix+%");
+  });
+
+  it("キーボードだけで `<select>` → ［足す］の順に Tab で辿れる（AC-I3）", async () => {
+    await mountKeys();
+    presetSelect().focus();
+    expect(document.activeElement).toBe(presetSelect());
+    // DOM 順どおりに `<select>` の直後が ［足す］（tabindex を書いていないのでネイティブの順そのまま）。
+    const bulk = document.querySelector(".keys-bulk")!;
+    const focusables = Array.from(bulk.querySelectorAll("select, button"));
+    expect(focusables[0]).toBe(presetSelect());
+    expect(focusables[1]).toBe(presetAddBtn());
+  });
+
+  it("ダイアログを閉じて開き直しても、選んでいたプリセットは保持される（AC-I1）", async () => {
+    const { view } = await mountKeys();
+    presetSelect().value = "tmux";
+    await presetSelect().dispatchEvent(new Event("change"));
+    await settle();
+    view.closeDialog();
+    await settle();
+    view.openDialogWithContext({ kind: "settings" });
+    await settle();
+    expect(presetSelect().value).toBe("tmux");
+  });
+
+  it("tmux 風を足したあと［すべて既定に戻す］を押すと、tmux 風の分も含めて全部消える（AC7）", async () => {
+    const { settings } = await mountKeys();
+    presetSelect().value = "tmux";
+    await presetSelect().dispatchEvent(new Event("change"));
+    await settle();
+    presetAddBtn().click();
+    await settle();
+    expect(settings.keymap.bindingsOf("split_vertical")).toContain("prefix+%");
+    resetAllBtn()!.click();
+    await settle();
+    confirmYes()!.click();
+    await settle();
+    expect(settings.keymap.bindingsOf("split_vertical")).toEqual(["prefix+v"]);
+    expect(settings.keyPrefs.bindings).toEqual({});
   });
 });
 
