@@ -33,3 +33,4 @@ events:
   - { ts: 2026-09-22T07:39:18Z, phase: review, event: approved, metrics: { must: 0, should: 0, nit: 0, ac_total: 12, ac_covered: 12, tasks_no_ac: 0, tasks_ac_none: 0 } }
   - { ts: 2026-09-22T07:39:22Z, phase: deliver, event: start }
   - { ts: 2026-09-22T07:39:47Z, phase: deliver, event: approved, metrics: { files_changed: 9, insertions: 298, deletions: 44 } }
+  - { ts: 2026-09-22T07:41:11Z, phase: deliver, event: approved, metrics: { amend: yes } }
