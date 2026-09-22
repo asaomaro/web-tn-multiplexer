@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, watch } from "vue";
 import {
   buildNewCwd,
+  loadKeyboardLockInFullscreen,
   loadNewCwdPath,
   loadNewCwdPolicy,
   loadStatusSymbols,
@@ -34,6 +35,15 @@ describe("loadStatusSymbols（AC3・AC7）", () => {
   });
 });
 
+describe("loadKeyboardLockInFullscreen（20260922-keybinding-usability。AC11）", () => {
+  it("boolean でなければ既定の「無効」（実験的 API なので opt-in）", () => {
+    for (const raw of [undefined, null, "true", 0, 1, {}, []]) {
+      expect(loadKeyboardLockInFullscreen(raw), String(raw)).toBe(false);
+    }
+    expect(loadKeyboardLockInFullscreen(true)).toBe(true);
+  });
+});
+
 describe("useSettingsStore", () => {
   it("何も保存されていなければ、記号は入・scrollback は自動（AC7）", () => {
     const store = useSettingsStore(pinia);
@@ -47,6 +57,15 @@ describe("useSettingsStore", () => {
     expect(store.statusSymbols, "押した時点で反映（再読み込みを待たない）").toBe(false);
     expect(readPrefs()["statusSymbols"]).toBe(false);
     expect(useSettingsStore(createPinia()).statusSymbols).toBe(false);
+  });
+
+  it("keyboardLockInFullscreen は既定が無効で、切り替えると反映・保存され、新しいストアが読み戻す（20260922-keybinding-usability。AC11）", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.keyboardLockInFullscreen).toBe(false);
+    store.setKeyboardLockInFullscreen(true);
+    expect(store.keyboardLockInFullscreen, "押した時点で反映").toBe(true);
+    expect(readPrefs()["keyboardLockInFullscreen"]).toBe(true);
+    expect(useSettingsStore(createPinia()).keyboardLockInFullscreen).toBe(true);
   });
 
   // AC10：再読み込み（＝新しいストア）でも残る。

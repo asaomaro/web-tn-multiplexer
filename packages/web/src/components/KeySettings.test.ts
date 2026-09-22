@@ -55,6 +55,15 @@ const deleteBtn = (id: string, binding: string): HTMLElement =>
     b.getAttribute("aria-label")?.endsWith(`の ${binding} を削除`),
   )!;
 const prefixBtn = (): HTMLElement => document.querySelector<HTMLElement>("[data-prefix-change]")!;
+const filterInput = (): HTMLInputElement =>
+  document.querySelector<HTMLInputElement>("#keys-filter-input")!;
+async function typeFilter(text: string): Promise<void> {
+  filterInput().value = text;
+  filterInput().dispatchEvent(new Event("input"));
+  await settle();
+}
+const moveHereBtn = (): HTMLElement | null =>
+  document.querySelector<HTMLElement>("[data-move-here]");
 
 describe("KeySettings — 一覧（AC1）", () => {
   it("prefix と、3 群 34 個の操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
@@ -683,5 +692,297 @@ describe("KeySettings — モバイルの一言（AC1・D11）", () => {
     wrapper = mount(KeySettings, { global: { plugins: [pinia] }, attachTo: document.body });
     await settle();
     expect(document.querySelector(".keys-mobile-note")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-keybinding-usability：絞り込み（US1）・こちらへ移す（US2）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", () => {
+  it("最初から表示され（開閉の概念を持たない）、操作名の一部で一致する操作だけが残る（AC1・AC-I1）", async () => {
+    await mountKeys();
+    expect(filterInput()).not.toBeNull();
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(34);
+    await typeFilter("拡大表示");
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
+    expect(row("zoom")).not.toBeNull();
+  });
+
+  it("群名でも大小文字を区別せず絞り込め、0 件の群は見出しごと消える（AC1・AC2）", async () => {
+    await mountKeys();
+    await typeFilter("PANE");
+    const groups = Array.from(document.querySelectorAll(".keys-group-name")).map(
+      (g) => g.textContent,
+    );
+    // 大小文字を無視して群名 "pane" が一致するので pane 群は出る。「全体」群は
+    // 操作名にも群名にも "pane" を含む一致が無いので出ない（大小文字を区別しないことの確認）。
+    expect(groups).toContain("pane");
+    expect(groups).not.toContain("全体");
+    expect(row("zoom")).not.toBeNull(); // pane 群の操作の 1 つ
+  });
+
+  it("入力を空にすると全部戻る（即時反映。AC3・AC-I2）", async () => {
+    await mountKeys();
+    await typeFilter("拡大表示");
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
+    await typeFilter("");
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(34);
+  });
+
+  it("絞り込み中もフォーカスが入力欄に残る（入力のたびに奪われない。AC-I4）", async () => {
+    await mountKeys();
+    filterInput().focus();
+    await typeFilter("右");
+    expect(document.activeElement).toBe(filterInput());
+  });
+
+  it("取り込み待ち中でも絞り込み欄への入力は奪われず、取り込み待ちの状態も変わらない（AC-I5）", async () => {
+    await mountKeys();
+    prefixBtn().click();
+    await settle();
+    expect(capture()).not.toBeNull();
+    await typeFilter("拡大表示");
+    expect(filterInput().value).toBe("拡大表示");
+    expect(capture(), "絞り込みで取り込み待ちが終わらない").not.toBeNull();
+  });
+});
+
+describe("KeySettings — こちらへ移す（AC4〜AC7・AC-I6〜AC-I10）", () => {
+  it("衝突が無い通常の状態では「こちらへ移す」ボタンが無く、衝突したときだけ現れる（AC4・AC-I6）", async () => {
+    await mountKeys();
+    expect(moveHereBtn()).toBeNull();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "v"); // 右へ分割（prefix+v）と衝突
+    await settle();
+    expect(moveHereBtn()).not.toBeNull();
+  });
+
+  it("押すと確認ダイアログなしで衝突相手から外れ対象へ移り、フォーカスが新しい割り当ての［変更］へ行く（AC5・AC-I7・AC-I9）", async () => {
+    const { settings } = await mountKeys();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "v");
+    await settle();
+    moveHereBtn()!.click();
+    await settle();
+    expect(settings.keymap.bindingsOf("split_vertical")).not.toContain("prefix+v");
+    expect(settings.keymap.bindingsOf("goto")).toContain("prefix+v");
+    expect(moveHereBtn(), "使ったら消える").toBeNull();
+    expect(document.activeElement).toBe(changeBtn("goto", "prefix+v"));
+  });
+
+  it("使わずに別の取り込みを始めると消え、何も変わらない（AC6）", async () => {
+    const { settings } = await mountKeys();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "v");
+    await settle();
+    expect(moveHereBtn()).not.toBeNull();
+    addBtn("help", "prefix").click(); // 別の取り込みを始める
+    await settle();
+    press(capture()!, "Escape");
+    await settle();
+    expect(moveHereBtn()).toBeNull();
+    expect(settings.keymap.bindingsOf("split_vertical")).toContain("prefix+v"); // 何も変わっていない
+  });
+
+  it("ダイアログを閉じると「こちらへ移す」も消える（AC6）", async () => {
+    const { view } = await mountKeys();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "v");
+    await settle();
+    expect(moveHereBtn()).not.toBeNull();
+    view.closeDialog();
+    await settle();
+    view.openDialogWithContext({ kind: "settings" });
+    await settle();
+    expect(moveHereBtn()).toBeNull();
+  });
+
+  it("prefix 自身との衝突では「こちらへ移す」を出さない（AC7）", async () => {
+    await mountKeys();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "b", { ctrlKey: true }); // 既定の prefix（ctrl+b）と衝突
+    await settle();
+    expect(status()).toContain("prefix");
+    expect(moveHereBtn()).toBeNull();
+  });
+
+  it("範囲の操作（switch_tab）の一部との衝突では「こちらへ移す」を出さない（単一の chord として特定できない。AC7）", async () => {
+    await mountKeys();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "5"); // switch_tab の範囲（prefix+1..9）の一部と衝突
+    await settle();
+    expect(status()).toContain("tab を切り替え");
+    expect(moveHereBtn()).toBeNull();
+  });
+
+  it("絞り込み欄・「こちらへ移す」ボタンとも通常のタブ順に乗る（明示的な tabindex を持たない。AC-I3・AC-I8）", async () => {
+    await mountKeys();
+    expect(filterInput().getAttribute("tabindex")).toBeNull();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "v");
+    await settle();
+    expect(moveHereBtn()!.getAttribute("tabindex")).toBeNull();
+  });
+
+  it("「こちらへ移す」ボタンが実際に出ている状態でも、既存の各ボタンは変わらず存在する（並びを崩さない。AC-I10）", async () => {
+    await mountKeys();
+    addBtn("goto", "prefix").click();
+    await settle();
+    press(capture()!, "v"); // 衝突させ、「こちらへ移す」を実際に出す
+    await settle();
+    expect(moveHereBtn(), "この状態を検証するための前提").not.toBeNull();
+    expect(changeBtn("split_vertical", "prefix+v")).not.toBeNull();
+    expect(deleteBtn("split_vertical", "prefix+v")).not.toBeNull();
+    expect(addBtn("split_vertical", "prefix")).not.toBeNull();
+    expect(addBtn("split_vertical", "direct")).not.toBeNull();
+    expect(addBtn("goto", "prefix")).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-keybinding-usability：macOS の Option chord 表示補正（US3）・Keyboard Lock の switch（US4）
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** `navigator.platform`/`navigator.keyboard` を差し替える（テスト後に必ず `restore()` で戻す）。 */
+function stubNavigator(opts: {
+  mac?: boolean;
+  getLayoutMap?: () => Promise<{ get(code: string): string | undefined }>;
+}) {
+  const platformDesc = Object.getOwnPropertyDescriptor(navigator, "platform");
+  const keyboardDesc = Object.getOwnPropertyDescriptor(navigator, "keyboard");
+  if (opts.mac !== undefined) {
+    Object.defineProperty(navigator, "platform", {
+      value: opts.mac ? "MacIntel" : "Win32",
+      configurable: true,
+    });
+  }
+  if (opts.getLayoutMap !== undefined) {
+    Object.defineProperty(navigator, "keyboard", {
+      value: { getLayoutMap: opts.getLayoutMap },
+      configurable: true,
+    });
+  }
+  return {
+    restore() {
+      if (platformDesc) Object.defineProperty(navigator, "platform", platformDesc);
+      else delete (navigator as { platform?: unknown }).platform;
+      if (keyboardDesc) Object.defineProperty(navigator, "keyboard", keyboardDesc);
+      else delete (navigator as { keyboard?: unknown }).keyboard;
+    },
+  };
+}
+
+describe("KeySettings — macOS の Option chord 表示補正（AC8〜AC10）", () => {
+  it("macOS で getLayoutMap が使えるとき、alt を含む chord の表示が置き換わる（AC8）", async () => {
+    const stub = stubNavigator({
+      mac: true,
+      getLayoutMap: () => Promise.resolve({ get: (code: string) => (code === "KeyD" ? "z" : undefined) }),
+    });
+    try {
+      const { settings } = await mountKeys();
+      settings.setKeyBindings("split_vertical", ["prefix+v", "alt+d"]);
+      await settle();
+      await settle(); // getLayoutMap() の resolve を待つ
+      expect(summaryText("split_vertical")).toBe("prefix+v / alt+z");
+      // 保存・照合に使う値自体は変わらない（AC10）。
+      expect(settings.keymap.bindingsOf("split_vertical")).toEqual(["prefix+v", "alt+d"]);
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("macOS 以外・getLayoutMap 無し・取得失敗のときは今までどおりの表示のまま（AC9）", async () => {
+    const stub = stubNavigator({ mac: false });
+    try {
+      const { settings } = await mountKeys();
+      settings.setKeyBindings("split_vertical", ["prefix+v", "alt+d"]);
+      await settle();
+      expect(summaryText("split_vertical")).toBe("prefix+v / alt+d"); // 変わらない
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("macOS で getLayoutMap が reject しても、例外を投げず今までどおりの表示のまま（AC9）", async () => {
+    const stub = stubNavigator({ mac: true, getLayoutMap: () => Promise.reject(new Error("boom")) });
+    try {
+      const { settings } = await mountKeys();
+      settings.setKeyBindings("split_vertical", ["prefix+v", "alt+d"]);
+      await settle();
+      await settle();
+      expect(summaryText("split_vertical")).toBe("prefix+v / alt+d");
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("prefix 自体が alt+<文字> のときも、節「キー」の prefix 表示に補正がかかる（cross 点検の指摘で追加。AC8）", async () => {
+    const stub = stubNavigator({
+      mac: true,
+      getLayoutMap: () => Promise.resolve({ get: (code: string) => (code === "KeyD" ? "z" : undefined) }),
+    });
+    try {
+      const { settings } = await mountKeys();
+      settings.setKeyPrefix("alt+d");
+      await settle();
+      await settle();
+      const prefixText = document.querySelector(".keys-prefix .keys-binding")!.textContent!.trim();
+      expect(prefixText).toBe("alt+z");
+    } finally {
+      stub.restore();
+    }
+  });
+
+  it("chip の［変更］［削除］の aria-label も、表示用に置き換わった chord を使う（cross 点検の指摘で追加。AC8・AC10）", async () => {
+    const stub = stubNavigator({
+      mac: true,
+      getLayoutMap: () => Promise.resolve({ get: (code: string) => (code === "KeyD" ? "z" : undefined) }),
+    });
+    try {
+      const { settings } = await mountKeys();
+      settings.setKeyBindings("split_vertical", ["prefix+v", "alt+d"]);
+      await settle();
+      await settle();
+      const chip = row("split_vertical").querySelector('[data-change="split_vertical|alt+d"]')!;
+      expect(chip.getAttribute("aria-label")).toBe("「右へ分割」の alt+z を変更");
+      const del = Array.from(row("split_vertical").querySelectorAll<HTMLElement>("button")).find((b) =>
+        b.getAttribute("aria-label")?.includes("alt+z を削除"),
+      );
+      expect(del, "削除ボタンの aria-label も alt+z を使う").toBeTruthy();
+      // 保存・照合に使う値自体（data-change の実体）は生の chord のまま（AC10：表示専用の変換）。
+      expect(chip.getAttribute("data-change")).toBe("split_vertical|alt+d");
+    } finally {
+      stub.restore();
+    }
+  });
+});
+
+describe("KeySettings — Keyboard Lock の switch（AC11・AC-I11）", () => {
+  const keyboardLockSwitch = (): HTMLElement =>
+    document.querySelector<HTMLElement>('[role="switch"]')!;
+
+  it("既定は無効。押すと入切が反映・保存される（AC11）", async () => {
+    const { settings } = await mountKeys();
+    expect(keyboardLockSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(settings.keyboardLockInFullscreen).toBe(false);
+    keyboardLockSwitch().click();
+    await settle();
+    expect(settings.keyboardLockInFullscreen).toBe(true);
+    expect(keyboardLockSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(readPrefs()["keyboardLockInFullscreen"]).toBe(true);
+  });
+
+  it("説明文言に「全画面」「対応ブラウザ」を含む（AC-I11）", async () => {
+    await mountKeys();
+    expect(keyboardLockSwitch().textContent).toContain("全画面");
+    expect(keyboardLockSwitch().textContent).toContain("対応ブラウザ");
   });
 });

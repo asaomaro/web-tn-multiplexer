@@ -34,6 +34,14 @@ export function loadStatusSymbols(raw: unknown): boolean {
 }
 
 /**
+ * 全画面のときブラウザ予約キーも Keyboard Lock で受け取るか（20260922-keybinding-usability。
+ * design「US4」）。**既定は無効**——実験的 API・Chromium 系限定のため（AC11）。
+ */
+export function loadKeyboardLockInFullscreen(raw: unknown): boolean {
+  return typeof raw === "boolean" ? raw : false;
+}
+
+/**
  * 新しく開く場所の方針（20260921-new-terminal-cwd。herdr の `terminal.new_cwd`）。**ブラウザごと**に持ち、作成の要求に載せる
  * （サーバは方針を持たない。design D1）。
  */
@@ -74,6 +82,8 @@ export const useSettingsStore = defineStore("settings", () => {
   const initial = readPrefs();
   /** 状態を色に加えて記号でも示すか（`StateIcon.vue` が読む）。 */
   const statusSymbols = ref(loadStatusSymbols(initial["statusSymbols"]));
+  /** 全画面のときブラウザ予約キーも Keyboard Lock で受け取るか（`KeyboardLockController` が読む）。 */
+  const keyboardLockInFullscreen = ref(loadKeyboardLockInFullscreen(initial["keyboardLockInFullscreen"]));
   /** このブラウザの scrollback の設定。使う行数は `term/scrollback.ts` の `effectiveScrollback` が決める。 */
   const scrollback = ref<ScrollbackPref>(loadScrollbackPref(initial["scrollback"]));
   /** 新しい workspace・tab・分割を開く場所の方針と、「指定した場所」のパス（方針が `path` のときだけ使う）。 */
@@ -102,6 +112,12 @@ export const useSettingsStore = defineStore("settings", () => {
   function setStatusSymbols(v: boolean): void {
     statusSymbols.value = v;
     writePrefs({ statusSymbols: v });
+  }
+
+  /** 反映と保存を同時に行う（20260922-keybinding-usability。AC11）。 */
+  function setKeyboardLockInFullscreen(v: boolean): void {
+    keyboardLockInFullscreen.value = v;
+    writePrefs({ keyboardLockInFullscreen: v });
   }
 
   /** 反映と保存を同時に行う。**効くのはその後に作る端末から**（既に開いている pane は変えない。AC9）。 */
@@ -219,6 +235,7 @@ export const useSettingsStore = defineStore("settings", () => {
 
   return {
     statusSymbols,
+    keyboardLockInFullscreen,
     scrollback,
     newCwdPolicy,
     newCwdPath,
@@ -231,6 +248,7 @@ export const useSettingsStore = defineStore("settings", () => {
     keyPrefs,
     keymap,
     setStatusSymbols,
+    setKeyboardLockInFullscreen,
     setScrollback,
     setNewCwdPolicy,
     setNewCwdPath,

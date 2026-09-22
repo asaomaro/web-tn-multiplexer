@@ -176,6 +176,30 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       「AltGr で入力する文字は…」と拒否されること。［herdr のおすすめの直接のキー］を足したあとも、`AltGr+8`・`AltGr+9`（`[`・`]`）が端末に打てること。**Windows・Linux**——取り込み待ちで `Ctrl+T`・`Ctrl+W` を押しても何も取り込まれない（ブラウザが先に処理する）こと。
       **macOS**——`Option+D`（QWERTY 配列）が `alt+d` として取り込まれ、`∂` にならないこと。`Cmd+T`・`Cmd+W` はブラウザが先に受けるので取り込まれず、`Ctrl+T` は画面に届いて取り込める
       （`ctrl+t` として。端末のアプリが使うキーなので、割り当てる前に確かめる）こと。IME を有効にしたまま取り込み待ちに入り、変換中のキーが取り込まれないこと。
+- [ ] キーの設定の使い勝手（20260922-keybinding-usability）：**AC1〜AC7・AC9・AC11・AC14・
+      AC-I1〜AC-I12 は `packages/e2e` の `key-bindings.spec.ts` が自動で確かめている
+      （Linux・Chromium）ので、ここでは自動で確かめられない AC8・AC12・AC13 だけを手で確かめる**。
+      **macOS（AC8）**——非 US 配列（Dvorak・QWERTZ・AZERTY のいずれか）のキーボードで、
+      Chromium 系ブラウザ（Chrome・Edge 等。Safari・Firefox は `getLayoutMap()` が無いので対象外）
+      を開き、`prefix+s` → 節「キー」で `alt+…` を含む割り当て（例：右へ分割に
+      ［追加：直接］→ `Option+D` を割り当てる）を作る。期待：一覧の表示が、実際に押した物理キーの
+      字（配列上で `D` の位置にある字）に置き換わる（QWERTY の `d` のままではない）。取り込み・
+      保存される chord 自体（`localStorage` の `wtm.prefs.v1`）は `alt+d` のまま変わらないこと
+      （表示専用。AC10 は自動で確かめ済みだが、実機の `localStorage` でも目視すると確実）。
+      US 配列に戻す・`getLayoutMap()` の無いブラウザ（Firefox・Safari）で開き直すと、表示が
+      QWERTY の位置の字（例 `alt+d`）に戻ること（AC9 の実機確認）。
+      **全画面での Keyboard Lock（AC12・AC13）**——設定の switch（「全画面のとき、ブラウザ予約
+      キーも使う」）を有効にし、節「キー」で `Ctrl+T` を右へ分割等の操作へ直接のキーとして
+      割り当てようとしても、この時点（全画面でない）ではブラウザが先に受けて取り込まれないこと
+      をまず確認する（AC-I12 の裏付け）。次にブラウザを全画面にし（F11 等）、`Ctrl+T` を押す。
+      期待：新しいブラウザタブが開かず、画面に割り当てた操作が実行される（またはそのキーへ
+      割り当てられる）。全画面を抜けると、`Ctrl+T` はまたブラウザが新しいタブを開く（AC13）。
+      **この確認は `packages/e2e` では自動化できない**——ヘッドレス Chromium で `lock()`/`unlock()`
+      の呼び出し自体は自動で確かめているが（`key-bindings.spec.ts`）、「実際にブラウザが
+      `Ctrl+T` を横取りしなくなったか」という効果はブラウザの外側の挙動で、Playwright からは
+      観測できない（`.aidev/works/20260922-keybinding-usability/decisions.md` D6）。
+      switch が無効・API の無いブラウザ（Firefox・Safari）では、全画面でも `Ctrl+T` は今までどおり
+      ブラウザが先に受けること（AC14 の「効果が無いことが分かる」側）。
 - [ ] workspace の自動の名前（20260921-workspace-auto-label）：設定の「端末」の「新しく開く場所」が「引き継ぐ」（既定）で、ホームが git の
       リポジトリでないこと（`~` を見る手順のため）を前提に、
       pane で `mkdir -p /tmp/wtm-repo/sub && git -C /tmp/wtm-repo init -q && cd /tmp/wtm-repo/sub` を実行してから `Ctrl+B N`
