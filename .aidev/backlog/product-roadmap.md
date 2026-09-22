@@ -28,8 +28,12 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] 独自コマンドのキー: herdr の `[[keys.command]]`（`type` が `popup`・`pane`・`shell`・`plugin_action`）。サーバで任意のコマンドを走らせる仕組みと、その権限の設計が要る。`docs/herdr-parity.md` の H12（ポップアップ端末・独自コマンドのキー割り当て）（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
 - [ ] サイドバー・tab バーのボタン（`@keydown.stop`）や pane の枠にフォーカスがある間も、prefix・直接のキーを効かせる: いまはそのボタンにフォーカスが残ると、端末をクリックするまで届かない（prefix でも同じ既存の挙動）。
   ボタンの Enter/Space と入力欄への入力を守ったまま、修飾キー付き・prefix のキーだけを window へ通す形が要る（出典: .aidev/works/20260921-keybinding-customization/decisions.md D11）
-- [ ] キーの設定の使い勝手: 節「キー」の操作の絞り込み（いまは 34 個の `<details>` を順に開く）、衝突したときの「こちらへ移す」、macOS の非 US 配列で Option の chord の表示を押した字に合わせる
-  （`navigator.keyboard.getLayoutMap()`。Chromium 系だけ。decisions D7）、ブラウザが先に受けるキーを全画面のときだけ届ける（Keyboard Lock API。実験的。research F27）（出典: .aidev/works/20260921-keybinding-customization/decisions.md の D7・research.md の F27。操作の絞り込みと「こちらへ移す」は、この work の実装で出た改善案）
+- [x] キーの設定の使い勝手: 20260922-keybinding-usability で対応。節「キー」に操作名・群名での絞り込み欄を足し（`KeySettings.vue` の `filterText`/`actionsByGroup`）、
+      衝突したときは案内文の直後に「こちらへ移す」ボタンが出て単一の割り当てなら1回の操作で移せる（`assign.ts` の `AssignResult.conflict`・`KeySettings.vue` の `moveHere()`）。
+      macOS で `navigator.keyboard.getLayoutMap()` が使えるとき、`alt+…` の chord の表示を実際に押した字へ置き換える（`packages/web/src/keys/chordDisplay.ts`。表示専用、取り込み・照合は変えない）。
+      全画面のとき、ブラウザ・OS 予約キーの一部を `navigator.keyboard.lock()` で受け取る opt-in の switch を足した（既定は無効。`KeyboardLockController.ts`）。
+      実測: 実装 12 ファイル・1068 行追加（工程成果物は含まず）・単体 1505 件 pass・E2E 20 件 pass（`packages/e2e/src/specs/key-bindings.spec.ts`）。
+      AC12・AC13（Keyboard Lock の実効果）と AC8（macOS 実機での表示）は自動テストの対象外で `docs/verification.md` の手動確認へ（`.aidev/works/20260922-keybinding-usability/decisions.md` D6・D3）。
 - [x] Git worktree の作成と一覧（上の項目のうち worktree そのものを扱う部分）: 20260920-git-worktree-actions で対応。
       workspace の右クリックメニューに「新しい worktree」「worktree を開く…」、キーは `prefix+G`。
       作成先は `~/.wtm/worktrees/<repo>/<branch-slug>`（`packages/protocol/src/worktreePath.ts:37-41`）。
