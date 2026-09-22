@@ -20,6 +20,7 @@ import WorktreeOpenDialog from "./components/WorktreeOpenDialog.vue";
 import { isMobileViewport } from "./mobile/detect.js";
 import MobileShell from "./mobile/MobileShell.vue";
 import { useSessionStore } from "./store/session.js";
+import { PANE_FRAME_THICKNESS_PX, useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
 
 /**
@@ -32,15 +33,26 @@ import { useViewStore } from "./store/view.js";
  */
 const session = useSessionStore();
 const view = useViewStore();
+const settings = useSettingsStore();
 
 const currentTab = computed(() => (view.tabId ? session.tabs.get(view.tabId) : undefined));
 const isMobile = isMobileViewport();
+
+/**
+ * pane の枠・隙間の太さ（20260922-appearance-settings-rest。design「US4」）。`PaneFrame.vue`・
+ * `Splitter.vue` はどちらも生の `4px` の代わりに `var(--wtm-pane-gap, 4px)` を読む——値そのもの
+ * （px 数）はここ（`PANE_FRAME_THICKNESS_PX`）に1箇所だけ持ち、`.app-shell` の CSS 変数として
+ * 配る（テーマの CSS 変数〔`ThemeController`〕と同じ「1箇所で決めて子孫へ配る」考え方。ただし
+ * こちらは初回描画のちらつき防止が不要なので、`documentElement.style` への命令的な設定ではなく
+ * Vue の `:style` 束縛で足りる）。
+ */
+const paneGapPx = computed(() => `${PANE_FRAME_THICKNESS_PX[settings.paneFrameThickness]}px`);
 </script>
 
 <template>
   <LoginView v-if="view.authRequired" />
   <DetachedView v-else-if="view.connectionState === 'detached'" />
-  <div v-else class="app-shell">
+  <div v-else class="app-shell" :style="{ '--wtm-pane-gap': paneGapPx }">
     <MobileShell v-if="isMobile" />
     <template v-else>
       <Sidebar />

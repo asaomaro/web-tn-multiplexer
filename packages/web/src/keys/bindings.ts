@@ -58,6 +58,15 @@ export const ACTIONS = [
     defaults: ["prefix+o"],
     action: { type: "nextNotification" },
   },
+  {
+    id: "reload_config",
+    label: "設定を読み直す",
+    group: "全体",
+    // herdr の reload_config の既定と同じ chord。20260922-appearance-settings-rest まで
+    // `NOT_YET_BINDINGS`（keymap.ts）の案内だった同じキーをそのまま引き継ぐ。
+    defaults: ["prefix+shift+r"],
+    action: { type: "reloadConfig" },
+  },
   // workspace / tab
   {
     id: "workspace_picker",

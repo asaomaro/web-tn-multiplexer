@@ -294,6 +294,84 @@ describe("SettingsDialog — 表示の節（AC6・AC7・AC-I2）", () => {
   });
 });
 
+// 20260922-appearance-settings-rest T5（design「振る舞いの詳細」US4）。
+describe("SettingsDialog — 表示の節 — pane の枠・隙間の太さ／エージェント名表示（AC9〜AC12・AC-I1〜AC-I4）", () => {
+  const displaySection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    w.get('section[aria-labelledby="settings-display"]');
+  const frameRadios = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w).findAll('input[type="radio"][name="settings-pane-frame-thickness"]');
+  const checkedFrameRadio = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    frameRadios(w).filter((r) => (r.element as HTMLInputElement).checked);
+  const radioValue = (r: ReturnType<typeof frameRadios>[number]): string => (r.element as HTMLInputElement).value;
+  // 表示の節の switch は2つ（記号表示・エージェント名表示）。**並び順（何番目か）には頼らない**
+  // ——`symbolsSwitch`（先頭固定）と違い、この節は switch が今回 1→2 に増えた実績があり、今後も
+  // 増えうる。並び替え・追加があっても無言で違うボタンを拾わないよう、文言で絞る（taskcheck の指摘）。
+  const agentNameSwitch = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w)
+      .findAll('[role="switch"]')
+      .find((sw) => sw.text().includes("エージェント名"))!;
+
+  it("枠の太さは既定で選ばれ、選ぶと保存されて再読み込みしても残る（AC9）", async () => {
+    const { wrapper } = await openDialog();
+    expect(checkedFrameRadio(wrapper).map(radioValue)).toEqual(["default"]);
+
+    const thick = frameRadios(wrapper).find((r) => radioValue(r) === "thick")!;
+    await thick.trigger("change");
+    expect(useSettingsStore(pinia).paneFrameThickness).toBe("thick");
+    expect(readPrefs()["paneFrameThickness"]).toBe("thick");
+    expect(useSettingsStore(createPinia()).paneFrameThickness, "再読み込みしても残る").toBe("thick");
+    await wrapper.vm.$nextTick();
+    expect(checkedFrameRadio(wrapper).map(radioValue)).toEqual(["thick"]); // 常にちょうど1つ
+  });
+
+  it("エージェント名表示の switch は既定で「切」（AC10）", async () => {
+    const { wrapper } = await openDialog();
+    expect(agentNameSwitch(wrapper).attributes("aria-checked")).toBe("false");
+  });
+
+  it("押すと「入」になって保存され、もう一度押すと戻る（確定ボタンは無い。AC-I2）", async () => {
+    const { wrapper } = await openDialog();
+    await agentNameSwitch(wrapper).trigger("click");
+    expect(useSettingsStore(pinia).paneAgentNameVisible).toBe(true);
+    expect(agentNameSwitch(wrapper).attributes("aria-checked")).toBe("true");
+    expect(useSettingsStore(createPinia()).paneAgentNameVisible, "再読み込みしても残る").toBe(true);
+    await agentNameSwitch(wrapper).trigger("click");
+    expect(useSettingsStore(pinia).paneAgentNameVisible).toBe(false);
+    expect(wrapper.find('button[type="submit"]').exists()).toBe(false);
+  });
+
+  it("枠の太さ・エージェント名表示のどちらも、開閉の概念を持たない常設の部品（AC-I1）", async () => {
+    const { wrapper } = await openDialog();
+    // ダイアログの外の状態（`view.openDialog` 等）を変えずに、いつでも存在・操作できる
+    // （個別の開閉フラグや別ダイアログを持たない）ことを、部品が最初から見えていることで確かめる。
+    expect(frameRadios(wrapper).length).toBeGreaterThan(0);
+    expect(agentNameSwitch(wrapper).exists()).toBe(true);
+  });
+
+  it("選んでもフォーカスは選んだ部品に留まる（AC-I4）", async () => {
+    const { wrapper } = await openDialog();
+    const thick = frameRadios(wrapper).find((r) => radioValue(r) === "thick")!;
+    (thick.element as HTMLInputElement).focus();
+    await thick.trigger("change");
+    expect(document.activeElement).toBe(thick.element);
+
+    const sw = agentNameSwitch(wrapper);
+    (sw.element as HTMLButtonElement).focus();
+    await sw.trigger("click");
+    expect(document.activeElement).toBe(sw.element);
+  });
+
+  it("矢印キー（radio）・Enter/Space（switch）という既存の操作方法で操作できる（AC-I3）", async () => {
+    const { wrapper } = await openDialog();
+    // ネイティブの radio/button の既定の操作方法をそのまま使っているだけ（独自の keydown 処理を
+    // 足していない）ことを、type 属性・role 属性の実物で確かめる（実際のキー操作は jsdom/happy-dom
+    // ではネイティブのフォーカス移動・活性化を再現しないため、E2E 側で実際の Tab/Enter を確かめる）。
+    for (const r of frameRadios(wrapper)) expect(r.attributes("type")).toBe("radio");
+    expect(agentNameSwitch(wrapper).element.tagName).toBe("BUTTON");
+    expect(agentNameSwitch(wrapper).attributes("type")).toBe("button");
+  });
+});
+
 describe("SettingsDialog — 端末の節（AC9・AC-I2）", () => {
   it("既定は「自動」が選ばれ、デスクトップではサーバの上限の行数を添える", async () => {
     const { wrapper } = await openDialog();

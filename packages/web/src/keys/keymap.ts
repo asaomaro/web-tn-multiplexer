@@ -23,7 +23,8 @@ import { emptyKeyPrefs, parsePrefix, type KeyPrefs } from "./keyPrefs.js";
  * （別の操作に割り当てればそちらが優先。AC2）。カタログの外＝編集できず、`ownerOf` も返さない。
  */
 const NOT_YET_BINDINGS: readonly (readonly [string, Action])[] = [
-  ["shift+r", { type: "notYet", work: "外観と設定" }],
+  // `shift+r`（reload_config）は 20260922-appearance-settings-rest で `ACTIONS`（bindings.ts）に
+  // 正式登録したので、この案内からは外れた（上のコメントどおり「カタログに載れば自動的に外れる」）。
   ["e", { type: "notYet", work: "端末機能の拡張" }],
 ];
 

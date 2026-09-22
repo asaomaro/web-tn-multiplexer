@@ -57,14 +57,14 @@ const deleteBtn = (id: string, binding: string): HTMLElement =>
 const prefixBtn = (): HTMLElement => document.querySelector<HTMLElement>("[data-prefix-change]")!;
 
 describe("KeySettings — 一覧（AC1）", () => {
-  it("prefix と、3 群 34 個の操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
+  it("prefix と、3 群 35 個の操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
     const { settings } = await mountKeys();
     expect(document.querySelector("h3")!.textContent).toBe("キー");
     expect(document.querySelector(".keys-prefix .keys-binding")!.textContent).toBe("ctrl+b");
     expect(
       Array.from(document.querySelectorAll(".keys-group-name")).map((h) => h.textContent),
     ).toEqual(["全体", "workspace / tab", "pane"]);
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(34);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(35);
     expect(summaryText("split_vertical")).toBe("prefix+v");
     expect(summaryText("switch_tab")).toBe("prefix+1..9");
     expect(summaryText("cycle_pane_previous")).toBe("prefix+shift+tab");

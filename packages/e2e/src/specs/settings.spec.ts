@@ -188,7 +188,9 @@ test("設定：別のブラウザ（別のプロファイル）では、設定�
   await openApp(page, appServer);
   await dragDivider(page, 60);
   await openSettingsByKey(page);
-  await dialog(page).locator('section[aria-labelledby="settings-display"] [role="switch"]').click();
+  // `.filter` で絞る——20260922-appearance-settings-rest で表示の節に switch がもう1つ（エージェント名）
+  // 増えたので、絞らないと `[role="switch"]` が2つに一致してしまう。
+  await dialog(page).locator('section[aria-labelledby="settings-display"] [role="switch"]').filter({ hasText: "状態を記号でも示す" }).click();
   await radioLabels(page).filter({ hasText: /^1,000 行$/ }).click();
   // **前提の確認**：このブラウザの設定が実際に変わった。どれかの操作が効かなければ、別の context の判定は何も守らない。
   await expect(checkedRadioLabel(page)).toHaveText("1,000 行");
@@ -248,8 +250,9 @@ test("設定：何も設定しない利用者に記号が出る。入力待ち�
   await page.keyboard.press("Escape");
 
   // AC6：表示の節の switch を切ると字形が消える（色の丸に戻る）。
+  // 20260922-appearance-settings-rest で表示の節に switch がもう1つ（エージェント名）増えたので、絞る。
   await openSettingsByKey(page);
-  await dialog(page).locator('section[aria-labelledby="settings-display"] [role="switch"]').click();
+  await dialog(page).locator('section[aria-labelledby="settings-display"] [role="switch"]').filter({ hasText: "状態を記号でも示す" }).click();
   await page.keyboard.press("Escape");
   await expect(agentIcon).toHaveText("");
   await expect(agentIcon).toHaveAttribute("data-symbols", "off");

@@ -5,7 +5,7 @@ import { DeviceKindKey, NotificationControllerKey } from "../injection.js";
 import type { DesktopPermission } from "../notify/ports.js";
 import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
-import { useSettingsStore, type NewCwdPolicy } from "../store/settings.js";
+import { useSettingsStore, type NewCwdPolicy, type PaneFrameThickness } from "../store/settings.js";
 import { DISPLAY_STATES, stateGlyph, stateLabel } from "../store/stateIndicator.js";
 import { useViewStore } from "../store/view.js";
 import { effectiveScrollback, scrollbackChoices, type ScrollbackPref } from "../term/scrollback.js";
@@ -141,6 +141,25 @@ const symbolsNote = `色に加えて形でも見分けられます（${DISPLAY_S
 /** 表示の節。**押した時点で効き、3 か所（サイドバー・goto・モバイルのピッカー）の印が同時に切り替わる**。 */
 function toggleSymbols(): void {
   settings.setStatusSymbols(!settings.statusSymbols);
+}
+
+/**
+ * pane の枠・隙間の太さ（20260922-appearance-settings-rest）。選んだ時点で保存し、`App.vue` の
+ * CSS 変数（`--wtm-pane-gap`）が再計算されるのでページの再読み込みは要らない（AC9）。
+ */
+const paneFrameChoices: readonly { value: PaneFrameThickness; label: string }[] = [
+  { value: "thin", label: "細い" },
+  { value: "default", label: "既定" },
+  { value: "thick", label: "太い" },
+];
+
+function choosePaneFrameThickness(v: PaneFrameThickness): void {
+  settings.setPaneFrameThickness(v);
+}
+
+/** pane にエージェント名を可視で出すか（20260922-appearance-settings-rest。既定は無効。AC10）。 */
+function toggleAgentNameVisible(): void {
+  settings.setPaneAgentNameVisible(!settings.paneAgentNameVisible);
 }
 
 /** サーバの上限（snapshot の `limits`）。上限を超える値は、選んでも黙って上限分しか届かないので出さない。 */
@@ -359,6 +378,27 @@ function onNativeCancel(ev: Event): void {
             <span>状態を記号でも示す</span>
           </button>
           <p class="settings-note">{{ symbolsNote }}</p>
+        </li>
+        <li class="settings-row">
+          <fieldset class="settings-fieldset">
+            <legend class="settings-legend">pane の枠・隙間の太さ</legend>
+            <label v-for="c in paneFrameChoices" :key="c.value" class="settings-radio">
+              <input
+                type="radio"
+                name="settings-pane-frame-thickness"
+                :value="c.value"
+                :checked="settings.paneFrameThickness === c.value"
+                @change="choosePaneFrameThickness(c.value)"
+              />
+              <span>{{ c.label }}</span>
+            </label>
+          </fieldset>
+        </li>
+        <li class="settings-row">
+          <button type="button" role="switch" class="settings-switch" :aria-checked="settings.paneAgentNameVisible" @click="toggleAgentNameVisible">
+            <span class="settings-mark">{{ settings.paneAgentNameVisible ? "入" : "切" }}</span>
+            <span>pane にエージェント名を表示する</span>
+          </button>
         </li>
       </ul>
     </section>

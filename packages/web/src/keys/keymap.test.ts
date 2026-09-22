@@ -60,8 +60,10 @@ const LEGACY_DEFAULT_PREFIX_MAP: ReadonlyArray<readonly [string, Action]> = [
   ["g", { type: "goto" }],
   ["b", { type: "toggleSidebar" }],
   ["q", { type: "detach" }],
+  // 20260922-appearance-settings-rest T7 で reload_config をカタログへ登録し、
+  // 「後続」の案内から実物の操作へ昇格した（意図した既定の変更。keymap.ts の NOT_YET_BINDINGS 参照）。
+  ["shift+r", { type: "reloadConfig" }],
   // 後続
-  ["shift+r", { type: "notYet", work: "外観と設定" }],
   ["e", { type: "notYet", work: "端末機能の拡張" }],
 ];
 
@@ -89,7 +91,9 @@ describe("既定の表は旧 DEFAULT_KEYMAP と 1:1（AC1・AC2）", () => {
     expect(km.bindingsOf("cycle_pane_previous")).toEqual(["prefix+shift+tab"]);
     expect(km.ownerOf("prefix", "v")).toBe("split_vertical");
     expect(km.ownerOf("prefix", "5")).toBe("switch_tab");
-    expect(km.ownerOf("prefix", "shift+r")).toBeNull(); // 「後続」の案内は操作ではない
+    // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てになった
+    // （NOT_YET_BINDINGS の案内から昇格。keymap.ts 参照）。
+    expect(km.ownerOf("prefix", "shift+r")).toBe("reload_config");
     expect(km.ownerOf("direct", "ctrl+alt+d")).toBeNull();
     expect(km.hintFor("help")).toBe("ctrl+b ?");
     expect(km.hintFor("settings")).toBe("ctrl+b s");
@@ -313,11 +317,13 @@ describe("resolveKeymap — 範囲（AC7）", () => {
 });
 
 describe("resolveKeymap — 「後続」の案内（AC2）", () => {
-  it("shift+r・e を別の操作に割り当てたら、そちらが優先で「後続」の案内は消える", () => {
-    const { keymap } = resolveKeymap(
-      prefs({ bindings: { help: ["prefix+R"], goto: ["prefix+e"] } }),
-    );
-    expect(keymap.prefixMap.get("shift+r")).toEqual({ type: "help" });
+  // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てに昇格し、
+  // 「後続」の案内（NOT_YET_BINDINGS）からは外れた（keymap.ts 参照。[[D10]] は無関係、
+  // これは keymap.ts 自体の変更）。shift+r を別の操作へ割り当て直す挙動そのものは、他の既定操作
+  // と同じ「上書きが既定に勝つ」一般則（上の describe「上書きと衝突」参照）で説明でき、
+  // ここ（AC2 の「後続」の案内に特有の節）では扱わない——残っている「後続」の案内は e だけ。
+  it("e を別の操作に割り当てたら、そちらが優先で「後続」の案内は消える", () => {
+    const { keymap } = resolveKeymap(prefs({ bindings: { goto: ["prefix+e"] } }));
     expect(keymap.prefixMap.get("e")).toEqual({ type: "goto" });
   });
 

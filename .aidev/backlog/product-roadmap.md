@@ -61,7 +61,20 @@ parent: 20260918-web-terminal-multiplexer
   17 テーマとも WCAG のコントラスト（文字 4.5・状態の記号 3 等）を満たすよう寄せ、単体テストで総当たり。既定は今までと同じ Dracula。
   実測: 単体 protocol 57・server 616・web 1203 本、E2E `theme-settings.spec.ts` 8 本（ほかの影響を受ける spec を含め一式で確認）。
   色の個別の上書き・明暗の変化をアプリへ知らせる（DSR 996・mode 2031）・選択の背景の見やすさは下の別の行に起こした
-- [ ] 外観と設定の残り: サイドバー行のカスタマイズ、tab バーの状態表示、pane の枠の設定、設定画面・再読み込み〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
+- [x] 外観と設定の残り: サイドバー行の並び替え（開いた順/名前順）、tab バーの自動非表示・現在時刻表示、
+  pane の枠・隙間の太さとエージェント名表示、設定の再読み込み（`prefix+shift+r`）〔D8〕
+  (needs: 20260918-web-terminal-multiplexer)（20260922-appearance-settings-rest。
+  `packages/web/src/components/Sidebar.vue:155-161`・`packages/web/src/components/TabBar.vue`・
+  `packages/web/src/components/PaneFrame.vue:107-137`・
+  `packages/web/src/actions/ActionDispatcher.ts` の `reloadConfig()`。
+  `docs/herdr-parity.md` H21・H22・H23・H25b。実測: unit 1504 本 green、
+  E2E `appearance-settings.spec.ts` 新規6本＋既存 spec 6ファイルの回帰修正
+  （最後まで安定した完走は未確認——test-result.md「E2E について」参照）〔D8〕）
+- [ ] 外観と設定の残り（未着手分）: サイドバー行の色の条件付け・独自トークン（H21）、
+  tab バーの位置（上/下）切り替え・時刻以外の状態表示（H22）、設定の onboarding（H25b）
+  〔D8〕(needs: 20260918-web-terminal-multiplexer)（
+  20260922-appearance-settings-rest の requirements「対象外」で切り出し。
+  出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）、エージェントの会話の再開、名前付き session、更新時の引き継ぎ〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 配布と運用: 自己更新・更新チャネル、ログ、シェル補完〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）

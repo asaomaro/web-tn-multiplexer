@@ -34,6 +34,33 @@ export function loadStatusSymbols(raw: unknown): boolean {
 }
 
 /**
+ * pane の枠・隙間の太さ（20260922-appearance-settings-rest）。既定は今までと同じ見た目
+ * （`"default"`＝4px 相当）。値そのもの（px 数）は `PaneFrame.vue`/`Splitter.vue` が読む
+ * CSS 変数 `--wtm-pane-gap` へ配る側（`App.vue`）が持つ。
+ */
+export type PaneFrameThickness = "thin" | "default" | "thick";
+export const PANE_FRAME_THICKNESS_PX: Record<PaneFrameThickness, number> = {
+  thin: 2,
+  default: 4,
+  thick: 6,
+};
+// `PANE_FRAME_THICKNESS_PX` から導く（許容値の一覧をここで別に持たない。増減しても1箇所で揃う）。
+const PANE_FRAME_THICKNESSES = Object.keys(PANE_FRAME_THICKNESS_PX) as PaneFrameThickness[];
+
+/** 保存された太さを読む。3つのどれかでなければ既定の `"default"`。 */
+export function loadPaneFrameThickness(raw: unknown): PaneFrameThickness {
+  return PANE_FRAME_THICKNESSES.includes(raw as PaneFrameThickness)
+    ? (raw as PaneFrameThickness)
+    : "default";
+}
+
+/** pane にエージェント名を可視で出すか（20260922-appearance-settings-rest）。既定は無効
+ *  （常時表示すると既存の見た目が変わるため。opt-in）。 */
+export function loadPaneAgentNameVisible(raw: unknown): boolean {
+  return typeof raw === "boolean" ? raw : false;
+}
+
+/**
  * 新しく開く場所の方針（20260921-new-terminal-cwd。herdr の `terminal.new_cwd`）。**ブラウザごと**に持ち、作成の要求に載せる
  * （サーバは方針を持たない。design D1）。
  */
@@ -74,6 +101,10 @@ export const useSettingsStore = defineStore("settings", () => {
   const initial = readPrefs();
   /** 状態を色に加えて記号でも示すか（`StateIcon.vue` が読む）。 */
   const statusSymbols = ref(loadStatusSymbols(initial["statusSymbols"]));
+  /** pane の枠・隙間の太さ（`App.vue` が CSS 変数へ配る）。 */
+  const paneFrameThickness = ref(loadPaneFrameThickness(initial["paneFrameThickness"]));
+  /** pane にエージェント名を可視で出すか（`PaneFrame.vue` が読む）。 */
+  const paneAgentNameVisible = ref(loadPaneAgentNameVisible(initial["paneAgentNameVisible"]));
   /** このブラウザの scrollback の設定。使う行数は `term/scrollback.ts` の `effectiveScrollback` が決める。 */
   const scrollback = ref<ScrollbackPref>(loadScrollbackPref(initial["scrollback"]));
   /** 新しい workspace・tab・分割を開く場所の方針と、「指定した場所」のパス（方針が `path` のときだけ使う）。 */
@@ -102,6 +133,18 @@ export const useSettingsStore = defineStore("settings", () => {
   function setStatusSymbols(v: boolean): void {
     statusSymbols.value = v;
     writePrefs({ statusSymbols: v });
+  }
+
+  /** 反映と保存を同時に行う（確定ダイアログを挟まない。AC-I2）。 */
+  function setPaneFrameThickness(v: PaneFrameThickness): void {
+    paneFrameThickness.value = v;
+    writePrefs({ paneFrameThickness: v });
+  }
+
+  /** 反映と保存を同時に行う（確定ダイアログを挟まない。AC-I2）。 */
+  function setPaneAgentNameVisible(v: boolean): void {
+    paneAgentNameVisible.value = v;
+    writePrefs({ paneAgentNameVisible: v });
   }
 
   /** 反映と保存を同時に行う。**効くのはその後に作る端末から**（既に開いている pane は変えない。AC9）。 */
@@ -219,6 +262,8 @@ export const useSettingsStore = defineStore("settings", () => {
 
   return {
     statusSymbols,
+    paneFrameThickness,
+    paneAgentNameVisible,
     scrollback,
     newCwdPolicy,
     newCwdPath,
@@ -231,6 +276,8 @@ export const useSettingsStore = defineStore("settings", () => {
     keyPrefs,
     keymap,
     setStatusSymbols,
+    setPaneFrameThickness,
+    setPaneAgentNameVisible,
     setScrollback,
     setNewCwdPolicy,
     setNewCwdPath,
