@@ -2,7 +2,7 @@ import type { InjectionKey } from "vue";
 import type { ActionDispatcher } from "./actions/ActionDispatcher.js";
 import type { KeyInputController } from "./keys/KeyInputController.js";
 import type { NotificationController } from "./notify/NotificationController.js";
-import type { ClientKind, ConnectionPort } from "./net/ports.js";
+import type { ConnectionPort, DeviceKind } from "./net/ports.js";
 import type { TerminalRegistry } from "./term/TerminalRegistry.js";
 import type { ViewSync } from "./term/ViewSync.js";
 
@@ -21,6 +21,6 @@ export const NotificationControllerKey: InjectionKey<NotificationController> = S
  * 「自動（この端末では N 行）」の N を出すのに使う。**判定を呼び直さない**——2 か所で判定すると、ブラウザが実際に使う
  * 行数（`main.ts` の `getScrollbackLines`）とダイアログの表示が食い違いうる。
  */
-export const DeviceKindKey: InjectionKey<ClientKind> = Symbol("deviceKind");
+export const DeviceKindKey: InjectionKey<DeviceKind> = Symbol("deviceKind");
 /** `mobile/ExtraKeys.vue`（04-mobile T3）が `injectKey` へ直接キーを流すために使う。 */
 export const KeyInputControllerKey: InjectionKey<KeyInputController> = Symbol("keyInputController");

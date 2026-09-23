@@ -30,6 +30,28 @@ importers:
         specifier: ^5.0.1
         version: 5.0.1(@types/node@24.13.5)(happy-dom@20.14.5)(vite@8.3.0(@types/node@24.13.5))
 
+  packages/cli:
+    dependencies:
+      '@wtm/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      ws:
+        specifier: ^8.21.3
+        version: 8.21.3
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.5.13
+        version: 8.18.1
+      '@wtm/server':
+        specifier: workspace:*
+        version: link:../server
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.1
+        version: 5.0.1(@types/node@24.13.5)(happy-dom@20.14.5)(vite@8.3.0(@types/node@24.13.5))
+
   packages/e2e:
     dependencies:
       '@wtm/protocol':

@@ -1,6 +1,11 @@
 # aidev 設定（キー一覧: ~/.claude/skills/aidev-docs/bin/README.md の設定表）
 # 起動確認（smoke）: design（20260918-web-terminal-multiplexer の D15・D3）で決めた。
 # ビルドしたサーバを空きポートで起動し、正規のログイン → workspace 作成 → echo の往復を確かめて終了する。
-smokeCommand: pnpm -s build && pnpm -s smoke
+# 2本目（20260923-external-control-api）: wtmctl（packages/cli）が足した外部操作 CLI という新しい入口を、
+# ビルド済みの dist/main.js を子プロセスとして実際に起動して確かめる（login 不要のセッションキャッシュ
+# 再利用を含む）。1本目が `pnpm -s build` で全パッケージを先にビルドするので、2本目は再ビルドしない。
+smokeCommands:
+  - pnpm -s build && pnpm -s smoke
+  - pnpm --filter @wtm/cli run smoke
 smokeTimeoutSec: 180
 tracker: none

@@ -7,7 +7,20 @@ parent: 20260918-web-terminal-multiplexer
 # product-roadmap
 
 <!-- 項目は行頭の `- [ ]` で書く（見出しに書くと aidev status の未着手件数から漏れる） -->
-- [ ] 外部操作 API / CLI: herdr の socket API / CLI 相当（workspace 作成・分割・入力送信・出力読取・状態購読を外部から） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
+- [x] 外部操作 API / CLI: herdr の socket API / CLI 相当（workspace 作成・分割・入力送信・出力読取・状態購読を外部から） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
+  → 着地: 20260923-external-control-api。新規パッケージ `packages/cli`（バイナリ名 `wtmctl`）が、既存の
+  token 認証（`POST /api/login`→session cookie）・既存の WebSocket RPC（`ControlSurface`）・既存の
+  Origin/Host 判定を無改造で再利用し、`workspace create/close/rename`・`tab create/close`・
+  `pane split/close/input/run/read`・`snapshot`・`watch`（状態購読）・`login`（セッションキャッシュ）を
+  提供する（`packages/cli/src/main.ts`）。サーバ側の変更は `client.hello.kind` への `"external"` 追加
+  （`packages/protocol/src/messages.ts:14`・`packages/server/src/clients/ClientRegistry.ts:4`）のみ。
+  herdr の H39（エージェント自動化）・H40（pane 直接接続・制御ストリーム）は設計の質が異なるため対象外とし、
+  本ファイルへ新規の後続項目として残した（decisions.md D2）。
+  実測: 単体・統合（全パッケージ）2487 本 pass（うち `packages/cli` 133 本。実サーバ・実 PTY での統合テスト
+  `main.integration.test.ts` 8本を含む）・起動確認 `aidev smoke` 2本（既存のサーバ起動確認＋新設の
+  `wtmctl` 起動確認）ともに pass。独立点検はタスク単位14件＋タスク横断1件（coding）・design のラウンド2件
+  （internal review）・requirements/design/tasks の doccheck 各1〜2ラウンド。変更規模は実装コード
+  35ファイル・+2730/-7行（`.aidev/` を除く。`.aidev/works/20260923-external-control-api/` に詳細）。
 - [x] キーバインドのカスタマイズ: 割り当ての変更・保存（prefix の変更・操作ごとの割り当て・prefix なしの直接のキー）（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
   → 着地: 20260921-keybinding-customization（feature/keybinding-customization）。prefix と 34 の操作の割り当てを、設定画面の節「キー」で**押したキーを取り込んで**変えられる
   （`packages/web/src/components/KeySettings.vue`）。1 つの操作に複数持てて、prefix の後のキーに加えて**直接のキー**（`ctrl+alt+d` のように prefix なしの 1 打。terminal モードだけ。
@@ -166,3 +179,5 @@ parent: 20260918-web-terminal-multiplexer
   nit 3 を解消）。
 - [ ] 明暗の変化を端末の中のアプリへ知らせる: DSR 996（`CSI ? 996 n` → `CSI ? 997 ; 1|2 n`）への応答と mode 2031 の通知（herdr の `src/terminal_theme.rs` の `HostAppearance::color_scheme_report`）。サーバの Mirror が、その pane の tab の大きさを決めているブラウザのテーマの明暗で答え、テーマや OS の明暗が変わったら通知する。いまは応えていない（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
 - [ ] 端末の選択の背景を見えるようにする: 上流の配色の選択の背景と端末の背景の比が低いテーマがあり（one-light 1.11・solarized-light 1.14・solarized 1.15・rose-pine-dawn 1.27・one-dark 1.31）、copy モードやマウスで選んだ範囲がほとんど見えない。`finalizePalette`（packages/protocol/src/theme.ts）に「選択の背景を端末の背景から寄せる」規則を足す案。20260921-theme-settings では「上流の値のまま、選んだ文字とカーソルだけ直す」（decisions D5）の内側として見送った（出典: .aidev/works/20260921-theme-settings/review.md）
+- [ ] エージェント自動化 API / CLI: herdr の agent start／agent prompt --wait／agent wait／agent read 相当（pane とは別の「エージェント」という名前付きの対象・状態遷移の待ち合わせ・agent skill ファイルの検討を含む） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）
+- [ ] pane 直接接続・制御ストリーム: herdr の terminal attach／session observe／session control 相当（pane 単体への直接接続・書き込み権限の排他制御・閲覧専用の購読ストリーム。既存の pane.subscribe は複数購読者を許す設計のため前提が異なる） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）
