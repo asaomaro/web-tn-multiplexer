@@ -24,6 +24,14 @@ import {
 } from "../theme/themeOverrides.js";
 import type { CssVar } from "../theme/uiTokens.js";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
+import {
+  loadTabBarPosition,
+  loadTabBarRightEntries,
+  loadTabBarRightSeparator,
+  MAX_TAB_BAR_RIGHT_ENTRIES,
+  type TabBarPosition,
+  type TabBarRightEntry,
+} from "../tabbar/tabBarRight.js";
 import { readPrefs, writePrefs } from "./view.js";
 
 /**
@@ -67,6 +75,15 @@ export function loadPaneFrameThickness(raw: unknown): PaneFrameThickness {
 /** pane にエージェント名を可視で出すか（20260922-appearance-settings-rest）。既定は無効
  *  （常時表示すると既存の見た目が変わるため。opt-in）。 */
 export function loadPaneAgentNameVisible(raw: unknown): boolean {
+  return typeof raw === "boolean" ? raw : false;
+}
+
+/**
+ * pane 領域の外周の枠（20260922-tabbar-pane-appearance。herdr の `ui.pane_outer_borders` 相当。PR #12 から
+ * 取り込み）。既定は今までと同じ見た目＝「無し」——外周の枠は本製品にこれまで無かった装飾なので、
+ * `paneFrameThickness`（既存の各 pane 内側の枠）と違い「入れると変わる」opt-in にする。
+ */
+export function loadPaneOuterBorders(raw: unknown): boolean {
   return typeof raw === "boolean" ? raw : false;
 }
 
@@ -115,6 +132,16 @@ export const useSettingsStore = defineStore("settings", () => {
   const paneFrameThickness = ref(loadPaneFrameThickness(initial["paneFrameThickness"]));
   /** pane にエージェント名を可視で出すか（`PaneFrame.vue` が読む）。 */
   const paneAgentNameVisible = ref(loadPaneAgentNameVisible(initial["paneAgentNameVisible"]));
+  /**
+   * tab バーの位置・右端のエントリ・pane 領域の外周の枠（20260922-tabbar-pane-appearance。herdr の
+   * `ui.tab_bar_position`/`ui.tab_bar_right`/`ui.pane_outer_borders` 相当。PR #12 から取り込み。
+   * `paneFrameThickness`/`paneAgentNameVisible`〔20260922-appearance-settings-rest〕とは別の設定で、
+   * 両立する——前者は各 pane の内側の枠・後者は pane 領域全体の外周）。
+   */
+  const tabBarPosition = ref<TabBarPosition>(loadTabBarPosition(initial["tabBarPosition"]));
+  const tabBarRight = ref<TabBarRightEntry[]>(loadTabBarRightEntries(initial["tabBarRight"]));
+  const tabBarRightSeparator = ref(loadTabBarRightSeparator(initial["tabBarRightSeparator"]));
+  const paneOuterBorders = ref(loadPaneOuterBorders(initial["paneOuterBorders"]));
   /** このブラウザの scrollback の設定。使う行数は `term/scrollback.ts` の `effectiveScrollback` が決める。 */
   const scrollback = ref<ScrollbackPref>(loadScrollbackPref(initial["scrollback"]));
   /** 新しい workspace・tab・分割を開く場所の方針と、「指定した場所」のパス（方針が `path` のときだけ使う）。 */
@@ -155,6 +182,72 @@ export const useSettingsStore = defineStore("settings", () => {
   function setPaneAgentNameVisible(v: boolean): void {
     paneAgentNameVisible.value = v;
     writePrefs({ paneAgentNameVisible: v });
+  }
+
+  /** 反映と保存を同時に行う（PR #12 から取り込み）。 */
+  function setTabBarPosition(v: TabBarPosition): void {
+    tabBarPosition.value = v;
+    writePrefs({ tabBarPosition: v });
+  }
+
+  /**
+   * `tabBarRight` を丸ごと差し替える。`loadTabBarRightEntries` を通して正規化・上限の切り詰めをしてから、
+   * 状態にも保存にも同じ内容が既にあれば何もしない（`replaceKeyPrefs` と同じ二重の比較。PR #12 から取り込み）。
+   * `add`/`remove`/`move`/`update` の各操作からもこれを経由する。
+   */
+  function setTabBarRight(entries: readonly TabBarRightEntry[]): void {
+    const normalized = loadTabBarRightEntries(entries);
+    const serialized = JSON.stringify(normalized);
+    const sameState = serialized === JSON.stringify(tabBarRight.value);
+    const sameStored = serialized === JSON.stringify(readPrefs()["tabBarRight"] ?? []);
+    if (sameState && sameStored) return;
+    if (!sameState) tabBarRight.value = normalized;
+    writePrefs({ tabBarRight: normalized });
+  }
+
+  /** 末尾に既定値のエントリを追加する（上限に達していたら何もしない）。 */
+  function addTabBarRightEntry(kind: TabBarRightEntry["kind"]): void {
+    if (tabBarRight.value.length >= MAX_TAB_BAR_RIGHT_ENTRIES) return;
+    const entry: TabBarRightEntry =
+      kind === "datetime" ? { kind, format: "time" } : kind === "text" ? { kind, text: "" } : { kind };
+    setTabBarRight([...tabBarRight.value, entry]);
+  }
+
+  /** 指定した位置のエントリを消す。 */
+  function removeTabBarRightEntry(index: number): void {
+    setTabBarRight(tabBarRight.value.filter((_, i) => i !== index));
+  }
+
+  /** 指定した位置のエントリを 1 つ隣と入れ替える。端では何もしない。 */
+  function moveTabBarRightEntry(index: number, direction: -1 | 1): void {
+    const next = index + direction;
+    if (index < 0 || index >= tabBarRight.value.length || next < 0 || next >= tabBarRight.value.length) return;
+    const reordered = [...tabBarRight.value];
+    const moved = reordered[index]!;
+    reordered[index] = reordered[next]!;
+    reordered[next] = moved;
+    setTabBarRight(reordered);
+  }
+
+  /** 指定した位置のエントリを差し替える（datetime の書式・text の文字列の変更）。 */
+  function updateTabBarRightEntry(index: number, entry: TabBarRightEntry): void {
+    if (index < 0 || index >= tabBarRight.value.length) return;
+    const next = [...tabBarRight.value];
+    next[index] = entry;
+    setTabBarRight(next);
+  }
+
+  /** 反映と保存を同時に行う。 */
+  function setTabBarRightSeparator(v: string): void {
+    const normalized = loadTabBarRightSeparator(v);
+    tabBarRightSeparator.value = normalized;
+    writePrefs({ tabBarRightSeparator: normalized });
+  }
+
+  /** 反映と保存を同時に行う。 */
+  function setPaneOuterBorders(v: boolean): void {
+    paneOuterBorders.value = v;
+    writePrefs({ paneOuterBorders: v });
   }
 
   /** 反映と保存を同時に行う。**効くのはその後に作る端末から**（既に開いている pane は変えない。AC9）。 */
@@ -259,6 +352,22 @@ export const useSettingsStore = defineStore("settings", () => {
   });
 
   /**
+   * 同じブラウザの別のウィンドウ・タブでの変更に追従する（PR #12 から取り込み）。この 4 項目はどれも
+   * 単純な値の「常に書く」形なので、保存値を読み直して違えば置き換えるだけでよい。
+   */
+  window.addEventListener("storage", () => {
+    const prefs = readPrefs();
+    const nextPosition = loadTabBarPosition(prefs["tabBarPosition"]);
+    if (nextPosition !== tabBarPosition.value) tabBarPosition.value = nextPosition;
+    const nextRight = loadTabBarRightEntries(prefs["tabBarRight"]);
+    if (JSON.stringify(nextRight) !== JSON.stringify(tabBarRight.value)) tabBarRight.value = nextRight;
+    const nextSeparator = loadTabBarRightSeparator(prefs["tabBarRightSeparator"]);
+    if (nextSeparator !== tabBarRightSeparator.value) tabBarRightSeparator.value = nextSeparator;
+    const nextOuter = loadPaneOuterBorders(prefs["paneOuterBorders"]);
+    if (nextOuter !== paneOuterBorders.value) paneOuterBorders.value = nextOuter;
+  });
+
+  /**
    * 差し替えて保存する。`replaceKeyPrefs`（上の「キーの割り当て」節）と同じ形：読み直して正規化し、二重の守り（読めない値は
    * 反映せず捨てる）、状態も保存も同じなら何もしない、保存が状態と違うときは保存だけを直す、差が無くなれば `themeOverrides`
    * ごと消す。
@@ -320,6 +429,10 @@ export const useSettingsStore = defineStore("settings", () => {
     statusSymbols,
     paneFrameThickness,
     paneAgentNameVisible,
+    tabBarPosition,
+    tabBarRight,
+    tabBarRightSeparator,
+    paneOuterBorders,
     scrollback,
     newCwdPolicy,
     newCwdPath,
@@ -335,6 +448,14 @@ export const useSettingsStore = defineStore("settings", () => {
     setStatusSymbols,
     setPaneFrameThickness,
     setPaneAgentNameVisible,
+    setTabBarPosition,
+    setTabBarRight,
+    addTabBarRightEntry,
+    removeTabBarRightEntry,
+    moveTabBarRightEntry,
+    updateTabBarRightEntry,
+    setTabBarRightSeparator,
+    setPaneOuterBorders,
     setScrollback,
     setNewCwdPolicy,
     setNewCwdPath,

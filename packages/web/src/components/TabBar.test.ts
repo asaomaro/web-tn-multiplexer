@@ -6,6 +6,7 @@ import { ActionDispatcherKey, ConnectionKey, TerminalRegistryKey } from "../inje
 import type { Action } from "../keys/actions.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import TabBar from "./TabBar.vue";
 
@@ -270,7 +271,7 @@ describe("TabBar — 自動非表示（AC4〜AC6・AC-I6）", () => {
   });
 });
 
-describe("TabBar — 現在時刻（AC7・AC8）", () => {
+describe("TabBar — 右端の日時エントリ（AC7・AC8。20260922-tabbar-pane-appearance。PR #12 から取り込み）", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 1, 9, 5, 0));
@@ -279,7 +280,8 @@ describe("TabBar — 現在時刻（AC7・AC8）", () => {
     vi.useRealTimers();
   });
 
-  it("tab バーの右端に現在時刻が HH:mm で出る（AC7）", () => {
+  /** 既定（`tabBarRight` が空）では右端に何も出ない。設定で日時エントリを足すと出る（旧「現在時刻」を統合）。 */
+  it("既定では右端の帯が無く、日時エントリを足すと HH:mm で出る（AC7）", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
@@ -287,8 +289,12 @@ describe("TabBar — 現在時刻（AC7・AC8）", () => {
     session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
     const wrapper = mountTabBar(makeConnection());
-    expect(wrapper.get(".tab-bar-clock").text()).toBe("09:05");
-    expect(wrapper.get(".tab-bar-clock").attributes("aria-hidden")).toBe("true"); // 装飾的な情報
+    expect(wrapper.find(".tab-bar-right").exists(), "既定は空なので出ない").toBe(false);
+
+    useSettingsStore(pinia).setTabBarRight([{ kind: "datetime", format: "time" }]);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:05");
+    expect(wrapper.get(".tab-bar-right").attributes("aria-hidden")).toBe("true"); // 装飾的な情報
   });
 
   it("時間が経つと表示が更新される。ページの再読み込みは要らない（AC8）", async () => {
@@ -298,30 +304,33 @@ describe("TabBar — 現在時刻（AC7・AC8）", () => {
     session.tabUpserted(makeTab("t1", "w1"));
     session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
+    useSettingsStore(pinia).setTabBarRight([{ kind: "datetime", format: "time" }]);
     const wrapper = mountTabBar(makeConnection());
-    expect(wrapper.get(".tab-bar-clock").text()).toBe("09:05");
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:05");
     vi.setSystemTime(new Date(2026, 0, 1, 9, 6, 1));
     await vi.advanceTimersByTimeAsync(15_000);
     await wrapper.vm.$nextTick();
-    expect(wrapper.get(".tab-bar-clock").text()).toBe("09:06");
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:06");
   });
 
-  it("非表示（tab が1個）の間はタイマーを持たない。表示に戻ると動き出す・隠れると止まる", async () => {
+  it("非表示（tab が1個）の間・日時エントリが無い間はタイマーを持たない。両方そろうと動き出す・どちらか欠けると止まる", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
     session.tabUpserted(makeTab("t1", "w1"));
     view.setView("w1", "t1");
+    settings.setTabBarRight([{ kind: "datetime", format: "time" }]);
     const setSpy = vi.spyOn(globalThis, "setInterval");
     const clearSpy = vi.spyOn(globalThis, "clearInterval");
     const wrapper = mountTabBar(makeConnection());
-    expect(setSpy, "1個（非表示）で mount：タイマーを持たない").not.toHaveBeenCalled();
+    expect(setSpy, "1個（非表示）で mount：日時エントリがあってもタイマーを持たない").not.toHaveBeenCalled();
 
     session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
     session.tabUpserted(makeTab("t2", "w1"));
     await wrapper.vm.$nextTick();
     expect(setSpy, "2個（表示）に増えると動き出す").toHaveBeenCalledTimes(1);
-    expect(wrapper.find(".tab-bar-clock").exists()).toBe(true);
+    expect(wrapper.find(".tab-bar-right").exists()).toBe(true);
     const clearCountAfterShow = clearSpy.mock.calls.length;
 
     session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
@@ -332,5 +341,63 @@ describe("TabBar — 現在時刻（AC7・AC8）", () => {
     wrapper.unmount();
     setSpy.mockRestore();
     clearSpy.mockRestore();
+  });
+
+  it("日時エントリを外すと、表示中でもタイマーを止める", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    settings.setTabBarRight([{ kind: "datetime", format: "time" }]);
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:05");
+    const clearCountBefore = clearSpy.mock.calls.length;
+
+    settings.setTabBarRight([]);
+    await wrapper.vm.$nextTick();
+    expect(clearSpy.mock.calls.length).toBeGreaterThan(clearCountBefore);
+    expect(wrapper.find(".tab-bar-right").exists()).toBe(false);
+
+    wrapper.unmount();
+    clearSpy.mockRestore();
+  });
+});
+
+describe("TabBar — 位置・右端のほかのエントリ（20260922-tabbar-pane-appearance。PR #12 から取り込み）", () => {
+  it("既定は上（`tab-bar-top`・order 0）。設定で下に変えると `tab-bar-bottom`・order 1 になる", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar").classes()).toContain("tab-bar-top");
+    expect((wrapper.get(".tab-bar").element as HTMLElement).style.order).toBe("0");
+
+    settings.setTabBarPosition("bottom");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".tab-bar").classes()).toContain("tab-bar-bottom");
+    expect((wrapper.get(".tab-bar").element as HTMLElement).style.order).toBe("1");
+  });
+
+  it("ホスト名・固定文字列・拡大の状態のエントリを、区切り文字でつなげて出す", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1", { zoomedPaneId: "p1" }));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    session.host = { os: "linux", windowsBuild: null, hostname: "myhost" };
+    settings.setTabBarRight([{ kind: "zoom" }, { kind: "hostname" }, { kind: "text", text: "note" }]);
+    settings.setTabBarRightSeparator(" | ");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-right").text()).toBe("Z | myhost | note");
   });
 });

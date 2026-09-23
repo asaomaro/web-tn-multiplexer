@@ -372,6 +372,64 @@ describe("SettingsDialog — 表示の節 — pane の枠・隙間の太さ／�
   });
 });
 
+describe("SettingsDialog — 表示の節 — tab バーの位置・右端エントリ・pane の外周（20260922-tabbar-pane-appearance。PR #12 から取り込み）", () => {
+  const displaySection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    w.get('section[aria-labelledby="settings-display"]');
+  const positionSelect = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w).get("select") as unknown as { element: HTMLSelectElement };
+  const outerBordersSwitch = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w)
+      .findAll('[role="switch"]')
+      .find((sw) => sw.text().includes("外周"))!;
+  const addEntryButton = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w).get("[data-add-entry]");
+  const removeEntryButtons = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w).findAll("[data-remove-entry]");
+
+  it("位置は既定で「上」、選ぶと保存されて再読み込みしても残る（AC1 相当）", async () => {
+    const { wrapper } = await openDialog();
+    expect(positionSelect(wrapper).element.value).toBe("top");
+
+    positionSelect(wrapper).element.value = "bottom";
+    await positionSelect(wrapper).element.dispatchEvent(new Event("change"));
+    expect(useSettingsStore(pinia).tabBarPosition).toBe("bottom");
+    expect(readPrefs()["tabBarPosition"]).toBe("bottom");
+    expect(useSettingsStore(createPinia()).tabBarPosition, "再読み込みしても残る").toBe("bottom");
+  });
+
+  it("外周の枠の switch は既定で「切」。押すと「入」になって保存される", async () => {
+    const { wrapper } = await openDialog();
+    expect(outerBordersSwitch(wrapper).attributes("aria-checked")).toBe("false");
+    await outerBordersSwitch(wrapper).trigger("click");
+    expect(useSettingsStore(pinia).paneOuterBorders).toBe(true);
+    expect(outerBordersSwitch(wrapper).attributes("aria-checked")).toBe("true");
+    expect(useSettingsStore(createPinia()).paneOuterBorders, "再読み込みしても残る").toBe(true);
+  });
+
+  it("右端エントリを追加・削除でき、削除すると増減が反映される", async () => {
+    const { wrapper } = await openDialog();
+    expect(removeEntryButtons(wrapper)).toHaveLength(0);
+
+    await addEntryButton(wrapper).trigger("click"); // 既定の種類（先頭＝拡大の状態）
+    expect(useSettingsStore(pinia).tabBarRight).toEqual([{ kind: "zoom" }]);
+    await wrapper.vm.$nextTick();
+    expect(removeEntryButtons(wrapper)).toHaveLength(1);
+
+    await removeEntryButtons(wrapper)[0]!.trigger("click");
+    expect(useSettingsStore(pinia).tabBarRight).toEqual([]);
+    await wrapper.vm.$nextTick();
+    expect(removeEntryButtons(wrapper)).toHaveLength(0);
+  });
+
+  it("上限（16件）に達すると［追加］が無効になる", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    for (let i = 0; i < 16; i++) settings.addTabBarRightEntry("zoom");
+    await wrapper.vm.$nextTick();
+    expect((addEntryButton(wrapper).element as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
 describe("SettingsDialog — 端末の節（AC9・AC-I2）", () => {
   it("既定は「自動」が選ばれ、デスクトップではサーバの上限の行数を添える", async () => {
     const { wrapper } = await openDialog();

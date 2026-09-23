@@ -257,3 +257,49 @@
 - 影響: design.md・tasks.md 自体は書き換えない（この決定記録が正。D9 と同じ扱い）。
   `TabBar.test.ts` の新規テストのタイトルを「0個では表示（＋の導線）・1個では非表示、
   2個以上で表示に戻る（AC4・AC5）」に修正し、0個のときの挙動もタイトルから読めるようにした。
+
+## D11: deliver 後に発覚——PR #12（`20260922-tabbar-pane-appearance`）が H22・H23 の範囲でこの work と
+  重複していた。#12 独自の仕様のうち、既存の設計と両立するものだけを取り込んだ（#12 は作り直さず close）
+
+- 背景: この work（PR #15）を main へマージした直後、別セッションが独立に着手していた PR #12
+  （branch `feature/tabbar-pane-appearance`。作成 2026-09-22T05:43:37Z、この work より前）が、
+  ほぼ同じファイル群（`TabBar.vue`・`PaneFrame.vue`・`PaneLayout.vue`・`Splitter.vue`・
+  `SettingsDialog.vue`・`App.vue`・`settings.ts`・`docs/herdr-parity.md` 等）を触っていたことが
+  判明した。#12 の対象は herdr の `ui.tab_bar_*`/`ui.pane_*` 一式（tab バーの位置・自動非表示・
+  右端の複数エントリ〔拡大／ホスト名／日時／固定文字列〕、pane の枠の描画モード〔自動/常に/無し〕・
+  外周の枠・隙間の入切・枠へのエージェント名表示）で、この work（H22 の自動非表示・時刻、H23 の
+  枠の太さ・エージェント名表示）と機能が重なりつつ、#12 の方が対象が広かった（マシン上で複数の
+  Claude セッションが並行して動いていたことが原因と見られる。同じ backlog 行に2セッションが
+  独立着手した）。
+- 決定: ユーザーの指示（「作り直すのではなく単純に #12 だけが持っている仕様を取り込んでください」）
+  に従い、**#12 のブランチを土台にした作り直しはしない**。代わりに、main（この work 済み）の上に、
+  #12 が独自に持つ仕様のうち**既存の設計と素直に両立するもの**だけを追加で取り込んだ：
+  - 取り込んだもの: tab バーの位置（上/下。`settings.tabBarPosition`）、tab バー右端の複数エントリ
+    （拡大の状態・ホスト名・日時〔4プリセット〕・固定文字列。`settings.tabBarRight`・
+    `tabBarRightSeparator`。**この work の「現在時刻」を統合**——既定は空〔#12 と同じ〕になり、
+    利用者が設定で日時エントリを足せば元の見た目に戻せる）、pane 領域の外周の枠
+    （`settings.paneOuterBorders`。`.app-panes` の `outline`）。
+  - 取り込まなかったもの（decisions のここに理由を残し、`.aidev/backlog/product-roadmap.md` へ
+    後続として起こす）: pane の枠の描画モード「自動」（分割時だけ枠を出す。`PaneLayout.vue` を
+    再帰的に通る `bordered`/`multiPane` prop の設計が要る）・pane 間の隙間の入切
+    （`Splitter.vue` の `--wtm-pane-gap`〔この work の太さ3段階〕と同じ CSS 変数を取り合い、
+    素直に両立しない）・枠へのエージェント名表示の切替（この work の `paneAgentNameVisible` と
+    重複する別実装）・「tab が1個なら隠す」のトグル化（この work は既に無条件で隠しており、
+    #12 はそれを opt-in にする設計——両者は同じ結果〔既定で隠れる〕を異なる手段で達成しており、
+    無理に統合すると片方の設計を壊す）。
+- 理由 / 代替案: #12 をそのまま base にして作り直す案（当初の想定）は、pane の枠・隙間の設計が
+  根本的に異なる2つの実装（この work＝常に padding・3段階の太さ ／ #12＝padding 固定・
+  表示/非表示のモード切替）を統合する必要があり、`PaneLayout.vue` への手入れ（このwork では
+  一度も触っていないファイル）まで要る大きな作業になる——ユーザーが明示的に避けたい「作り直し」
+  そのものになってしまう。取り込んだ3項目は逆に、どのファイルにも構造的な衝突が無く
+  （`tabbar/tabBarRight.ts` は新規・自己完結、`App.vue`/`SettingsDialog.vue`/`TabBar.vue` は
+  この work の既存コードに追記するだけで既存の値〔`paneFrameThickness`・`paneAgentNameVisible`〕
+  に触れない）、「単純な取り込み」の趣旨に合う。
+- 影響: PR #12 は close し、branch は削除する（内容は選択的に取り込み済みで、そのままマージすると
+  この work の実装と二重・矛盾する）。取り込んだ3項目は `packages/web/src/tabbar/tabBarRight.ts`
+  （新規）・`settings.ts`／`TabBar.vue`／`App.vue`／`SettingsDialog.vue`（追記）に実装し、
+  unit test を追加した（`tabBarRight.test.ts`・`settings.test.ts`・`TabBar.test.ts`・
+  `App.test.ts`・`SettingsDialog.test.ts`・`ActionDispatcher.test.ts`）。E2E は追加していない
+  （[[e2e-only-on-request]]。ユーザー方針によりこのラウンドでは E2E を実行しない）。
+  `docs/herdr-parity.md` の H22 行・`.aidev/backlog/product-roadmap.md` を、取り込んだ範囲に
+  合わせて更新する（取り込まなかった部分は新しい後続行として残す）。

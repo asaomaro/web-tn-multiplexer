@@ -230,6 +230,18 @@ describe("App — pane の枠・隙間の太さの CSS 変数（AC9）", () => {
   });
 });
 
+// 20260922-tabbar-pane-appearance（PR #12 から取り込み）。
+describe("App — pane 領域の外周の枠", () => {
+  it("既定では `.app-panes-outer-borders` が付かず、`settings.paneOuterBorders` を有効にすると付く", async () => {
+    const settings = useSettingsStore(pinia);
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    expect(wrapper.get(".app-panes").classes()).not.toContain("app-panes-outer-borders");
+    settings.setPaneOuterBorders(true);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".app-panes").classes()).toContain("app-panes-outer-borders");
+  });
+});
+
 /**
  * D107（統合 review ラウンド1 で発見）：再接続の後に表示と購読を張り直す。main.ts の配線（`Connection.onOpened` →
  * `ViewSync.onConnectionOpened`）を模して、実物の ViewSync・TerminalRegistry・PaneLayout（root が付ける commit の関数）で確かめる。

@@ -70,10 +70,23 @@ parent: 20260918-web-terminal-multiplexer
   `docs/herdr-parity.md` H21・H22・H23・H25b。実測: unit 1504 本 green、
   E2E `appearance-settings.spec.ts` 新規6本＋既存 spec 6ファイルの回帰修正
   （最後まで安定した完走は未確認——test-result.md「E2E について」参照）〔D8〕）
+- [x] 外観と設定の残り（PR #12 から選択的に取り込み）: tab バーの位置（上/下）、右端の複数エントリ
+  （拡大の状態・ホスト名・日時4プリセット・固定文字列。最大16件・並び替え・区切り文字）、
+  pane 領域の外周の枠〔D8〕(needs: 20260918-web-terminal-multiplexer)（
+  20260922-appearance-settings-rest decisions.md [[D11]]。
+  `packages/web/src/tabbar/tabBarRight.ts`（新規）・
+  `packages/web/src/components/TabBar.vue`・`App.vue`・`SettingsDialog.vue`。
+  旧「現在時刻の常時表示」はこの右端エントリ（日時）に統合された。
+  実測: unit 1542 本 green（E2E は未実行——[[e2e-only-on-request]]。ユーザー方針で
+  このラウンドでは回していない）。PR #12（`20260922-tabbar-pane-appearance`）は
+  この取り込みと内容が重複するため close・branch 削除した）
 - [ ] 外観と設定の残り（未着手分）: サイドバー行の色の条件付け・独自トークン（H21）、
-  tab バーの位置（上/下）切り替え・時刻以外の状態表示（H22）、設定の onboarding（H25b）
+  pane の枠の描画モード「自動」（分割時だけ表示）・隙間の入切（H23。`PaneFrame.vue` の
+  「常に padding・太さ3段階」設計と両立しないため、`PaneLayout.vue` への手入れを伴う
+  再設計が要る。PR #12 が持っていた設計〔`bordered`/`multiPane` prop を `PaneLayout.vue`
+  経由で渡す〕が参考になる）、設定の onboarding（H25b）
   〔D8〕(needs: 20260918-web-terminal-multiplexer)（
-  20260922-appearance-settings-rest の requirements「対象外」で切り出し。
+  20260922-appearance-settings-rest の requirements「対象外」／decisions.md [[D11]]で切り出し。
   出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）、エージェントの会話の再開、名前付き session、更新時の引き継ぎ〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）

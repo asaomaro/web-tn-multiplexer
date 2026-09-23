@@ -58,7 +58,7 @@ const paneGapPx = computed(() => `${PANE_FRAME_THICKNESS_PX[settings.paneFrameTh
       <Sidebar />
       <div class="app-main">
         <TabBar />
-        <div class="app-panes">
+        <div class="app-panes" :class="{ 'app-panes-outer-borders': settings.paneOuterBorders }">
           <!-- 窓の大きさ・サイドバーの幅や折りたたみの変化に client.view を追従させる（D107）。pane ごとに枠を描く（右クリックで
                常にメニューを開く縁。D110）。どちらもモバイルの MobileShell には付けない -->
           <PaneLayout
@@ -145,5 +145,12 @@ body {
 .app-panes {
   flex: 1;
   min-height: 0;
+}
+/* pane 領域の外周の枠（20260922-tabbar-pane-appearance。PR #12 から取り込み）。`outline` を使う——
+ * `border` はボックスの外寸を増やして内側の大きさを削り、`PaneLayout.vue` が測る葉の大きさ・PTY の
+ * cols/rows まで変えてしまう。`outline` はボックスモデルに参加しないため、その心配が無い。 */
+.app-panes-outer-borders {
+  outline: 1px solid var(--wtm-menu-border, #44475a);
+  outline-offset: -1px;
 }
 </style>

@@ -11,11 +11,13 @@ import {
   loadNewCwdPolicy,
   loadPaneAgentNameVisible,
   loadPaneFrameThickness,
+  loadPaneOuterBorders,
   loadStatusSymbols,
   useSettingsStore,
 } from "../store/settings.js";
 import { loadAgentSort, loadSidebarCollapsed, loadSidebarWidth, loadWorkspaceSort, readPrefs, useViewStore } from "../store/view.js";
 import { loadScrollbackPref } from "../term/scrollback.js";
+import { loadTabBarPosition, loadTabBarRightEntries, loadTabBarRightSeparator } from "../tabbar/tabBarRight.js";
 import { loadThemePrefs } from "../theme/themes.js";
 import { clientErrorMessage, errorCodeOf } from "../net/clientError.js";
 import { depthFirstPaneIds, neighborPaneId } from "../term/layoutOrder.js";
@@ -674,6 +676,11 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     this.settings.themeDark = themePrefs.dark;
     this.settings.paneFrameThickness = loadPaneFrameThickness(raw["paneFrameThickness"]);
     this.settings.paneAgentNameVisible = loadPaneAgentNameVisible(raw["paneAgentNameVisible"]);
+    // 20260922-tabbar-pane-appearance（PR #12 から取り込み）分。
+    this.settings.tabBarPosition = loadTabBarPosition(raw["tabBarPosition"]);
+    this.settings.tabBarRight = loadTabBarRightEntries(raw["tabBarRight"]);
+    this.settings.tabBarRightSeparator = loadTabBarRightSeparator(raw["tabBarRightSeparator"]);
+    this.settings.paneOuterBorders = loadPaneOuterBorders(raw["paneOuterBorders"]);
     // `view.ts` 側も同じ raw を渡す（`loadSidebarWidth`/`loadSidebarCollapsed`/`loadWorkspaceSort`
     // は元から raw 引数型。`loadAgentSort` は本来 `readPrefs()` を自分で呼ぶ自己完結型〔decisions
     // D7〕だが、ここで省略すると `readPrefs()`（＝ `localStorage` の読み出し）が実質2回になるため、
