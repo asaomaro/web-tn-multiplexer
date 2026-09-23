@@ -7,7 +7,7 @@ function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
 }
 
 function makePane(overrides: Partial<Pane> = {}): Pane {
-  return { id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, ...overrides };
+  return { id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null, ...overrides };
 }
 
 // herdr と同じフォールバックの連鎖。`title` は未設定なら空文字なので `||` で繋ぐ。

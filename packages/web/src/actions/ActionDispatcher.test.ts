@@ -10,6 +10,7 @@ import type { ConnectionPort } from "../net/ports.js";
 import { RendererPool, type WebglAddonLike } from "../term/RendererPool.js";
 import { TerminalRegistry } from "../term/TerminalRegistry.js";
 import { MouseBridge } from "../term/MouseBridge.js";
+import { useAgentIntegrationsStore } from "../store/agentIntegrations.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
@@ -89,7 +90,7 @@ function makeTab(id: string, workspaceId: string, focusedPaneId = "p1"): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId: focusedPaneId }, focusedPaneId, zoomedPaneId: null, sizeOwnerClientId: null };
 }
 function makePane(id: string, tabId: string, busy = false): Pane {
-  return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy, title: "", rightClick: "herdr", agent: null };
+  return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy, title: "", rightClick: "herdr", agent: null, agentSession: null };
 }
 
 async function flush(): Promise<void> {
@@ -998,6 +999,46 @@ describe("ActionDispatcher — worktree", () => {
   it("コードを読み取れない失敗は、汎用の文言に落とす（AC7）", async () => {
     const message = await toastAfterFailure("worktree.list", "", (d) => d.openWorktree("w1"));
     expect(message).toBe("worktree の操作に失敗しました。");
+  });
+});
+
+describe("ActionDispatcher — 公式フック連携（20260923-agent-session-resume）", () => {
+  it("refreshAgentIntegrationStatus：agent_integration.status を呼び、store へ反映する", async () => {
+    const conn = makeConnection();
+    const status = {
+      autoResumeEnabled: true,
+      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: false, installed: false } },
+    };
+    conn.resolveWith["agent_integration.status"] = status;
+    const { dispatcher } = makeDispatcher(conn);
+
+    await dispatcher.refreshAgentIntegrationStatus();
+
+    expect(conn.requests).toEqual([["agent_integration.status", {}]]);
+    expect(useAgentIntegrationsStore(pinia).status).toEqual(status);
+  });
+
+  it("installAgentIntegration / uninstallAgentIntegration：kind をそのまま渡し、結果を返す", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["agent_integration.install"] = { ok: true, message: null };
+    conn.resolveWith["agent_integration.uninstall"] = { ok: true, message: "未導入でした" };
+    const { dispatcher } = makeDispatcher(conn);
+
+    await expect(dispatcher.installAgentIntegration("claude")).resolves.toEqual({ ok: true, message: null });
+    await expect(dispatcher.uninstallAgentIntegration("codex")).resolves.toEqual({ ok: true, message: "未導入でした" });
+    expect(conn.requests).toEqual([
+      ["agent_integration.install", { kind: "claude" }],
+      ["agent_integration.uninstall", { kind: "codex" }],
+    ]);
+  });
+
+  it("setAgentIntegrationAutoResume：enabled をそのまま渡す", async () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+
+    await dispatcher.setAgentIntegrationAutoResume(false);
+
+    expect(conn.requests).toEqual([["agent_integration.set_auto_resume", { enabled: false }]]);
   });
 });
 

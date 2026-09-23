@@ -28,6 +28,7 @@ import { HttpServer } from "../http/HttpServer.js";
 import { WsServerWs } from "./WsServerWs.js";
 import { WsGateway } from "./WsGateway.js";
 import type { WorktreeService } from "../git/WorktreeService.js";
+import type { AgentIntegrationService } from "../agent/AgentIntegrationService.js";
 
 class NoopPersist implements PersistScheduler {
   touch(): void {}
@@ -111,7 +112,7 @@ async function startTestServer(opts: { commandFor?: (index: number) => string; g
   const clients = new DefaultClientRegistry();
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(new MemoryLogger());
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees() });
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees(), agentIntegrations: stubAgentIntegrations() });
 
   // 実物の HttpServer（T16）を使う。/api/login 等を素の 404 ハンドラで済ませず、本物の配線で確かめる。
   const webDistDir = await makeTempDir("wtm-ws-webdist-missing-");
@@ -626,5 +627,16 @@ function stubWorktrees(): WorktreeService {
   return {
     list: () => Promise.reject(new Error("not used in this test")),
     create: () => Promise.reject(new Error("not used in this test")),
+  };
+}
+
+/** 公式フック連携の方式も別のテストで確かめるので、ここでは呼ばれない代役を置く（20260923-agent-session-resume）。 */
+function stubAgentIntegrations(): AgentIntegrationService {
+  return {
+    getAutoResumeEnabled: () => true,
+    status: () => Promise.reject(new Error("not used in this test")),
+    install: () => Promise.reject(new Error("not used in this test")),
+    uninstall: () => Promise.reject(new Error("not used in this test")),
+    setAutoResume: () => Promise.reject(new Error("not used in this test")),
   };
 }

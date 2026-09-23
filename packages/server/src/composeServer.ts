@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:os";
+import { createHash } from "node:crypto";
 import type { HostInfo } from "@wtm/protocol";
 import { ConfigError, type RawServeArgs, type ServeOptions, resolveServeOptions, stateDirInUseError } from "./config.js";
 import { FileLogger, type Logger } from "./log/Logger.js";
@@ -30,6 +31,10 @@ import { DefaultClientRegistry } from "./clients/ClientRegistry.js";
 import { DefaultSizeAuthority } from "./clients/SizeAuthority.js";
 import { ControlSurface } from "./surface/ControlSurface.js";
 import { registerAllMethods } from "./surface/methods/index.js";
+import { FsIntegrationFile } from "./persist/IntegrationFile.js";
+import { FsAgentIntegrationInstaller } from "./agent/AgentIntegrationInstaller.js";
+import { DefaultAgentIntegrationService } from "./agent/AgentIntegrationService.js";
+import { startAgentReportSocket, type AgentReportSocket } from "./agent/AgentReportSocket.js";
 import { HttpServer } from "./http/HttpServer.js";
 import { WsServerWs } from "./ws/WsServerWs.js";
 import { WsGateway } from "./ws/WsGateway.js";
@@ -78,6 +83,25 @@ function manifestDirFor(): string {
   // packages/server/dist/composeServer.js から見て ../../../third_party/herdr/agent-detection
   // （リポジトリ直下。`third_party` は成果物にも同梱する前提——移植元のライセンス表示ごと持ち歩く。D5・D34）。
   return join(import.meta.dirname, "..", "..", "..", "third_party", "herdr", "agent-detection");
+}
+
+/** 公式フック連携（20260923-agent-session-resume）の hook スクリプト本体の場所。 */
+function agentHookScriptFor(): string {
+  // packages/server/dist/composeServer.js から見て ../assets/agent-hook-report.cjs
+  return join(import.meta.dirname, "..", "assets", "agent-hook-report.cjs");
+}
+
+/**
+ * 公式フック連携の report を受け取るローカル socket のパス（design「4. ローカル report 経路」）。
+ * Unix はファイルシステムパス、Windows は named pipe（ファイルシステムパスを持たないため、
+ * `stateDir` のハッシュをグローバル名前空間内の名前に使う。同じ `stateDir` からは常に同じ名前になる）。
+ */
+function agentReportSocketPathFor(stateDir: string): string {
+  if (platform() === "win32") {
+    const hash = createHash("sha256").update(stateDir).digest("hex").slice(0, 16);
+    return `\\\\.\\pipe\\wtm-agent-report-${hash}`;
+  }
+  return join(stateDir, "agent-report.sock");
 }
 
 /** 起動オプションから、部品をすべて組み立てる（composition root）。`main.ts` と `smoke.ts` の両方から使う。 */
@@ -134,6 +158,11 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   // 「起動した場所」。新しい workspace の以前の場所と、新しく開く場所の方針「起動した場所」・代わりの 2 段目は同じ値
   // （2 か所で別々に持たない。20260921-new-terminal-cwd の design D6）。
   const defaultCwd = process.cwd();
+  // 公式フック連携（20260923-agent-session-resume）：会話IDの report 経路・導入/解除・自動再開設定。
+  const agentReportSocketPath = agentReportSocketPathFor(options.stateDir);
+  const integrationFile = new FsIntegrationFile(options.stateDir);
+  const agentIntegrationInstaller = new FsAgentIntegrationInstaller(agentHookScriptFor());
+  const agentIntegrations = await DefaultAgentIntegrationService.load(agentIntegrationInstaller, integrationFile, bus);
   const session = new SessionService({
     model,
     terminals,
@@ -143,6 +172,8 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
     host,
     scrollbackLines: options.scrollbackLines,
     defaultCwd,
+    agentReportSocketPath,
+    getAutoResumeEnabled: agentIntegrations.getAutoResumeEnabled,
     // 新しく開く場所（herdr の `terminal.new_cwd`）。「引き継ぐ」は元の pane の前面プロセスの cwd をその時点で読み直す。
     newCwdDeps: makeNewCwdDeps({
       terminals,
@@ -171,7 +202,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   palettes.attach({ getPane: (id) => session.getPane(id), getTab: (id) => session.getTab(id), clients });
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(logger);
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees });
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees, agentIntegrations });
   const wsServer = new WsServerWs(httpServer.server, originRejections, auth.authorizeUpgrade, logger);
   // `/ws` は `listen()` の最後（復元と poller の開始の後）まで受け付けない（D102）。
   wsServer.setReady(false);
@@ -180,6 +211,8 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   let freshToken: string | undefined;
   /** 復元（または最初の workspace の作成）を済ませたか。済ませていない状態を session.json へ書かないために使う。 */
   let sessionLoaded = false;
+  /** 公式フック連携の report を受け取るローカル socket（`listen()` で起動、`close()` で閉じる）。 */
+  let agentReportSocket: AgentReportSocket | undefined;
 
   return {
     httpServer,
@@ -220,6 +253,15 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
         // 2. token（初回だけ作る。表示は呼び出し側が行う——この後で失敗しても `freshToken` は読める）。
         const { created, token } = await auth.ensureToken();
         freshToken = created ? token : undefined;
+        // 2.5. 公式フック連携の report 受け口（20260923-agent-session-resume）。復元（3.）で
+        //      resume コマンドを投入した pane が hook を発火させうるため、それより前に立てる。
+        agentReportSocket = await startAgentReportSocket(
+          agentReportSocketPath,
+          (paneId, kind, sessionId) => {
+            if (kind === "claude" || kind === "codex") session.reportAgentSession(paneId, kind, sessionId);
+          },
+          logger,
+        );
         // 3. 起動時の復元（design「起動と再起動後の復元」）。
         const loaded = await sessionFile.load();
         if (loaded.kind === "ok") {
@@ -239,6 +281,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
         // 失敗した起動はロックを放す（`main` は close() を呼ばずに終わる）。放す前に、復元を済ませていない状態の保存の
         // 予約を取り消す（ロックを放した後に session.json を書かない）。
         if (!sessionLoaded) persist.cancel();
+        await agentReportSocket?.close();
         await lock.release();
         throw err;
       }
@@ -248,6 +291,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
       try {
         // 閉じ始めたら新しい `/ws` を受け付けない（closeAll の後に届いた upgrade を通さない。D102）。
         wsServer.setReady(false);
+        await agentReportSocket?.close();
         // 実行中の判定周期を待ってから terminals/session を破棄する（review 指摘。should。D51 の隣の
         // agent/AgentMonitor.ts 参照）。
         await agentMonitor.stop();
@@ -303,7 +347,14 @@ function toSessionFileData(session: SessionService): SessionFileData {
           layout: tab.layout,
           panes: snapshot.panes
             .filter((p) => p.tabId === tab.id)
-            .map((p) => ({ id: p.id, label: p.label, cwd: p.cwd, shell: p.shell, status: p.status })),
+            .map((p) => ({
+              id: p.id,
+              label: p.label,
+              cwd: p.cwd,
+              shell: p.shell,
+              status: p.status,
+              agentSession: p.agentSession ?? undefined,
+            })),
         })),
     })),
     focus: snapshot.focus,

@@ -26,7 +26,7 @@ function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
   return { instanceId: "a1", kind: "claude", label: "Claude Code", state: "working", completionSeq: 0, serverSeenSeq: 0, verified: true, since: 0, ...overrides };
 }
 function makePane(id: string, tabId: string, agent: AgentInfo | null = null): Pane {
-  return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent };
+  return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent, agentSession: null };
 }
 
 function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] } {

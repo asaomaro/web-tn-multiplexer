@@ -9,7 +9,7 @@ function tab(id: string, workspaceId: string, layout: LayoutNode, focusedPaneId:
   return { id, workspaceId, label: id, layout, focusedPaneId, zoomedPaneId: null, sizeOwnerClientId: null };
 }
 function pane(id: string, tabId: string): Pane {
-  return { id, tabId, label: null, cwd: "/", shell: "", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null };
+  return { id, tabId, label: null, cwd: "/", shell: "", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null };
 }
 function session(workspaces: Workspace[], tabs: Tab[], panes: Pane[]): SessionLike & { panes: Map<string, Pane>; tabs: Map<string, Tab>; workspaces: Map<string, Workspace> } {
   return {

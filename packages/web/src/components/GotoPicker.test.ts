@@ -35,7 +35,7 @@ function makeTab(id: string, workspaceId: string, paneId: string, overrides: Par
   return { id, workspaceId, label: id, layout: { type: "pane", paneId }, focusedPaneId: paneId, zoomedPaneId: null, sizeOwnerClientId: null, ...overrides };
 }
 function makePane(id: string, tabId: string, overrides: Partial<Pane> = {}): Pane {
-  return { id, tabId, label: null, cwd: `/work/${id}`, shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, ...overrides };
+  return { id, tabId, label: null, cwd: `/work/${id}`, shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null, ...overrides };
 }
 function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
   return { instanceId: "a1", kind: "claude", label: "claude", state: "working", completionSeq: 0, serverSeenSeq: 0, verified: true, since: 0, ...overrides };

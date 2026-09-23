@@ -1,4 +1,4 @@
-import type { AgentInfo, HostInfo } from "@wtm/protocol";
+import type { AgentInfo, HostInfo, LayoutNode } from "@wtm/protocol";
 import { RpcError } from "@wtm/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Disposable } from "../util/Disposable.js";
@@ -21,6 +21,8 @@ class FakeTerminalHost implements TerminalHost {
   private readonly exitListeners = new Set<(code: number) => void>();
   disposed = false;
   resized: { cols: number; rows: number } | null = null;
+  /** 20260923-agent-session-resume：復元時の resume コマンド投入を確かめるため、書き込みを記録する。 */
+  writes: (string | Uint8Array)[] = [];
 
   constructor(
     readonly paneId: string,
@@ -32,8 +34,8 @@ class FakeTerminalHost implements TerminalHost {
       });
     }
   }
-  write(): void {
-    // no-op
+  write(input: string | Uint8Array): void {
+    this.writes.push(input);
   }
   resize(cols: number, rows: number): void {
     this.resized = { cols, rows };
@@ -949,6 +951,200 @@ describe("SessionService — workspace の自動の名前", () => {
         ["w5", "app", true],
         ["w6", "1", false],
       ]);
+    });
+  });
+
+  // 20260923-agent-session-resume：design「復元」・decisions D8〜D11。
+  describe("復元 — 公式フック連携の会話再開（design D9〜D11）", () => {
+    function paneData(id: string, cwd: string, agentSession?: { kind: string; sessionId: string; reportedAt: number }) {
+      return { id, label: null, cwd, shell: "/bin/sh", ...(agentSession ? { agentSession } : {}) };
+    }
+    function oneWorkspace(id: string, cwd: string, panes: ReturnType<typeof paneData>[]) {
+      return {
+        id,
+        label: id,
+        cwd,
+        activeTabId: `t-${id}`,
+        tabs: [{ id: `t-${id}`, label: "1", focusedPaneId: panes[0]!.id, zoomedPaneId: null, layout: buildLayout(panes.map((p) => p.id)), panes }],
+      };
+    }
+    function buildLayout(paneIds: string[]): LayoutNode {
+      if (paneIds.length === 1) return { type: "pane", paneId: paneIds[0]! };
+      const [first, ...rest] = paneIds;
+      return { type: "split", id: `s-${first}`, dir: "right", ratio: 0.5, a: { type: "pane", paneId: first! }, b: buildLayout(rest) };
+    }
+
+    function setup(getAutoResumeEnabled?: () => boolean) {
+      const terminals = new FakeTerminalManager();
+      const service = new SessionService({
+        model: new SessionModel(),
+        terminals,
+        bus: new EventBus(),
+        persist: new FakePersistScheduler(),
+        serverVersion: "0.1.0-test",
+        host: HOST_INFO,
+        scrollbackLines: 1000,
+        spawnGraceMs: 5,
+        defaultCwd: "/home/u",
+        logger: new MemoryLogger(),
+        ...(getAutoResumeEnabled ? { getAutoResumeEnabled } : {}),
+      });
+      return { terminals, service };
+    }
+
+    it("保存されていた会話IDで claude --resume <id> を投入する（AC1）", async () => {
+      const { terminals, service } = setup();
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-23T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [oneWorkspace("w1", "/r", [paneData("p1", "/r", { kind: "claude", sessionId: "abc-123", reportedAt: 1 })])],
+        focus: null,
+      });
+      const host = terminals.hosts.get("p1") as FakeTerminalHost;
+      expect(host.writes).toEqual(["claude --resume abc-123\r"]);
+    });
+
+    it("codex は codex resume <id> を投入する（AC2）", async () => {
+      const { terminals, service } = setup();
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-23T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [oneWorkspace("w1", "/r", [paneData("p1", "/r", { kind: "codex", sessionId: "thr_1", reportedAt: 1 })])],
+        focus: null,
+      });
+      const host = terminals.hosts.get("p1") as FakeTerminalHost;
+      expect(host.writes).toEqual(["codex resume thr_1\r"]);
+    });
+
+    it("会話IDが無い pane には何も投入しない（AC3・AC4）", async () => {
+      const { terminals, service } = setup();
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-23T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [oneWorkspace("w1", "/r", [paneData("p1", "/r")])],
+        focus: null,
+      });
+      const host = terminals.hosts.get("p1") as FakeTerminalHost;
+      expect(host.writes).toEqual([]);
+    });
+
+    it("未知の kind（将来の永続化データ・手編集等）は無害に無視する（AC6 と同じフォールバック）", async () => {
+      const { terminals, service } = setup();
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-23T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [oneWorkspace("w1", "/r", [paneData("p1", "/r", { kind: "gemini", sessionId: "x", reportedAt: 1 })])],
+        focus: null,
+      });
+      const host = terminals.hosts.get("p1") as FakeTerminalHost;
+      expect(host.writes).toEqual([]);
+    });
+
+    it("自動再開が無効なら投入しない（design D3・AC-I4）", async () => {
+      const { terminals, service } = setup(() => false);
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-23T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [oneWorkspace("w1", "/r", [paneData("p1", "/r", { kind: "claude", sessionId: "abc-123", reportedAt: 1 })])],
+        focus: null,
+      });
+      const host = terminals.hosts.get("p1") as FakeTerminalHost;
+      expect(host.writes).toEqual([]);
+    });
+
+    it("同一 cwd・同一種別の複数 pane でも、pane ごとに一意な ID で全 pane に投入する（AC5・design D11。重複排除はしない）", async () => {
+      const { terminals, service } = setup();
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-23T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [
+          oneWorkspace("w1", "/r", [
+            paneData("p1", "/r", { kind: "claude", sessionId: "session-a", reportedAt: 1 }),
+            paneData("p2", "/r", { kind: "claude", sessionId: "session-b", reportedAt: 2 }),
+          ]),
+        ],
+        focus: null,
+      });
+      expect((terminals.hosts.get("p1") as FakeTerminalHost).writes).toEqual(["claude --resume session-a\r"]);
+      expect((terminals.hosts.get("p2") as FakeTerminalHost).writes).toEqual(["claude --resume session-b\r"]);
+    });
+
+    it("シェルの起動が失敗した pane には投入せず、現状どおり failed にする", async () => {
+      const { terminals, service } = setup();
+      terminals.nextSpawnFailure = 1;
+      await service.restore({
+        schema: 1,
+        savedAt: "2026-09-23T00:00:00Z",
+        nextId: { w: 10, t: 10, p: 10, s: 1, a: 1 },
+        workspaces: [oneWorkspace("w1", "/r", [paneData("p1", "/r", { kind: "claude", sessionId: "abc-123", reportedAt: 1 })])],
+        focus: null,
+      });
+      expect(service.getPane("p1")?.status).toBe("failed");
+      // 起動に失敗した pane は `spawnForPane` が `terminals.dispose()` する（破棄されてマップから消える）ので、
+      // resume コマンドを書き込む先自体が無い（=投入していないことの証拠）。
+      expect(terminals.hosts.has("p1")).toBe(false);
+    });
+  });
+
+  describe("報告の受信（reportAgentSession。design「振る舞いの詳細・会話IDの報告受信」）", () => {
+    function setup() {
+      const terminals = new FakeTerminalManager();
+      const persist = new FakePersistScheduler();
+      const service = makeService(terminals, new EventBus(), persist);
+      return { terminals, persist, service };
+    }
+
+    it("報告を pane.agentSession へ反映し、保存を予約する", async () => {
+      const { service, persist } = setup();
+      const { pane } = await service.createWorkspace("/r", "w1");
+      persist.touchCount = 0;
+
+      service.reportAgentSession(pane.id, "claude", "abc-123");
+
+      expect(service.getPane(pane.id)?.agentSession).toMatchObject({ kind: "claude", sessionId: "abc-123" });
+      expect(persist.touchCount).toBe(1);
+    });
+
+    it("存在しない pane への報告は無視する（report 経路は best-effort）", () => {
+      const { service, persist } = setup();
+      expect(() => service.reportAgentSession("unknown", "claude", "abc-123")).not.toThrow();
+      expect(persist.touchCount).toBe(0);
+    });
+
+    it("画面判定でエージェントが消えたら（非 null → null）、会話参照も一緒に消す（design D9）", async () => {
+      const { service, persist } = setup();
+      const { pane } = await service.createWorkspace("/r", "w1");
+      service.reportAgentSession(pane.id, "claude", "abc-123");
+      service.updatePaneRuntime(pane.id, {
+        agent: { instanceId: "a1", kind: "claude", label: "Claude Code", state: "working", completionSeq: 0, serverSeenSeq: 0, verified: true, since: 1 },
+      });
+      persist.touchCount = 0;
+
+      service.updatePaneRuntime(pane.id, { agent: null });
+
+      expect(service.getPane(pane.id)?.agentSession).toBeNull();
+      expect(persist.touchCount, "会話参照の消滅も保存契機にする（design D8）").toBe(1);
+    });
+
+    it("agent の kind・state が変わるだけでは会話参照を消さない", async () => {
+      const { service } = setup();
+      const { pane } = await service.createWorkspace("/r", "w1");
+      service.reportAgentSession(pane.id, "claude", "abc-123");
+      service.updatePaneRuntime(pane.id, {
+        agent: { instanceId: "a1", kind: "claude", label: "Claude Code", state: "working", completionSeq: 0, serverSeenSeq: 0, verified: true, since: 1 },
+      });
+
+      service.updatePaneRuntime(pane.id, {
+        agent: { instanceId: "a1", kind: "claude", label: "Claude Code", state: "idle", completionSeq: 1, serverSeenSeq: 0, verified: true, since: 2 },
+      });
+
+      expect(service.getPane(pane.id)?.agentSession).toMatchObject({ sessionId: "abc-123" });
     });
   });
 

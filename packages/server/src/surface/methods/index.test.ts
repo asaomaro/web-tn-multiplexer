@@ -15,6 +15,7 @@ import { answerPaletteFor } from "../../clients/answerPalette.js";
 import { ControlSurface } from "../ControlSurface.js";
 import { registerAllMethods } from "./index.js";
 import type { WorktreeService } from "../../git/WorktreeService.js";
+import type { AgentIntegrationService } from "../../agent/AgentIntegrationService.js";
 import type { NewCwdDeps } from "../../session/newCwd.js";
 import type { WorkspaceLabelDeps } from "../../session/workspaceLabel.js";
 
@@ -114,7 +115,7 @@ function makeContext(newCwdDeps?: NewCwdDeps) {
   const clients = new DefaultClientRegistry();
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(new MemoryLogger());
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees() });
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees(), agentIntegrations: stubAgentIntegrations() });
   return { terminals, session, clients, surface };
 }
 
@@ -348,5 +349,15 @@ function stubWorktrees(): WorktreeService {
   return {
     list: () => Promise.reject(new Error("not used in this test")),
     create: () => Promise.reject(new Error("not used in this test")),
+  };
+}
+
+function stubAgentIntegrations(): AgentIntegrationService {
+  return {
+    getAutoResumeEnabled: () => true,
+    status: () => Promise.reject(new Error("not used in this test")),
+    install: () => Promise.reject(new Error("not used in this test")),
+    uninstall: () => Promise.reject(new Error("not used in this test")),
+    setAutoResume: () => Promise.reject(new Error("not used in this test")),
   };
 }

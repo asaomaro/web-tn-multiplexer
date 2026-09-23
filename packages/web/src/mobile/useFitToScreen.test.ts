@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 function makePane(id: string, cols: number): Pane {
-  return { id, tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null };
+  return { id, tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null };
 }
 
 function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] } {

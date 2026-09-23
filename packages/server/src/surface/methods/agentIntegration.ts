@@ -1,0 +1,34 @@
+import {
+  AgentIntegrationInstallParams,
+  AgentIntegrationSetAutoResumeParams,
+  AgentIntegrationStatusParams,
+  AgentIntegrationUninstallParams,
+} from "@wtm/protocol";
+import type { ControlSurface } from "../ControlSurface.js";
+import type { MethodDeps } from "./deps.js";
+
+/** 公式フック連携の導入・解除・状態確認・自動再開の切替（20260923-agent-session-resume）。 */
+export function registerAgentIntegrationMethods(surface: ControlSurface, deps: MethodDeps): void {
+  surface.register("agent_integration.status", {
+    schema: AgentIntegrationStatusParams,
+    handler: () => deps.agentIntegrations.status(),
+  });
+
+  surface.register("agent_integration.install", {
+    schema: AgentIntegrationInstallParams,
+    handler: (_ctx, params) => deps.agentIntegrations.install(params.kind),
+  });
+
+  surface.register("agent_integration.uninstall", {
+    schema: AgentIntegrationUninstallParams,
+    handler: (_ctx, params) => deps.agentIntegrations.uninstall(params.kind),
+  });
+
+  surface.register("agent_integration.set_auto_resume", {
+    schema: AgentIntegrationSetAutoResumeParams,
+    handler: async (_ctx, params) => {
+      await deps.agentIntegrations.setAutoResume(params.enabled);
+      return {};
+    },
+  });
+}

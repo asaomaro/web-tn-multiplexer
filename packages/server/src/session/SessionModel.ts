@@ -1,5 +1,7 @@
 import type {
   AgentInfo,
+  AgentIntegrationKind,
+  AgentSessionRef,
   Dir,
   GitInfo,
   HostInfo,
@@ -151,6 +153,7 @@ export class SessionModel {
       title: "",
       rightClick: "herdr",
       agent: null,
+      agentSession: null,
     };
   }
 
@@ -466,7 +469,7 @@ export class SessionModel {
     this.tabs.set(tabId, { ...tab, sizeOwnerClientId: clientId });
   }
 
-  updatePaneRuntime(paneId: PaneId, patch: { busy?: boolean; cwd?: string; title?: string; agent?: AgentInfo | null }): Pane {
+  updatePaneRuntime(paneId: PaneId, patch: { busy?: boolean; cwd?: string; title?: string; agent?: AgentInfo | null; agentSession?: AgentSessionRef | null }): Pane {
     const pane = this.requirePane(paneId);
     const updated: Pane = {
       ...pane,
@@ -474,7 +477,16 @@ export class SessionModel {
       cwd: patch.cwd ?? pane.cwd,
       title: patch.title ?? pane.title,
       agent: patch.agent !== undefined ? patch.agent : pane.agent,
+      agentSession: patch.agentSession !== undefined ? patch.agentSession : pane.agentSession,
     };
+    this.panes.set(paneId, updated);
+    return updated;
+  }
+
+  /** 公式フック連携（20260923-agent-session-resume）が報告した会話参照を反映する。 */
+  setAgentSession(paneId: PaneId, agentSession: AgentSessionRef | null): Pane {
+    const pane = this.requirePane(paneId);
+    const updated: Pane = { ...pane, agentSession };
     this.panes.set(paneId, updated);
     return updated;
   }
@@ -556,6 +568,19 @@ export class SessionModel {
           cols: 120,
           rows: 40,
         });
+        // 会話参照は `makePane` の対象外（新規作成では持たない情報）なので、復元のときだけ載せる
+        // （20260923-agent-session-resume design D2。無ければ以前の版の保存データ、または
+        // そもそも報告が無かった pane で、null のままでよい）。
+        if (paneData.agentSession) {
+          pane.agentSession = {
+            // 持続化は将来のエージェント種別も見越して `kind: string`（design D2）。ここでのキャストは
+            // 表示・引き回し用のもので、実際に resume コマンドを引けるかどうかは復元処理側
+            // （T5 の解決テーブル）が未知の kind を無害に無視することで安全側に倒す。
+            kind: paneData.agentSession.kind as AgentIntegrationKind,
+            sessionId: paneData.agentSession.sessionId,
+            reportedAt: paneData.agentSession.reportedAt,
+          };
+        }
         this.panes.set(pane.id, pane);
       }
     }

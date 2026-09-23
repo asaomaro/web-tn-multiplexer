@@ -1,4 +1,4 @@
-import type { AgentInfo, ServerEvent, SessionSnapshot } from "@wtm/protocol";
+import type { AgentInfo, AgentIntegrationStatusResult, ServerEvent, SessionSnapshot } from "@wtm/protocol";
 import type { Pinia } from "pinia";
 import type { ConnectionState, StorePort } from "../net/ports.js";
 import { useSessionStore } from "./session.js";
@@ -29,6 +29,8 @@ export interface StoreAdapterOptions {
   onSnapshotApplied?: (panes: { paneId: string; agent: AgentInfo | null }[], first: boolean) => void;
   /** pane が閉じた。**`pane.exited` とは別のイベント**（待ち行列と判定済みの掃除に要る）。省略可。 */
   onPaneClosed?: (paneId: string) => void;
+  /** 公式フック連携の導入状態・自動再開設定が変わった（20260923-agent-session-resume）。省略可。 */
+  onAgentIntegrationChanged?: (status: AgentIntegrationStatusResult) => void;
 }
 
 /**
@@ -132,6 +134,9 @@ export class StoreAdapter implements StorePort {
         return;
       case "client.error":
         this.opts.onClientError?.(e.data.code, e.data.message);
+        return;
+      case "agent_integration.changed":
+        this.opts.onAgentIntegrationChanged?.(e.data);
         return;
     }
   }

@@ -264,6 +264,25 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       （px の実測次第でセルの境界を跨がず列・行数が変わらないこともあるが、その場合もクラッシュ・
       エラーが起きていなければ問題ない。自動テスト`appearance-settings.spec.ts`は後者〔クラッシュ・
       エラーが起きないこと〕を軸に確認している）。
+- [ ] エージェントの会話の再開（20260923-agent-session-resume。AC1〜AC6）：実際に Claude Code
+      （または Codex）がインストールされた環境で確認する（単体テストは hook のペイロード・
+      非破壊マージ・復元時のコマンド投入を検証しているが、実物の CLI との結線は未検証）。
+      設定の「エージェント連携」で対象を導入 → `~/.claude/settings.json`（Codex は
+      `~/.codex/hooks.json`）に本製品のフックが1件追記されたことを確認 → pane で `claude`
+      （`codex`）を起動し、何かひとこと話しかける → `wtm serve` を Ctrl+C で止めて同じコマンドで
+      起動し直す → その pane が自動で `claude --resume <id>`（`codex resume <id>`）を実行し、
+      直前の会話が復元されることを確認する。あわせて：
+      - 同じ cwd に Claude Code の pane を2つ以上開いた状態で確認し、両方が別々の会話として
+        正しく再開すること（AC5。design D11 の前提——ID なし方式〔`--continue`〕では区別できない
+        問題を、pane ごとに一意な会話IDで解決したはずの箇所）。
+      - 会話を終えて（`exit`・Ctrl+D 等）プレーンなシェルに戻した pane は、再起動しても再開されない
+        こと（design D9）。
+      - 設定の「エージェント連携」で解除すると、書き込んだフックのエントリだけが消え、
+        手動で足した他の hook（あれば）が残ること。
+- [ ] Windows の named pipe の権限限定（`AgentReportSocket`。design D5）：Unix の `chmod 0600` に
+      相当する対策が Windows では未実装（既知の制約。同 work の decisions.md 参照）。Windows
+      ネイティブで確認する場合、同じホストの別ユーザーから report socket へ接続できないことを
+      確かめてから使う。
 
 ## WSL2（手元）
 

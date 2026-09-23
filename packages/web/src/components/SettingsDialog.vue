@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { DEFAULT_THEME_NAME, isThemeName, THEME_APPEARANCE, THEME_NAMES, type ThemeName } from "@wtm/protocol";
+import { DEFAULT_THEME_NAME, isThemeName, THEME_APPEARANCE, THEME_NAMES, type AgentIntegrationKind, type ThemeName } from "@wtm/protocol";
 import { computed, inject, nextTick, ref, watch } from "vue";
-import { DeviceKindKey, NotificationControllerKey } from "../injection.js";
+import { ActionDispatcherKey, DeviceKindKey, NotificationControllerKey } from "../injection.js";
 import type { DesktopPermission } from "../notify/ports.js";
+import { useAgentIntegrationsStore } from "../store/agentIntegrations.js";
 import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore, type NewCwdPolicy, type PaneFrameThickness } from "../store/settings.js";
@@ -43,6 +44,10 @@ if (!controller) throw new Error("SettingsDialog: NotificationControllerKey が 
 
 const session = useSessionStore();
 const settings = useSettingsStore();
+/** 公式フック連携（20260923-agent-session-resume）。**握りつぶす**——単体テストでの provide を必須にしない
+ *  （`PaneFrame.vue` と同じ流儀。落とせば節のボタンが押しても反応しないだけで、他の設定操作は壊れない）。 */
+const actions = inject(ActionDispatcherKey, undefined);
+const agentIntegrations = useAgentIntegrationsStore();
 /**
  * 端末の種類。**既定値つきで受け、provide が無くても throw しない**——通知の制御器（無いと嘘の理由を出すので throw する）
  * と違い、これが効くのは「自動」の行に添える行数の表示だけ。**`isCoarsePointer()` を呼び直さない**（判定が 2 か所に割れると、
@@ -103,6 +108,9 @@ watch(
       refreshPermission(); // 開くたびに読み直す（前回開いてから外で変わっているかもしれない）
       pathDraft.value = settings.newCwdPath; // 開くたびに保存値から始める
       syncOverrideDrafts();
+      agentIntegrationMessage.value = null; // 前回の結果の文を持ち越さない
+      // サーバ全体の設定なので client.hello のスナップショットに乗らない（20260923-agent-session-resume）。
+      void actions?.refreshAgentIntegrationStatus();
       void nextTick(() => {
         dialogEl.value?.showModal();
         firstSwitch.value?.focus();
@@ -307,6 +315,34 @@ function commitNewCwdPath(): void {
 function onPathEnter(ev: KeyboardEvent): void {
   if (ev.isComposing || ev.keyCode === 229) return;
   commitNewCwdPath();
+}
+
+/**
+ * 公式フック連携（20260923-agent-session-resume）。**このブラウザだけの設定ではない**——サーバ全体の設定
+ * なので `useAgentIntegrationsStore` はサーバから読み書きする（他の節の localStorage 設定とは別枠）。
+ */
+const AGENT_INTEGRATION_KINDS: readonly { value: AgentIntegrationKind; label: string }[] = [
+  { value: "claude", label: "Claude Code" },
+  { value: "codex", label: "Codex" },
+];
+/** 導入/解除の操作中は二重押しを防ぐ（対象の kind を持つ。どちらも同時には押せない設計で足りる）。 */
+const agentIntegrationBusy = ref<AgentIntegrationKind | null>(null);
+const agentIntegrationMessage = ref<string | null>(null);
+
+async function toggleAgentIntegration(kind: AgentIntegrationKind, installed: boolean): Promise<void> {
+  if (!actions || agentIntegrationBusy.value) return;
+  agentIntegrationBusy.value = kind;
+  try {
+    const result = installed ? await actions.uninstallAgentIntegration(kind) : await actions.installAgentIntegration(kind);
+    agentIntegrationMessage.value = result.ok ? result.message : (result.message ?? "操作に失敗しました");
+  } finally {
+    agentIntegrationBusy.value = null;
+  }
+}
+
+function toggleAgentIntegrationAutoResume(): void {
+  const current = agentIntegrations.status?.autoResumeEnabled ?? true;
+  void actions?.setAgentIntegrationAutoResume(!current);
 }
 
 /**
@@ -772,6 +808,50 @@ function onNativeCancel(ev: Event): void {
         <p id="settings-path-note" class="settings-note">絶対パスか ~/ で始まるパス（~ だけならホーム）。使えない場所なら、代わりの場所で開いて知らせます。</p>
       </fieldset>
     </section>
+    <section class="settings-section" aria-labelledby="settings-agent-integration">
+      <h3 id="settings-agent-integration" class="settings-heading">エージェント連携</h3>
+      <p class="settings-note">
+        Claude Code・Codex の公式フックを使い、サーバの再起動後にその会話を自動で再開します。導入すると、
+        それぞれの設定ファイル（Claude Code は settings.json、Codex は hooks.json）にフックが1件だけ
+        追加されます（他の設定は変更しません）。この設定は<strong>サーバ全体</strong>で共有されます
+        （ほかの節と違い、ブラウザごとではありません）。
+      </p>
+      <ul class="settings-list">
+        <li v-for="k in AGENT_INTEGRATION_KINDS" :key="k.value" class="settings-row agent-integration-row">
+          <div class="agent-integration-label">
+            <span>{{ k.label }}</span>
+            <span class="settings-note agent-integration-status">
+              <template v-if="!agentIntegrations.status">確認中…</template>
+              <template v-else>
+                {{ agentIntegrations.status.agents[k.value].installed ? "導入済み" : "未導入" }}
+                <template v-if="!agentIntegrations.status.agents[k.value].cliDetected">（この PATH には見つかりません）</template>
+              </template>
+            </span>
+          </div>
+          <button
+            type="button"
+            class="settings-btn"
+            :disabled="!agentIntegrations.status || agentIntegrationBusy === k.value"
+            @click="toggleAgentIntegration(k.value, agentIntegrations.status?.agents[k.value].installed ?? false)"
+          >
+            {{ agentIntegrations.status?.agents[k.value].installed ? "解除" : "導入" }}
+          </button>
+        </li>
+        <li class="settings-row">
+          <button
+            type="button"
+            role="switch"
+            class="settings-switch"
+            :aria-checked="agentIntegrations.status?.autoResumeEnabled ?? true"
+            @click="toggleAgentIntegrationAutoResume"
+          >
+            <span class="settings-mark">{{ (agentIntegrations.status?.autoResumeEnabled ?? true) ? "入" : "切" }}</span>
+            <span>サーバ再起動時に自動で再開する</span>
+          </button>
+        </li>
+      </ul>
+      <p v-if="agentIntegrationMessage" class="settings-note" role="status" aria-live="polite">{{ agentIntegrationMessage }}</p>
+    </section>
     <KeySettings v-model:capturing="keysCapturing" :kind="kind" />
     <p class="settings-hint">
       この設定はこのブラウザにだけ残ります（テーマは、このブラウザが操作している pane の色の問い合わせの答えにも使います）。Esc か「閉じる」で閉じます。
@@ -957,6 +1037,20 @@ function onNativeCancel(ev: Event): void {
 .settings-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+.agent-integration-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+}
+.agent-integration-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+}
+.agent-integration-status {
+  margin: 0;
 }
 .tabbar-right-fieldset {
   margin: 0;

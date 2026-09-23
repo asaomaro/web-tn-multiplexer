@@ -1,10 +1,11 @@
-import type { NewCwd } from "@wtm/protocol";
+import type { AgentIntegrationInstallResult, AgentIntegrationKind, NewCwd } from "@wtm/protocol";
 import type { Pinia } from "pinia";
 import type { KeyInputController, ActionPort, FocusPort } from "../keys/KeyInputController.js";
 import type { Action, CopyCommand, Dir } from "../keys/actions.js";
 import type { InputHold } from "../net/InputGate.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
+import { useAgentIntegrationsStore } from "../store/agentIntegrations.js";
 import {
   buildNewCwd,
   loadNewCwdPath,
@@ -47,6 +48,7 @@ export interface ActionDispatcherOptions {
 export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   private readonly conn: ConnectionPort;
   private readonly session: ReturnType<typeof useSessionStore>;
+  private readonly agentIntegrations: ReturnType<typeof useAgentIntegrationsStore>;
   private readonly view: ReturnType<typeof useViewStore>;
   private readonly settings: ReturnType<typeof useSettingsStore>;
   private readonly registry: TerminalRegistry;
@@ -59,6 +61,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     this.input = opts.input;
     this.notifications = opts.notifications;
     this.session = useSessionStore(opts.pinia);
+    this.agentIntegrations = useAgentIntegrationsStore(opts.pinia);
     this.view = useViewStore(opts.pinia);
     this.settings = useSettingsStore(opts.pinia);
     this.registry = opts.registry;
@@ -287,6 +290,27 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
         hold?.cancel();
         this.view.toast(worktreeErrorMessage(err));
       });
+  }
+
+  // --- 公式フック連携（20260923-agent-session-resume）-------------------------
+
+  /** 設定画面の「エージェント連携」節を開いたときに呼ぶ（`client.hello` のスナップショットには含まれない）。 */
+  async refreshAgentIntegrationStatus(): Promise<void> {
+    const status = await this.conn.request("agent_integration.status", {});
+    this.agentIntegrations.setStatus(status);
+  }
+
+  /** 導入・解除の結果（`agent_integration.changed` で最新状態が自動的に届く。ここで store は更新しない）。 */
+  installAgentIntegration(kind: AgentIntegrationKind): Promise<AgentIntegrationInstallResult> {
+    return this.conn.request("agent_integration.install", { kind });
+  }
+
+  uninstallAgentIntegration(kind: AgentIntegrationKind): Promise<AgentIntegrationInstallResult> {
+    return this.conn.request("agent_integration.uninstall", { kind });
+  }
+
+  async setAgentIntegrationAutoResume(enabled: boolean): Promise<void> {
+    await this.conn.request("agent_integration.set_auto_resume", { enabled });
   }
 
   /**
