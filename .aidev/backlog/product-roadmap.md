@@ -37,8 +37,12 @@ parent: 20260918-web-terminal-multiplexer
   実測: 単体（全パッケージ）2150 本・E2E 一式 117 本（1 回目は無関係な既存テスト `mobile.spec.ts` D105 が負荷依存で 1 件不安定、単独 3 回・一式 2 回目はいずれも pass）・smoke pass。
   独立点検（doccheck×3・taskcheck T1〜T4+cross）は合計 must 0・should 2・nit 4（いずれも解消）。回帰テストは変異で落ちることを確かめた（`test-result.md`）。
   「節「キー」の操作の絞り込み・衝突時の「こちらへ移す」・macOS の Option 表示・Keyboard Lock API」は別行（31 行目）へ残した（decisions D2）。
-- [ ] navigate モードの移動キーを変えられるようにする: herdr の `navigate_workspace_up/down`・`navigate_pane_left/down/up/right`（prefix なしの素のキーを書ける別の表。`esc`・`enter`・`tab`・左右の矢印・素の `1`〜`9` は予約）。
+- [x] navigate モードの移動キーを変えられるようにする: herdr の `navigate_workspace_up/down`・`navigate_pane_left/down/up/right`（prefix なしの素のキーを書ける別の表。`esc`・`enter`・`tab`・左右の矢印・素の `1`〜`9` は予約）。
   いまの navigate・resize・copy モードの中のキーは固定（`NavigateMode.ts`・`ResizeMode.ts`・`CopyMode.ts`）。herdr でも copy・resize の中は固定なので、対象は navigate の 6 キー（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+  → 着地: 20260923-navigate-mode-keys。navigate 6操作（`navigate_workspace_up/down`・`navigate_pane_left/down/up/right`）を、既存34〜35操作（`bindings.ts`）とは独立した「別の表」（`keys/navigateKeys.ts`・`keys/navigateKeymap.ts`）として実装し、設定画面の節「キー」に新セクションを追加。
+  既定は現行固定値と1:1・予約キー（`esc`/`enter`/`tab`/`shift+tab`/`left`/`right`/`ctrl+shift+v`/修飾無し`1`〜`9`）は割り当て不可・`ArrowLeft`/`ArrowRight`は表の外の固定フォールバックとして pane 左右移動を維持（decisions D3）。
+  実測: 単体（`packages/web`）1734 本・リポジトリ全体 2569 本・smoke pass（2本）。独立点検（doccheck×3・taskcheck 22タスク+cross）は合計 must 1・should 8・nit 9（いずれも解消）。review は3ラウンド（must 2・should 2・nit 1、いずれも解消）。
+  review で見つかった2件の不具合（修飾付き矢印キーの幽霊バインディング・`ctrl+shift+v` の予約漏れ）は回帰テストを追加し、修正前のコードに戻して落ちることを確認してから元に戻した（regression-negative-control。test-result.md 参照）。
 - [ ] herdr にあって本製品に操作自体が無いものを足して割り当てられるようにする: **既定なし**の操作——前後の workspace への移動（`previous_workspace`・`next_workspace`）・直前の pane（`last_pane`）・
   tab の並べ替え（`move_tab_previous/next`）・pane の resize の直接のキー（`resize_pane_*`。`resizeBy` の操作は既にある）・agent への移動（`previous_agent`・`next_agent`・`focus_agent`）。
   **既定を持つ**操作——scrollback を `$EDITOR` で開く（`edit_scrollback`＝herdr の既定 `prefix+e`）・設定の再読み込み（`reload_config`＝`prefix+shift+r`）は、いま「後続」の案内としてそのキーを使っている

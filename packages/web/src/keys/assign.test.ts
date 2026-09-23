@@ -2,14 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { KeyInput } from "./actions.js";
 import {
   applyRecommended,
+  planNavigateReset,
   planReset,
   RECOMMENDED_DIRECT,
   validateAssignment,
+  validateNavigateAssignment,
   type AssignResult,
   type AssignTarget,
+  type NavigateAssignTarget,
 } from "./assign.js";
 import { emptyKeyPrefs, type KeyPrefs } from "./keyPrefs.js";
 import { DEFAULT_KEYMAP, resolveKeymap } from "./keymap.js";
+import { DEFAULT_NAVIGATE_KEYMAP, resolveNavigateKeymap } from "./navigateKeymap.js";
 
 function key(partial: Partial<KeyInput> & { key: string }): KeyInput {
   return {
@@ -477,7 +481,11 @@ describe("validateAssignment — 範囲 1..9（AC7）", () => {
 
 describe("planReset — 既定へ戻す（AC9）", () => {
   it("すべて：keys を消す（AC2 の状態と同じ）", () => {
-    const prefs: KeyPrefs = { prefix: "ctrl+a", bindings: { zoom: ["prefix+y"], help: [] } };
+    const prefs: KeyPrefs = {
+      prefix: "ctrl+a",
+      bindings: { zoom: ["prefix+y"], help: [] },
+      navigateKeys: {},
+    };
     const r = planReset(resolveKeymap(prefs).keymap, prefs, { kind: "all" });
     expect(r).toEqual({ ok: true, prefs: emptyKeyPrefs(), skipped: [] });
     if (!r.ok) return;
@@ -492,6 +500,7 @@ describe("planReset — 既定へ戻す（AC9）", () => {
     const prefs: KeyPrefs = {
       prefix: null,
       bindings: { zoom: ["prefix+y"], help: ["prefix+shift+h"] },
+      navigateKeys: {},
     };
     const r = planReset(resolveKeymap(prefs).keymap, prefs, { kind: "action", id: "zoom" });
     expect(r.ok).toBe(true);
@@ -502,7 +511,11 @@ describe("planReset — 既定へ戻す（AC9）", () => {
   });
 
   it("操作ごと：既定のキーを別の操作が使っていれば、その分は戻さず、持ち主の名前を返す", () => {
-    const prefs: KeyPrefs = { prefix: null, bindings: { zoom: ["prefix+y"], goto: ["prefix+z"] } };
+    const prefs: KeyPrefs = {
+      prefix: null,
+      bindings: { zoom: ["prefix+y"], goto: ["prefix+z"] },
+      navigateKeys: {},
+    };
     const r = planReset(resolveKeymap(prefs).keymap, prefs, { kind: "action", id: "zoom" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -513,7 +526,7 @@ describe("planReset — 既定へ戻す（AC9）", () => {
   });
 
   it("操作ごと：上書きが無い操作は何も変えない", () => {
-    const prefs: KeyPrefs = { prefix: null, bindings: { help: [] } };
+    const prefs: KeyPrefs = { prefix: null, bindings: { help: [] }, navigateKeys: {} };
     const r = planReset(resolveKeymap(prefs).keymap, prefs, { kind: "action", id: "zoom" });
     expect(r).toEqual({ ok: true, prefs, skipped: [] });
   });
@@ -522,6 +535,7 @@ describe("planReset — 既定へ戻す（AC9）", () => {
     const prefs: KeyPrefs = {
       prefix: null,
       bindings: { switch_tab: ["prefix+alt+1..9"], zoom: ["prefix+3"] },
+      navigateKeys: {},
     };
     const r = planReset(resolveKeymap(prefs).keymap, prefs, { kind: "action", id: "switch_tab" });
     expect(r.ok).toBe(true);
@@ -532,19 +546,31 @@ describe("planReset — 既定へ戻す（AC9）", () => {
   });
 
   it("prefix：既定へ戻す。既定の ctrl+b がすでに直接のキー・prefix の後のキーに使われていれば拒否する", () => {
-    const prefs: KeyPrefs = { prefix: "ctrl+a", bindings: {} };
+    const prefs: KeyPrefs = { prefix: "ctrl+a", bindings: {}, navigateKeys: {} };
     const ok = planReset(resolveKeymap(prefs).keymap, prefs, { kind: "prefix" });
-    expect(ok).toEqual({ ok: true, prefs: { prefix: null, bindings: {} }, skipped: [] });
+    expect(ok).toEqual({
+      ok: true,
+      prefs: { prefix: null, bindings: {}, navigateKeys: {} },
+      skipped: [],
+    });
 
     // 直接のキー側
-    const busy: KeyPrefs = { prefix: "ctrl+a", bindings: { goto: ["prefix+g", "ctrl+b"] } };
+    const busy: KeyPrefs = {
+      prefix: "ctrl+a",
+      bindings: { goto: ["prefix+g", "ctrl+b"] },
+      navigateKeys: {},
+    };
     const r = planReset(resolveKeymap(busy).keymap, busy, { kind: "prefix" });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toContain("goto");
     expect(r.reason).toContain("直接のキー");
     // prefix の後のキー側
-    const busy2: KeyPrefs = { prefix: "ctrl+a", bindings: { goto: ["prefix+ctrl+b"] } };
+    const busy2: KeyPrefs = {
+      prefix: "ctrl+a",
+      bindings: { goto: ["prefix+ctrl+b"] },
+      navigateKeys: {},
+    };
     const r2 = planReset(resolveKeymap(busy2).keymap, busy2, { kind: "prefix" });
     expect(r2.ok).toBe(false);
     if (r2.ok) return;
@@ -600,6 +626,7 @@ describe("applyRecommended — herdr のおすすめの直接のキー（AC10）
     const prefs: KeyPrefs = {
       prefix: "ctrl+alt+d",
       bindings: { help: ["prefix+?", "ctrl+alt+z"] },
+      navigateKeys: {},
     };
     const r = applyRecommended(resolveKeymap(prefs).keymap, prefs);
     expect(r.added).toHaveLength(8);
@@ -609,7 +636,11 @@ describe("applyRecommended — herdr のおすすめの直接のキー（AC10）
   });
 
   it("上書き済みの操作には、上書きの後ろに足す", () => {
-    const prefs: KeyPrefs = { prefix: null, bindings: { split_vertical: ["prefix+|"] } };
+    const prefs: KeyPrefs = {
+      prefix: null,
+      bindings: { split_vertical: ["prefix+|"] },
+      navigateKeys: {},
+    };
     const r = applyRecommended(resolveKeymap(prefs).keymap, prefs);
     expect(resolveKeymap(r.prefs).keymap.bindingsOf("split_vertical")).toEqual([
       "prefix+|",
@@ -715,5 +746,184 @@ describe("validateAssignment が通れば、その割り当ては resolveKeymap 
       }
     }
     expect(checked).toBeGreaterThan(20); // 候補が空振りになっていない
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// navigate モードの6操作（20260923-navigate-mode-keys。design「取り込みの検証（keys/assign.ts）」）
+// ---------------------------------------------------------------------------------------------------------------------
+
+const navTarget = (id: NavigateAssignTarget["id"], replacing?: string): NavigateAssignTarget => ({
+  kind: "navigateKey",
+  id,
+  ...(replacing ? { replacing } : {}),
+});
+
+describe("validateNavigateAssignment — 待ち続けるもの（AC-I2）", () => {
+  it("修飾キー単体・IME・繰り返し・keydown 以外は待ち続ける", () => {
+    for (const k of ["Shift", "Control"])
+      expect(
+        validateNavigateAssignment(DEFAULT_NAVIGATE_KEYMAP, navTarget("navigate_pane_left"), key({ key: k })),
+      ).toMatchObject({ ok: false, ignore: true });
+    for (const partial of [{ composing: true }, { repeat: true }, { type: "keyup" as const }])
+      expect(
+        validateNavigateAssignment(
+          DEFAULT_NAVIGATE_KEYMAP,
+          navTarget("navigate_pane_left"),
+          key({ key: "y", ...partial }),
+        ),
+      ).toEqual({ ok: false, ignore: true, reason: "" });
+  });
+});
+
+describe("validateNavigateAssignment — 引けないキー・AltGr", () => {
+  it("Dead は使えない・AltGr で合成された文字は拒否する", () => {
+    expect(
+      reason(
+        validateNavigateAssignment(DEFAULT_NAVIGATE_KEYMAP, navTarget("navigate_pane_left"), key({ key: "Dead" })),
+      ),
+    ).toContain("使えません");
+    expect(
+      reason(
+        validateNavigateAssignment(
+          DEFAULT_NAVIGATE_KEYMAP,
+          navTarget("navigate_pane_left"),
+          key({ key: "@", code: "KeyQ", ctrl: true, alt: true, altGraph: true }),
+        ),
+      ),
+    ).toContain("AltGr");
+  });
+});
+
+describe("validateNavigateAssignment — 予約キー（AC2）", () => {
+  it("esc・enter・tab・shift+tab・left・right・修飾無し1〜9は拒否される", () => {
+    for (const k of [
+      { key: "Escape" },
+      { key: "Enter" },
+      { key: "Tab" },
+      { key: "Tab", shift: true },
+      { key: "ArrowLeft" },
+      { key: "ArrowRight" },
+      { key: "5" },
+    ]) {
+      const r = validateNavigateAssignment(DEFAULT_NAVIGATE_KEYMAP, navTarget("navigate_pane_left"), key(k));
+      expect(reason(r), JSON.stringify(k)).toContain("予約");
+    }
+  });
+
+  it("ctrl+shift+v も予約される（KeyInputController が router.handle より先に貼り付けとして横取りするため、割り当てても発火しない。60 review ラウンド1）", () => {
+    const r = validateNavigateAssignment(
+      DEFAULT_NAVIGATE_KEYMAP,
+      navTarget("navigate_pane_left"),
+      key({ key: "v", ctrl: true, shift: true }),
+    );
+    expect(reason(r)).toContain("予約");
+  });
+
+  it("修飾付きの数字・矢印は予約されていない（予約は修飾無しの chord だけ）", () => {
+    expect(
+      validateNavigateAssignment(
+        DEFAULT_NAVIGATE_KEYMAP,
+        navTarget("navigate_workspace_up"),
+        key({ key: "5", ctrl: true }),
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateNavigateAssignment(
+        DEFAULT_NAVIGATE_KEYMAP,
+        navTarget("navigate_pane_left"),
+        key({ key: "ArrowLeft", ctrl: true }),
+      ),
+    ).toEqual({ ok: true, binding: "ctrl+left" });
+    expect(
+      validateNavigateAssignment(
+        DEFAULT_NAVIGATE_KEYMAP,
+        navTarget("navigate_pane_right"),
+        key({ key: "ArrowRight", alt: true }),
+      ),
+    ).toEqual({ ok: true, binding: "alt+right" });
+  });
+});
+
+describe("validateNavigateAssignment — 衝突・置き換え（AC4）", () => {
+  it("別の操作がすでに使っているキーは拒否され、conflict は付かない", () => {
+    const r = validateNavigateAssignment(DEFAULT_NAVIGATE_KEYMAP, navTarget("navigate_pane_left"), key({ key: "j" }));
+    expect(reason(r)).toContain("下へ選ぶ");
+    expect((r as { conflict?: unknown }).conflict).toBeUndefined();
+  });
+
+  it("自分自身がすでに持っているキーは（置き換え対象でなければ）拒否される", () => {
+    const r = validateNavigateAssignment(DEFAULT_NAVIGATE_KEYMAP, navTarget("navigate_pane_left"), key({ key: "h" }));
+    expect(reason(r)).toContain("すでに割り当てられています");
+  });
+
+  it("置き換え対象と同じキーは通る（変更なしの確定）", () => {
+    const r = validateNavigateAssignment(
+      DEFAULT_NAVIGATE_KEYMAP,
+      navTarget("navigate_pane_left", "h"),
+      key({ key: "h" }),
+    );
+    expect(r).toEqual({ ok: true, binding: "h" });
+  });
+
+  it("空いているキーは通る（追加・変更どちらも）", () => {
+    expect(
+      validateNavigateAssignment(DEFAULT_NAVIGATE_KEYMAP, navTarget("navigate_pane_left"), key({ key: "x" })),
+    ).toEqual({ ok: true, binding: "x" });
+    expect(
+      validateNavigateAssignment(
+        DEFAULT_NAVIGATE_KEYMAP,
+        navTarget("navigate_pane_left", "h"),
+        key({ key: "x" }),
+      ),
+    ).toEqual({ ok: true, binding: "x" });
+  });
+
+  it("修飾付きのキーも通る（bare な単一文字に限らない）", () => {
+    expect(
+      validateNavigateAssignment(
+        DEFAULT_NAVIGATE_KEYMAP,
+        navTarget("navigate_pane_left"),
+        key({ key: "h", ctrl: true }),
+      ),
+    ).toEqual({ ok: true, binding: "ctrl+h" });
+  });
+});
+
+describe("planNavigateReset — 既定へ戻す（AC5）", () => {
+  it("上書きを外し、既定のキーが戻る", () => {
+    const { keymap } = resolveNavigateKeymap({ navigate_pane_left: ["ctrl+h"] });
+    const prefs: KeyPrefs = { prefix: null, bindings: {}, navigateKeys: { navigate_pane_left: ["ctrl+h"] } };
+    const r = planNavigateReset(keymap, prefs, { kind: "navigateKey", id: "navigate_pane_left" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.prefs.navigateKeys).toEqual({});
+    expect(r.skipped).toEqual([]);
+    expect(resolveNavigateKeymap(r.prefs.navigateKeys).keymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+  });
+
+  it("既定のキーを別の navigate 操作が使っていれば、その分は戻さず持ち主の名前を返す", () => {
+    const { keymap } = resolveNavigateKeymap({
+      navigate_pane_left: ["ctrl+h"],
+      navigate_pane_down: ["h"], // navigate_pane_left の既定 h を奪う
+    });
+    const prefs: KeyPrefs = {
+      prefix: null,
+      bindings: {},
+      navigateKeys: { navigate_pane_left: ["ctrl+h"], navigate_pane_down: ["h"] },
+    };
+    const r = planNavigateReset(keymap, prefs, { kind: "navigateKey", id: "navigate_pane_left" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.skipped).toHaveLength(1);
+    expect(r.skipped[0]!.binding).toBe("h");
+    expect(r.skipped[0]!.reason).toContain("下へ選ぶ");
+    expect(resolveNavigateKeymap(r.prefs.navigateKeys).keymap.bindingsOf("navigate_pane_left")).toEqual([]);
+  });
+
+  it("上書きが無い操作は何も変えない", () => {
+    const prefs: KeyPrefs = { prefix: null, bindings: {}, navigateKeys: {} };
+    const r = planNavigateReset(DEFAULT_NAVIGATE_KEYMAP, prefs, { kind: "navigateKey", id: "navigate_pane_left" });
+    expect(r).toEqual({ ok: true, prefs, skipped: [] });
   });
 });

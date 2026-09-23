@@ -7,11 +7,15 @@ import {
   loadKeyPrefs,
   serializeKeyPrefs,
   withBindings,
+  withNavigateBinding,
   withoutBindings,
+  withoutNavigateBinding,
   withPrefix,
   type KeyPrefs,
 } from "../keys/keyPrefs.js";
 import { resolveKeymap, type ResolvedKeymap } from "../keys/keymap.js";
+import type { NavigateKeyId } from "../keys/navigateKeys.js";
+import { resolveNavigateKeymap, type ResolvedNavigateKeymap } from "../keys/navigateKeymap.js";
 import { loadThemePrefs, resolveTheme } from "../theme/themes.js";
 import {
   emptyThemeOverrides,
@@ -321,6 +325,19 @@ export const useSettingsStore = defineStore("settings", () => {
    * 割り当てが変わったときだけ作り直す（押すたびには作らない）。
    */
   const keymap = computed<ResolvedKeymap>(() => resolveKeymap(keyPrefs.value).keymap);
+  /**
+   * navigate モードの6操作（20260923-navigate-mode-keys。design「store」）の解決した表。
+   * `keyPrefs.navigateKeys` は `bindings`/`prefix` とは別の**内容**の表なので、専用の computed で分ける
+   * （`resolveNavigateKeymap` は `navigateKeys` だけを読み、`bindings`/`prefix` の影響を受けない）。
+   * ただし `keyPrefs` は1つの `ref` なので、`replaceKeyPrefs` が差し替えるたびに（`bindings`・`prefix`・
+   * `navigateKeys` のどれを変えたときでも）`keymap`/`navigateKeymap` は両方とも作り直される——
+   * これは既存の `keymap`（prefix と bindings をまとめて1つの ref で持つ）と同じトレードオフで、
+   * **中身**（実際に変えていない側の割り当て）は変わらない。`NavigateMode`（`main.ts` が変わるたびに
+   * 差し替える）・`HelpDialog`（「移動」群）が同じ表を見る。
+   */
+  const navigateKeymap = computed<ResolvedNavigateKeymap>(
+    () => resolveNavigateKeymap(keyPrefs.value.navigateKeys).keymap,
+  );
 
   /**
    * 差し替えて保存する。**保存する形（`serializeKeyPrefs`）を読み直した結果を採る**——呼び出し側が検証（`validateAssignment`）を済ませているが、**読めない値**（構文が通らない文字列・
@@ -431,6 +448,19 @@ export const useSettingsStore = defineStore("settings", () => {
     replaceKeyPrefs(withoutBindings(keyPrefs.value, id));
   }
 
+  /**
+   * navigate モードの1操作（`navigate_pane_left` 等）の割り当てを差し替える（20260923-navigate-mode-keys。
+   * AC1・AC6）。`setKeyBindings` と同じ流儀——空配列は「割り当てなし」、既定と同じ内容になれば上書きを消す。
+   */
+  function setNavigateKeyBindings(id: NavigateKeyId, bindings: readonly string[]): void {
+    replaceKeyPrefs(withNavigateBinding(keyPrefs.value, id, bindings));
+  }
+
+  /** navigate モードの1操作の上書きを消す（既定へ戻す。AC5）。 */
+  function resetNavigateKey(id: NavigateKeyId): void {
+    replaceKeyPrefs(withoutNavigateBinding(keyPrefs.value, id));
+  }
+
   /** prefix を既定へ戻す（AC9）。 */
   function resetKeyPrefix(): void {
     replaceKeyPrefs(withPrefix(keyPrefs.value, null));
@@ -461,6 +491,7 @@ export const useSettingsStore = defineStore("settings", () => {
     effectiveTheme,
     keyPrefs,
     keymap,
+    navigateKeymap,
     themeOverrides,
     setStatusSymbols,
     setKeyboardLockInFullscreen,
@@ -487,6 +518,8 @@ export const useSettingsStore = defineStore("settings", () => {
     resetKeyAction,
     resetKeyPrefix,
     resetAllKeys,
+    setNavigateKeyBindings,
+    resetNavigateKey,
     replaceThemeOverrides,
     setThemeOverride,
     resetThemeOverride,

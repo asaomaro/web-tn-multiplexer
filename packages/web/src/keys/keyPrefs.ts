@@ -7,23 +7,29 @@ import {
   parseChord,
   prefixBytes,
 } from "./chord.js";
+import { NAVIGATE_KEYS, NAVIGATE_RESERVED_CHORDS, navigateKeyDef, type NavigateKeyId } from "./navigateKeys.js";
 
 /**
- * このブラウザに保存する割り当て（20260921-keybinding-customization。design「保存」・D2）。**既定との差だけ**を持つ——既定を保存しないので、
- * 更新で既定が変わっても差の無い操作には届く。`wtm.prefs.v1` の `keys` に `{ prefix?, bindings? }`（差が無ければ `keys` ごと消す）。
+ * このブラウザに保存する割り当て（20260921-keybinding-customization。design「保存」・D2。navigate の
+ * 6操作は 20260923-navigate-mode-keys で追加）。**既定との差だけ**を持つ——既定を保存しないので、
+ * 更新で既定が変わっても差の無い操作には届く。`wtm.prefs.v1` の `keys` に `{ prefix?, bindings?, navigate? }`
+ * （差が無ければ `keys` ごと消す）。
  *
- * 読み込みは**値ごとに落とす**（残りは生かす。`store/settings.ts` の他の設定と同じ流儀）。**衝突・予約の判定はここではしない**——`keymap.ts` の `resolveKeymap` が
- * 読み込みも編集も同じ規則で行う（D7）。
+ * 読み込みは**値ごとに落とす**（残りは生かす。`store/settings.ts` の他の設定と同じ流儀）。**衝突・予約の判定はここではしない**——`keymap.ts` の `resolveKeymap`／
+ * `navigateKeymap.ts` の `resolveNavigateKeymap` が読み込みも編集も同じ規則で行う（D7）。
  */
 export interface KeyPrefs {
   /** 上書きした prefix の chord。null は既定（`ctrl+b`）。 */
   prefix: string | null;
   /** 上書きした操作の割り当て（`prefix+v`・`ctrl+alt+d` の正規形の文字列）。`[]` は「割り当てなし」（既定へ戻すのではない）。 */
   bindings: Partial<Record<ActionId, string[]>>;
+  /** 上書きした navigate モードの移動操作の割り当て（prefix なしの正規形の chord文字列。`[]` は「割り当てなし」）。
+   *  `bindings` とは別の表（design D2）。20260923-navigate-mode-keys。 */
+  navigateKeys: Partial<Record<NavigateKeyId, string[]>>;
 }
 
 export function emptyKeyPrefs(): KeyPrefs {
-  return { prefix: null, bindings: {} };
+  return { prefix: null, bindings: {}, navigateKeys: {} };
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -76,21 +82,56 @@ function normalizeList(id: ActionId, raw: readonly unknown[]): string[] {
   return list;
 }
 
+/**
+ * navigate 6操作の1つの割り当て文字列を正規形にする。無効は null。`prefix+`/範囲の概念が無いので
+ * `parseBinding`/`formatBinding` ではなく `parseChord`/`formatChord` を直接使う（design「KeyPrefs の拡張」）。
+ * 予約キー（`NAVIGATE_RESERVED_CHORDS`）は既定・上書きのどちらでも無効（AC2）。
+ */
+export function normalizeNavigateBinding(_id: NavigateKeyId, raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const parts = parseChord(raw);
+  if (parts === null) return null;
+  const chord = formatChord(parts);
+  return NAVIGATE_RESERVED_CHORDS.has(chord) ? null : chord;
+}
+
+/** navigate 用の割り当ての一覧を正規の文字列にし、無効・重複を落とす（順序は保つ）。 */
+function normalizeNavigateList(id: NavigateKeyId, raw: readonly unknown[]): string[] {
+  const list: string[] = [];
+  for (const s of raw) {
+    const n = normalizeNavigateBinding(id, s);
+    if (n !== null && !list.includes(n)) list.push(n);
+  }
+  return list;
+}
+
 /** `wtm.prefs.v1` の `keys` を読む。形が違えば空（既定）。 */
 export function loadKeyPrefs(raw: unknown): KeyPrefs {
   const prefs = emptyKeyPrefs();
   if (!isRecord(raw)) return prefs;
   prefs.prefix = loadPrefix(raw["prefix"]);
   const stored = raw["bindings"];
-  if (!isRecord(stored)) return prefs;
-  for (const def of ACTIONS) {
-    // カタログの順に読む（結果が決定的になる）。未知の操作の項目は読まれない。
-    const value = stored[def.id];
-    if (!Array.isArray(value)) continue;
-    const list = normalizeList(def.id, value);
-    if (list.length === 0 && value.length > 0) continue; // 全部落ちたら、上書きを消して既定へ戻す（元から `[]` のときだけ「割り当てなし」）
-    if (sameList(list, def.defaults)) continue; // 既定と同じ内容は「差」ではない
-    prefs.bindings[def.id] = list;
+  if (isRecord(stored)) {
+    for (const def of ACTIONS) {
+      // カタログの順に読む（結果が決定的になる）。未知の操作の項目は読まれない。
+      const value = stored[def.id];
+      if (!Array.isArray(value)) continue;
+      const list = normalizeList(def.id, value);
+      if (list.length === 0 && value.length > 0) continue; // 全部落ちたら、上書きを消して既定へ戻す（元から `[]` のときだけ「割り当てなし」）
+      if (sameList(list, def.defaults)) continue; // 既定と同じ内容は「差」ではない
+      prefs.bindings[def.id] = list;
+    }
+  }
+  const storedNavigate = raw["navigate"];
+  if (isRecord(storedNavigate)) {
+    for (const def of NAVIGATE_KEYS) {
+      const value = storedNavigate[def.id];
+      if (!Array.isArray(value)) continue;
+      const list = normalizeNavigateList(def.id, value);
+      if (list.length === 0 && value.length > 0) continue;
+      if (sameList(list, def.defaults)) continue;
+      prefs.navigateKeys[def.id] = list;
+    }
   }
   return prefs;
 }
@@ -98,8 +139,12 @@ export function loadKeyPrefs(raw: unknown): KeyPrefs {
 /** 保存する形。差が無ければ undefined（`keys` ごと消す）。カタログの順に並べる。 */
 export function serializeKeyPrefs(
   p: KeyPrefs,
-): { prefix?: string; bindings?: Record<string, string[]> } | undefined {
-  const out: { prefix?: string; bindings?: Record<string, string[]> } = {};
+): { prefix?: string; bindings?: Record<string, string[]>; navigate?: Record<string, string[]> } | undefined {
+  const out: {
+    prefix?: string;
+    bindings?: Record<string, string[]>;
+    navigate?: Record<string, string[]>;
+  } = {};
   if (p.prefix !== null) out.prefix = p.prefix;
   const bindings: Record<string, string[]> = {};
   for (const def of ACTIONS) {
@@ -107,7 +152,15 @@ export function serializeKeyPrefs(
     if (list !== undefined) bindings[def.id] = [...list];
   }
   if (Object.keys(bindings).length > 0) out.bindings = bindings;
-  return out.prefix === undefined && out.bindings === undefined ? undefined : out;
+  const navigate: Record<string, string[]> = {};
+  for (const def of NAVIGATE_KEYS) {
+    const list = p.navigateKeys[def.id];
+    if (list !== undefined) navigate[def.id] = [...list];
+  }
+  if (Object.keys(navigate).length > 0) out.navigate = navigate;
+  return out.prefix === undefined && out.bindings === undefined && out.navigate === undefined
+    ? undefined
+    : out;
 }
 
 /**
@@ -137,4 +190,29 @@ export function withoutBindings(prefs: KeyPrefs, id: ActionId): KeyPrefs {
   const bindings = { ...prefs.bindings };
   delete bindings[id];
   return { ...prefs, bindings };
+}
+
+/**
+ * navigate の1操作の割り当てを差し替えた新しい `KeyPrefs`（`withBindings` と同型。20260923-navigate-mode-keys）。
+ * 無効な文字列は落とし、既定と同じ内容になったら上書きを消す。全部無効で空でない入力は何も変えない。
+ */
+export function withNavigateBinding(
+  prefs: KeyPrefs,
+  id: NavigateKeyId,
+  list: readonly string[],
+): KeyPrefs {
+  const norm = normalizeNavigateList(id, list);
+  if (norm.length === 0 && list.length > 0) return prefs;
+  const navigateKeys = { ...prefs.navigateKeys };
+  if (sameList(norm, navigateKeyDef(id)?.defaults ?? [])) delete navigateKeys[id];
+  else navigateKeys[id] = norm;
+  return { ...prefs, navigateKeys };
+}
+
+/** navigate の1操作の上書きを消す（既定へ戻す）。 */
+export function withoutNavigateBinding(prefs: KeyPrefs, id: NavigateKeyId): KeyPrefs {
+  if (prefs.navigateKeys[id] === undefined) return prefs;
+  const navigateKeys = { ...prefs.navigateKeys };
+  delete navigateKeys[id];
+  return { ...prefs, navigateKeys };
 }

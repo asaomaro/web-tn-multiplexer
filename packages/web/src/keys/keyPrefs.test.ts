@@ -4,10 +4,13 @@ import {
   loadKeyPrefs,
   loadPrefix,
   normalizeBinding,
+  normalizeNavigateBinding,
   parsePrefix,
   serializeKeyPrefs,
   withBindings,
+  withNavigateBinding,
   withoutBindings,
+  withoutNavigateBinding,
   withPrefix,
 } from "./keyPrefs.js";
 
@@ -141,7 +144,11 @@ describe("loadKeyPrefs — 壊れた保存値は値ごとに落とす（AC8）",
   it("bindings の形が違っても、prefix は生かす（bindings は空）", () => {
     for (const bindings of [[], "x", 42, null, true]) {
       const p = loadKeyPrefs({ prefix: "ctrl+a", bindings });
-      expect(p, JSON.stringify(bindings)).toEqual({ prefix: "ctrl+a", bindings: {} });
+      expect(p, JSON.stringify(bindings)).toEqual({
+        prefix: "ctrl+a",
+        bindings: {},
+        navigateKeys: {},
+      });
     }
   });
 
@@ -161,6 +168,7 @@ describe("serializeKeyPrefs", () => {
     const p = {
       prefix: "ctrl+a",
       bindings: { zoom: ["prefix+z", "ctrl+alt+z"], help: [], detach: ["prefix+d"] },
+      navigateKeys: {},
     };
     const s = serializeKeyPrefs(p);
     expect(s).toEqual({
@@ -225,5 +233,151 @@ describe("withBindings / withPrefix / withoutBindings は渡した KeyPrefs を�
     const b = withoutBindings(a, "goto");
     expect(b).not.toBe(a);
     expect(a.bindings.goto).toEqual(["prefix+shift+g"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260923-navigate-mode-keys：navigate 6操作の割り当て（bindings とは別の表。design「KeyPrefs の拡張」）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("normalizeNavigateBinding — navigate 用の1件の正規化（AC2）", () => {
+  it("読める chord は正規形にする", () => {
+    expect(normalizeNavigateBinding("navigate_pane_left", "H")).toBe("shift+h");
+    expect(normalizeNavigateBinding("navigate_pane_left", "Ctrl+H")).toBe("ctrl+shift+h");
+    expect(normalizeNavigateBinding("navigate_pane_left", "ctrl+h")).toBe("ctrl+h");
+  });
+
+  it("予約キーは無効（AC2。research F7）", () => {
+    for (const bad of ["esc", "enter", "tab", "shift+tab", "left", "right", "5"])
+      expect(normalizeNavigateBinding("navigate_pane_left", bad), bad).toBeNull();
+  });
+
+  it("読めない・文字列でない値は null（prefix+ の概念は無いので prefix+v 等は素直に読めない chord として扱う）", () => {
+    for (const bad of ["", "prefix+v", "prefix+", 42, null, undefined, true])
+      expect(normalizeNavigateBinding("navigate_pane_left", bad), String(bad)).toBeNull();
+  });
+});
+
+describe("loadKeyPrefs — navigate（AC1・AC2・AC6）", () => {
+  it("正しい上書きを読む（正規形になる）", () => {
+    const p = loadKeyPrefs({ navigate: { navigate_pane_left: ["Ctrl+H"], navigate_workspace_up: [] } });
+    expect(p.navigateKeys).toEqual({
+      navigate_pane_left: ["ctrl+shift+h"],
+      navigate_workspace_up: [],
+    });
+  });
+
+  it("未知の id・配列でない値・型違反の要素・予約キー・重複を落とし、残りを生かす", () => {
+    const p = loadKeyPrefs({
+      navigate: {
+        bogus_navigate_key: ["ctrl+x"], // 未知の id
+        navigate_pane_down: "j", // 配列でない
+        navigate_pane_up: ["ctrl+k", 42, null, "esc", "ctrl+k"], // 一部だけ有効・予約・重複
+      },
+    });
+    expect(p.navigateKeys.navigate_pane_up).toEqual(["ctrl+k"]);
+    expect(p.navigateKeys).not.toHaveProperty("bogus_navigate_key");
+    expect(p.navigateKeys).not.toHaveProperty("navigate_pane_down");
+  });
+
+  it("上書きの文字列が全部無効なら、上書きを消して既定へ戻す（元から [] のときだけ「割り当てなし」）", () => {
+    const p = loadKeyPrefs({ navigate: { navigate_pane_left: ["esc", "left"], navigate_pane_right: [] } });
+    expect(p.navigateKeys.navigate_pane_left).toBeUndefined();
+    expect(p.navigateKeys.navigate_pane_right).toEqual([]);
+  });
+
+  it("既定と同じ内容は「差」ではないので読まない", () => {
+    expect(loadKeyPrefs({ navigate: { navigate_pane_left: ["h"] } }).navigateKeys).toEqual({});
+  });
+
+  it("navigate の形が違っても bindings/prefix は生かす", () => {
+    for (const navigate of [[], "x", 42, null, true]) {
+      const p = loadKeyPrefs({ prefix: "ctrl+a", navigate });
+      expect(p, JSON.stringify(navigate)).toEqual({ prefix: "ctrl+a", bindings: {}, navigateKeys: {} });
+    }
+  });
+
+  it("逆方向：prefix が送れない形・bindings が壊れていても、navigate は生かす（各節は独立した分岐）", () => {
+    const p = loadKeyPrefs({
+      prefix: "cmd+b", // 送れない形
+      bindings: "x", // 形が違う
+      navigate: { navigate_pane_left: ["ctrl+h"] },
+    });
+    expect(p.prefix).toBeNull();
+    expect(p.bindings).toEqual({});
+    expect(p.navigateKeys).toEqual({ navigate_pane_left: ["ctrl+h"] });
+  });
+});
+
+describe("serializeKeyPrefs — navigate", () => {
+  it("差が無ければ navigate キーごと消える", () => {
+    expect(serializeKeyPrefs({ prefix: null, bindings: {}, navigateKeys: {} })).toBeUndefined();
+    expect(serializeKeyPrefs({ prefix: "ctrl+a", bindings: {}, navigateKeys: {} })).toEqual({
+      prefix: "ctrl+a",
+    });
+  });
+
+  it("差だけを、カタログの順で持つ。読み直すと同じ", () => {
+    const p = {
+      prefix: null,
+      bindings: {},
+      navigateKeys: { navigate_pane_right: ["ctrl+l"], navigate_workspace_up: [] },
+    };
+    const s = serializeKeyPrefs(p);
+    expect(s).toEqual({
+      navigate: { navigate_workspace_up: [], navigate_pane_right: ["ctrl+l"] },
+    });
+    // カタログ順（navigate_workspace_up は navigate_pane_right より前）。
+    expect(Object.keys(s!.navigate!)).toEqual(["navigate_workspace_up", "navigate_pane_right"]);
+    expect(loadKeyPrefs(JSON.parse(JSON.stringify(s)))).toEqual(p);
+  });
+});
+
+describe("withNavigateBinding / withoutNavigateBinding（store の下請け）", () => {
+  it("割り当てを差し替える。既定と同じ内容になったら上書きを消す", () => {
+    const a = withNavigateBinding(emptyKeyPrefs(), "navigate_pane_left", ["ctrl+h"]);
+    expect(a.navigateKeys.navigate_pane_left).toEqual(["ctrl+h"]);
+    const b = withNavigateBinding(a, "navigate_pane_left", ["h"]);
+    expect(b.navigateKeys).not.toHaveProperty("navigate_pane_left");
+  });
+
+  it("空配列は「割り当てなし」。無効な文字列は落として有効な分は反映し、全部無効なら何も変えない", () => {
+    expect(withNavigateBinding(emptyKeyPrefs(), "navigate_pane_left", []).navigateKeys.navigate_pane_left).toEqual(
+      [],
+    );
+    expect(
+      withNavigateBinding(emptyKeyPrefs(), "navigate_pane_left", ["ctrl+h", "esc"]).navigateKeys
+        .navigate_pane_left,
+    ).toEqual(["ctrl+h"]);
+    const base = withNavigateBinding(emptyKeyPrefs(), "navigate_pane_left", ["ctrl+h"]);
+    expect(withNavigateBinding(base, "navigate_pane_left", ["esc"])).toBe(base); // 全部無効なので何も変えない
+  });
+
+  it("上書きを消す（既定へ戻す）。無ければ何も変えない", () => {
+    const a = withNavigateBinding(emptyKeyPrefs(), "navigate_pane_left", ["ctrl+h"]);
+    expect(withoutNavigateBinding(a, "navigate_pane_left").navigateKeys).toEqual({});
+    const empty = emptyKeyPrefs();
+    expect(withoutNavigateBinding(empty, "navigate_pane_left")).toBe(empty);
+  });
+
+  it("bindings とは独立している（片方を変えても他方は変わらない）", () => {
+    const a = withBindings(emptyKeyPrefs(), "zoom", ["prefix+y"]);
+    const b = withNavigateBinding(a, "navigate_pane_left", ["ctrl+h"]);
+    expect(b.bindings).toEqual({ zoom: ["prefix+y"] });
+    expect(b.navigateKeys).toEqual({ navigate_pane_left: ["ctrl+h"] });
+  });
+});
+
+describe("withNavigateBinding / withoutNavigateBinding は渡した KeyPrefs を書き換えない（store は新しい値へ差し替える。withBindings 等の同型の回帰テストと対称）", () => {
+  it("入力の prefs・navigateKeys は変わらない", () => {
+    const a = withNavigateBinding(emptyKeyPrefs(), "navigate_pane_left", ["ctrl+h"]);
+    const snapshot = JSON.stringify(a);
+    withNavigateBinding(a, "navigate_pane_left", ["ctrl+alt+h"]);
+    withNavigateBinding(a, "navigate_pane_down", []);
+    withoutNavigateBinding(a, "navigate_pane_left");
+    expect(JSON.stringify(a)).toBe(snapshot);
+    const b = withoutNavigateBinding(a, "navigate_pane_left");
+    expect(b).not.toBe(a);
+    expect(a.navigateKeys.navigate_pane_left).toEqual(["ctrl+h"]);
   });
 });
