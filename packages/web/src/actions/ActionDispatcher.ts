@@ -409,6 +409,15 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     void this.conn.request("pane.swap", { paneId, direction: dir }).catch(() => undefined);
   }
 
+  /**
+   * 名前ラベルのドラッグでの入れ替え（20260923-pane-name-dnd-swap。`PaneFrame.vue` から直接呼ぶ）。
+   * 既存の方向ベースの `swap`/`pane.swap` とは別の RPC（`pane.swap_with`）を使う（decisions.md D4）。
+   * サーバの `layout.updated` で各クライアントの表示が揃うので、応答は待たない（`pane.swap` と同じ形）。
+   */
+  swapPanesByDrag(paneId: string, otherPaneId: string): void {
+    void this.conn.request("pane.swap_with", { paneId, otherPaneId }).catch(() => undefined);
+  }
+
   private cyclePane(delta: 1 | -1): void {
     const tab = this.view.tabId ? this.session.tabs.get(this.view.tabId) : undefined;
     if (!tab) return;

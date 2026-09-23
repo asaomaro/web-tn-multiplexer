@@ -68,7 +68,7 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 | H38 | CLI / socket API（workspace・tab・pane・agent の操作） | 後続:外部操作 API / CLI | — |
 | H39 | エージェント自動化（`agent start`／`prompt --wait` 等） | 後続:外部操作 API / CLI | — |
 | H40 | pane 単体接続・閲覧専用購読・制御ストリーム | 後続:外部操作 API / CLI | — |
-| H41 | pane の移動（別 tab・新規 tab・新規 workspace） | 後続:D&D による pane の分割/分割解除/移動 | — |
+| H41 | pane の移動（別 tab・新規 tab・新規 workspace） | 同一 tab 内の入れ替えは 20260923-pane-name-dnd-swap（`PaneFrame.vue` の名前ラベルをポインタでドラッグし、別の pane の上へドロップして 2 つの pane を入れ替える。**herdr との違い**：herdr は TUI のためドラッグ操作自体が無く、本機能は Web 画面であることを活かした独自機能）。**pane の分割・分割解除・別 tab・新規 tab・新規 workspace への移動は対象外のまま**（`.aidev/backlog/product-roadmap.md` へ後続として残す） | AC4, AC6, AC7（同 work） |
 | H42 | プラグイン（manifest・アクション・イベントフック等） | 後続:エージェント対応の拡充 | — |
 | H43 | 保存済みマシン（複数 SSH 先の集約）・`--remote`・`--machine` | 後続:複数ホストの集約 | — |
 | H44 | リモートへのクリップボード画像の転送 | 後続:複数ホストの集約 | — |

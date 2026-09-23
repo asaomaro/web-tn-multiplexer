@@ -279,6 +279,18 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
         こと（design D9）。
       - 設定の「エージェント連携」で解除すると、書き込んだフックのエントリだけが消え、
         手動で足した他の hook（あれば）が残ること。
+- [ ] pane 名の legend 表示とドラッグでの入れ替え（20260923-pane-name-dnd-swap。AC1〜AC7・
+      AC-I1〜AC-I5）：設定の「表示」で「エージェント名」を有効にし、pane を2つ以上に分割する。
+      期待：各 pane の枠に沿って名前が埋め込まれた見た目（legend 風）になり、フォーカス中の
+      pane だけ強調色になる（AC1〜AC3。名前の無い pane には枠自体が出ない——decisions.md D9）。
+      名前ラベルをポインタで掴んで別の pane の上へドラッグ＆ドロップすると、2つの pane の内容
+      （端末）が入れ替わり、分割の比率は変わらないこと（AC4・AC5）。範囲外・自分自身へドロップ、
+      または Esc で取り消すと何も起きないこと（AC6）。複数のブラウザ（別タブ）で同じ tab を
+      開いておくと、一方の入れ替えがもう一方にも反映されること（AC7）。名前ラベルの上での
+      **右クリックでも従来どおり pane のメニューが開く**こと（review 指摘で見つかった回帰の確認。
+      枠のクリック・端末そのものへの操作には影響しないこと（AC-I5）も併せて確認する。
+      `tput cols`/`tput lines` を有効化前後で打ち比べると、legend の余白ぶん行数が1行減ること
+      （PTY のリサイズが実際に飛んだ証拠。decisions.md D7）。
 - [ ] Windows の named pipe の権限限定（`AgentReportSocket`。design D5）：Unix の `chmod 0600` に
       相当する対策が Windows では未実装（既知の制約。同 work の decisions.md 参照）。Windows
       ネイティブで確認する場合、同じホストの別ユーザーから report socket へ接続できないことを
