@@ -52,6 +52,14 @@ export function loadStatusSymbols(raw: unknown): boolean {
 }
 
 /**
+ * 全画面のときブラウザ予約キーも Keyboard Lock で受け取るか（20260922-keybinding-usability。
+ * design「US4」）。**既定は無効**——実験的 API・Chromium 系限定のため（AC11）。
+ */
+export function loadKeyboardLockInFullscreen(raw: unknown): boolean {
+  return typeof raw === "boolean" ? raw : false;
+}
+
+/**
  * pane の枠・隙間の太さ（20260922-appearance-settings-rest）。既定は今までと同じ見た目
  * （`"default"`＝4px 相当）。値そのもの（px 数）は `PaneFrame.vue`/`Splitter.vue` が読む
  * CSS 変数 `--wtm-pane-gap` へ配る側（`App.vue`）が持つ。
@@ -128,6 +136,8 @@ export const useSettingsStore = defineStore("settings", () => {
   const initial = readPrefs();
   /** 状態を色に加えて記号でも示すか（`StateIcon.vue` が読む）。 */
   const statusSymbols = ref(loadStatusSymbols(initial["statusSymbols"]));
+  /** 全画面のときブラウザ予約キーも Keyboard Lock で受け取るか（`KeyboardLockController` が読む）。 */
+  const keyboardLockInFullscreen = ref(loadKeyboardLockInFullscreen(initial["keyboardLockInFullscreen"]));
   /** pane の枠・隙間の太さ（`App.vue` が CSS 変数へ配る）。 */
   const paneFrameThickness = ref(loadPaneFrameThickness(initial["paneFrameThickness"]));
   /** pane にエージェント名を可視で出すか（`PaneFrame.vue` が読む）。 */
@@ -170,6 +180,12 @@ export const useSettingsStore = defineStore("settings", () => {
   function setStatusSymbols(v: boolean): void {
     statusSymbols.value = v;
     writePrefs({ statusSymbols: v });
+  }
+
+  /** 反映と保存を同時に行う（20260922-keybinding-usability。AC11）。 */
+  function setKeyboardLockInFullscreen(v: boolean): void {
+    keyboardLockInFullscreen.value = v;
+    writePrefs({ keyboardLockInFullscreen: v });
   }
 
   /** 反映と保存を同時に行う（確定ダイアログを挟まない。AC-I2）。 */
@@ -427,6 +443,7 @@ export const useSettingsStore = defineStore("settings", () => {
 
   return {
     statusSymbols,
+    keyboardLockInFullscreen,
     paneFrameThickness,
     paneAgentNameVisible,
     tabBarPosition,
@@ -446,6 +463,7 @@ export const useSettingsStore = defineStore("settings", () => {
     keymap,
     themeOverrides,
     setStatusSymbols,
+    setKeyboardLockInFullscreen,
     setPaneFrameThickness,
     setPaneAgentNameVisible,
     setTabBarPosition,

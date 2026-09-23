@@ -196,6 +196,20 @@ describe("validateAssignment — prefix の後のキー（AC4・AC6 (a)(b)(c)）
     ).toContain("前の pane へ巡回");
   });
 
+  it("(a) の衝突は conflict を持つ（20260922-keybinding-usability。design「US2」）", () => {
+    const r = validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "v" }));
+    expect(r).toMatchObject({
+      ok: false,
+      conflict: { ownerId: "split_vertical", via: "prefix", chord: "v" },
+    });
+  });
+
+  it("範囲の操作（switch_tab）の一部と衝突したときは conflict を付けない（単一の chord として特定できない。AC7）", () => {
+    const r = validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "5" }));
+    expect(reason(r)).toContain("tab を切り替え");
+    expect((r as { conflict?: unknown }).conflict).toBeUndefined();
+  });
+
   it("(b) prefix と同じキー・(c) Esc は拒否する", () => {
     expect(
       reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "b", ctrl: true }))),
