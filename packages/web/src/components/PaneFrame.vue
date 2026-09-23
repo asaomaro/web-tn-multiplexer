@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { ActionDispatcherKey, TerminalRegistryKey } from "../injection.js";
 import { paneNameOf } from "../store/paneName.js";
 import { useSessionStore } from "../store/session.js";
@@ -56,7 +56,108 @@ const label = computed(() => (paneName.value ? `pane「${paneName.value}」の�
 const selected = computed(() => view?.focusedPaneId === props.paneId);
 const root = ref<HTMLElement | null>(null);
 
+/**
+ * legend の分の余白を確保するか（20260923-pane-name-dnd-swap）。**名前が無い pane も含め、設定が
+ * 有効な間はすべての pane に同じ余白を入れる**——pane ごとに有無が割れると、隣り合う pane の上端が
+ * そろわなくなる（同じ tab 内の分割は上端をそろえる前提のレイアウトのため）。
+ */
+const reserveNameSpace = computed(() => !!(props.enabled && settings?.paneAgentNameVisible));
+/**
+ * 枠線に埋め込む名前表示を出すか（20260923-pane-name-dnd-swap。herdr の見た目に寄せた。design「4.」）。
+ * 名前が無ければ枠も出さない——空の legend は意味が無い（decisions.md D9）。
+ */
+const showBorder = computed(() => !!(props.enabled && settings?.paneAgentNameVisible && paneName.value));
+/** 今このpaneがドラッグのドロップ候補になっているか（別の PaneFrame インスタンスがドラッグ元）。 */
+const isDropTarget = computed(() => {
+  const drag = view?.paneDrag;
+  return !!drag && drag.overPaneId === props.paneId && drag.sourcePaneId !== props.paneId;
+});
+/** 自分がドラッグ元か（ドラッグ中は自分の名前を薄くする等の見た目に使う）。 */
+const isDragSource = computed(() => view?.paneDrag?.sourcePaneId === props.paneId);
+
+const DRAG_THRESHOLD_PX = 6;
+let dragStart: { x: number; y: number; pointerId: number } | null = null;
+
+function onEscapeDuringDrag(ev: KeyboardEvent): void {
+  if (ev.key !== "Escape") return;
+  cancelDrag();
+}
+
+function cancelDrag(): void {
+  dragStart = null;
+  if (view?.paneDrag) view.endPaneDrag();
+  window.removeEventListener("keydown", onEscapeDuringDrag);
+}
+
+/** `document.elementFromPoint` から最も近い `[data-pane-id]` 祖先の pane id を求める。 */
+function paneIdAt(x: number, y: number): string | null {
+  const el = document.elementFromPoint(x, y);
+  return (el?.closest("[data-pane-id]") as HTMLElement | null)?.dataset.paneId ?? null;
+}
+
+/** 名前ラベルの押し下げ。まだドラッグ扱いにしない（閾値を超えるまでは「ただのクリック」。AC-I1・AC-I5）。 */
+function onNamePointerDown(ev: PointerEvent): void {
+  dragStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
+  (ev.currentTarget as HTMLElement).setPointerCapture?.(ev.pointerId);
+}
+
+function onNamePointerMove(ev: PointerEvent): void {
+  if (!dragStart || ev.pointerId !== dragStart.pointerId) return;
+  if (!view?.paneDrag) {
+    const dx = ev.clientX - dragStart.x;
+    const dy = ev.clientY - dragStart.y;
+    if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+    view?.startPaneDrag(props.paneId);
+    window.addEventListener("keydown", onEscapeDuringDrag);
+  }
+  view?.setPaneDragOver(paneIdAt(ev.clientX, ev.clientY));
+}
+
+/** 離した：ドラッグ済みならドロップを確定、閾値未満ならクリック（枠を押したのと同じ扱い。AC-I5）。 */
+function onNamePointerUp(ev: PointerEvent): void {
+  if (!dragStart || ev.pointerId !== dragStart.pointerId) return;
+  const wasDragging = !!view?.paneDrag;
+  const target = wasDragging ? paneIdAt(ev.clientX, ev.clientY) : null;
+  dragStart = null;
+  if (wasDragging) {
+    view?.endPaneDrag();
+    window.removeEventListener("keydown", onEscapeDuringDrag);
+    if (target && target !== props.paneId) {
+      actions?.swapPanesByDrag(props.paneId, target);
+      // ドラッグした pane にフォーカスを残す（AC-I4）。入れ替え前にフォーカスが別の pane に
+      // あった場合、`focusedPaneId` を書き換えないと、そちらの pane が新しい位置にフォーカスを
+      // 持ち続けてしまう（`swapPaneWith` は id の参照を変えないため。design の申し送り）。
+      view?.focusPane(props.paneId);
+      registry?.focus(props.paneId);
+    }
+  } else {
+    view?.focusPane(props.paneId);
+    registry?.focus(props.paneId);
+  }
+}
+
+function onNamePointerCancel(ev: PointerEvent): void {
+  if (dragStart && ev.pointerId !== dragStart.pointerId) return;
+  cancelDrag();
+}
+
+/*
+ * ドラッグ中にダイアログが開いたら、その時点で取り消す（`Sidebar.vue` の幅ドラッグと同じ precedent。
+ * design「依拠する既存の事実」）。`showModal()` で文書が inert になったとき、ポインタの捕捉が外れる
+ * のか・捕捉先へ `pointerup`/`pointercancel` が届き続けるのかは確かめた出所が無い。分からない挙動に
+ * 頼らない（cross-cutting 独立点検で発見。review.md 参照）。
+ */
+watch(
+  () => view?.openDialog,
+  (dialog) => {
+    if (dialog !== null && isDragSource.value) cancelDrag();
+  },
+);
+
 onBeforeUnmount(() => {
+  // ドラッグ中にこの pane 自身が消えた（別クライアントの close 等）ら、リスナーの残留・宙に浮いた
+  // ドラッグ状態を残さない（20260923-pane-name-dnd-swap）。
+  if (isDragSource.value) cancelDrag();
   if (!view || !root.value?.contains(document.activeElement)) return;
   // 描き直しで入れ替わる新しい端末が自分でフォーカスする（`TerminalPane`）ので、それでも body に落ちていたときだけ移す。
   void nextTick(() => {
@@ -104,7 +205,8 @@ function onKeydown(ev: KeyboardEvent): void {
   <div
     ref="root"
     class="pane-frame"
-    :class="{ 'pane-frame-enabled': enabled }"
+    :class="{ 'pane-frame-enabled': enabled, 'pane-frame-enabled-named': reserveNameSpace }"
+    :data-pane-id="enabled ? paneId : undefined"
     :role="enabled ? 'group' : undefined"
     :aria-label="enabled ? paneLabel : undefined"
     :aria-current="enabled && selected ? 'true' : undefined"
@@ -113,7 +215,7 @@ function onKeydown(ev: KeyboardEvent): void {
       v-if="enabled"
       ref="edge"
       class="pane-frame-edge"
-      :class="{ 'pane-frame-edge-current': selected }"
+      :class="{ 'pane-frame-edge-current': selected, 'pane-frame-edge-named': showBorder, 'pane-frame-edge-drop-target': isDropTarget }"
       role="button"
       :tabindex="selected ? 0 : -1"
       aria-haspopup="menu"
@@ -130,9 +232,16 @@ function onKeydown(ev: KeyboardEvent): void {
          後のものが上に来るため、`.pane-frame-edge` の中に置くと端末の不透明な内容の下に隠れて
          見えなくなる（taskcheck が実際のスクリーンショットで発見。review.md 参照）。 -->
     <span
-      v-if="enabled && settings?.paneAgentNameVisible && paneName"
+      v-if="showBorder"
       class="pane-frame-name"
+      :class="{ 'pane-frame-name-current': selected, 'pane-frame-name-dragging': isDragSource }"
       aria-hidden="true"
+      @pointerdown="onNamePointerDown"
+      @pointermove="onNamePointerMove"
+      @pointerup="onNamePointerUp"
+      @pointercancel="onNamePointerCancel"
+      @lostpointercapture="onNamePointerCancel"
+      @contextmenu="onContextMenu"
       >{{ paneName }}</span
     >
   </div>
@@ -152,6 +261,17 @@ function onKeydown(ev: KeyboardEvent): void {
 .pane-frame-enabled {
   padding: var(--wtm-pane-gap, 4px);
 }
+/*
+ * legend（枠に埋め込む名前）のための上の余白（20260923-pane-name-dnd-swap）。tab が1個で
+ * tab バーが自動で隠れている（20260922-appearance-settings-rest）ときは、一番上の pane の外側に
+ * 余白が無く、名前が画面の外まではみ出て切れる（screenshot を撮って実際に確認・修正した不具合）。
+ * `.pane-frame-name` を `.pane-frame` の外へ一切はみ出させない設計にし、この余白の中に収める。
+ * PTY の行数はこの内側の大きさから決まる（`ViewSync` が測る）ので、この余白を足した分だけ実際に
+ * 行数が減る——見た目の整合を優先する意図的な副作用（`paneFrameThickness` の変更と同じ扱い）。
+ */
+.pane-frame-enabled-named {
+  padding-top: calc(var(--wtm-pane-gap, 4px) + 1.2em);
+}
 .pane-frame-edge {
   position: absolute;
   inset: 0;
@@ -164,6 +284,29 @@ function onKeydown(ev: KeyboardEvent): void {
   /* 選ばれている pane の枠はテーマごとに背景から 3:1 に寄せた色（20260921-theme-settings の decisions D15。dracula は今と同じ #44475a）。 */
   border: 2px solid var(--wtm-pane-current, #44475a);
 }
+/*
+ * 名前を legend 風に表示するときだけ、フォーカスの無い pane にも薄い枠を出す（herdr の見た目に
+ * 寄せた。20260923-pane-name-dnd-swap の design D3・AC1・AC3）。**新しいテーマ変数は足さず**、
+ * 既存の `--wtm-menu-border` を `color-mix` で薄めるだけにする（17テーマぶんの値決め・
+ * コントラスト検証を避ける）。フォーカス中は `.pane-frame-edge-current` の 2px の強調色をそのまま使う
+ * （下の詳細度: `.pane-frame-edge-current.pane-frame-edge-named` が `.pane-frame-edge-named` 単体より
+ * 詳細度が高いので、フォーカス中はこちらが勝つ）。
+ */
+.pane-frame-edge-named {
+  /* 55% だと画面上でほぼ見えなかった（screenshot で確認）ので、視認できる強さまで上げた。 */
+  border: 1px solid color-mix(in srgb, var(--wtm-menu-border, #44475a) 80%, transparent);
+}
+.pane-frame-edge-current.pane-frame-edge-named {
+  /* `border` の shorthand（`.pane-frame-edge-named`）が幅を 1px に戻してしまうため、幅も明示し直す
+   * （screenshot で 1px になっていることを確認して修正）。 */
+  border-width: 2px;
+  border-color: var(--wtm-pane-current, #44475a);
+}
+/* ドロップ候補（20260923-pane-name-dnd-swap）：ドラッグ中、ポインタの下にある pane を強調する。 */
+.pane-frame-edge-drop-target {
+  outline: 2px dashed var(--wtm-accent, #8be9fd);
+  outline-offset: -2px;
+}
 .pane-frame-edge:focus-visible {
   outline: 1px solid var(--wtm-fg, #f8f8f2);
   outline-offset: -1px;
@@ -171,24 +314,42 @@ function onKeydown(ev: KeyboardEvent): void {
 }
 /*
  * pane にエージェント名を表示する opt-in の設定（20260922-appearance-settings-rest。design「US4」・AC11）。
- * `.pane-frame-edge` の隅に小さく重ねる——`.pane-frame-edge` 自身がクリック（メニューを開く）を処理するので、
- * `pointer-events: none` でこの帯の上のクリックも同じ扱いにする（枠のクリック領域を狭めない）。
+ * 20260923-pane-name-dnd-swap で、枠線に埋め込む legend 風の見た目に変更した（herdr の見た目に寄せた）。
+ * `top: 0` ＋ `translateY(-50%)` で `.pane-frame-edge` の境界線の上に重ね、背景色（`--wtm-bg`。
+ * pane の外側の地色と同じ）で線を隠すことで「線に埋め込まれた」ように見せる。
+ * ドラッグの掴み手にするため `pointer-events` は `auto`（以前は `none` だった。AC-I1・AC-I5 は
+ * script 側の閾値判定で担保する——名前ラベルの上の単純なクリックは、枠を押したのと同じ
+ * 「pane を選ぶ」動作にフォールバックする）。
  */
 .pane-frame-name {
   position: absolute;
-  top: 0;
-  left: 0;
-  max-width: 100%;
+  /* `.pane-frame` の外へはみ出させない（`.pane-frame-enabled-named` が確保した余白の中に収める。
+   * tab バーが無く画面の一番上に pane が接しているときでも切れない）。 */
+  top: 0.15em;
+  left: 0.6em;
+  max-width: calc(100% - 1.2em);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  /* ドラッグ中にテキストとして選択（ハイライト）されないようにする（review 指摘。
+   * 掴み手そのものが文字列なので、`Sidebar.vue` の幅ドラッグの帯とは違い実害がある）。 */
+  user-select: none;
   font-size: 0.75em;
-  padding: 0.1em 0.4em;
-  background: var(--wtm-menu-bg, #282a36);
-  color: var(--wtm-menu-fg, #f8f8f2);
-  border-bottom-right-radius: 3px;
-  opacity: 0.85;
+  padding: 0 0.4em;
+  background: var(--wtm-bg, #1e1f29);
+  color: color-mix(in srgb, var(--wtm-menu-fg, #f8f8f2) 55%, transparent);
+}
+.pane-frame-name-current {
+  /* herdr の見た目（NAME1 が太字の地の色）に合わせる。`--wtm-pane-current` は枠線用に
+   * 3:1（非テキストの WCAG コントラスト）で選ばれた色なので、文字色（4.5:1 が要る）には使わない。 */
+  color: var(--wtm-fg, #f8f8f2);
+  font-weight: bold;
+}
+.pane-frame-name-dragging {
+  cursor: grabbing;
 }
 /* 枠（absolute）より後に描くよう relative にして、端末を枠の上に重ねる（中央の押下・右クリックは端末へ届く）。 */
 .pane-frame-body {

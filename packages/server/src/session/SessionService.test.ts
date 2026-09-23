@@ -248,6 +248,34 @@ describe("SessionService — tabs and panes", () => {
     expect(newPane.cwd).toBe(pane.cwd); // 分割元の cwd を引き継ぐ
   });
 
+  // 20260923-pane-name-dnd-swap：ドラッグでの入れ替え。design「3. サーバ側」。
+  it("swapPaneWith: 入れ替えに成功すると layout.updated を publish し保存を予約する", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const { pane: other } = await service.splitPane(pane.id, "right", undefined);
+    const events: string[] = [];
+    bus.subscribe((e) => events.push(e.event));
+    persist.touchCount = 0;
+
+    const ok = service.swapPaneWith(pane.id, other.id);
+
+    expect(ok).toBe(true);
+    expect(events).toEqual(["layout.updated"]);
+    expect(persist.touchCount).toBe(1);
+  });
+
+  it("swapPaneWith: 何も起きなかったときは publish も保存の予約もしない", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const events: string[] = [];
+    bus.subscribe((e) => events.push(e.event));
+    persist.touchCount = 0;
+
+    const ok = service.swapPaneWith(pane.id, pane.id); // 同じ pane 同士
+
+    expect(ok).toBe(false);
+    expect(events).toEqual([]);
+    expect(persist.touchCount).toBe(0);
+  });
+
   it("supports at least 16 panes in one session, each independently addressable (AC17「規模」・test 工程で確認)", async () => {
     const { pane: first, tab } = await service.createWorkspace("/home/u", "api");
     const paneIds = [first.id];

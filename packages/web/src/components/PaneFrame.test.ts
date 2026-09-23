@@ -23,7 +23,7 @@ function makePane(id: string, overrides: Partial<Pane> = {}): Pane {
 }
 
 function mountFrame(opts: { enabled?: boolean; withPinia?: boolean } = {}) {
-  const actions = { openContextMenu: vi.fn() };
+  const actions = { openContextMenu: vi.fn(), swapPanesByDrag: vi.fn() };
   const registry = { focus: vi.fn() };
   const wrapper = mount(PaneFrame, {
     attachTo: document.body,
@@ -292,5 +292,243 @@ describe("PaneFrame — 枠の中にフォーカスがあるまま消えたら�
     await new Promise((r) => setTimeout(r, 10));
     expect(registry.focus).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(other);
+  });
+});
+
+// 20260923-pane-name-dnd-swap：herdr 風の legend 表示（AC1〜AC3）とドラッグでの入れ替え（AC-I1〜AC-I5・AC4・AC6）。
+describe("PaneFrame — 名前の legend 表示（AC1〜AC3）", () => {
+  it("名前があり設定が有効なら、枠に legend 用のクラスが付く（AC1）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".pane-frame-edge").classes()).toContain("pane-frame-edge-named");
+  });
+
+  it("フォーカス中は current 用のクラスが legend にも付く（AC2）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    useViewStore(pinia).focusPane("p1");
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".pane-frame-edge").classes()).toEqual(expect.arrayContaining(["pane-frame-edge-current", "pane-frame-edge-named"]));
+    expect(wrapper.get(".pane-frame-name").classes()).toContain("pane-frame-name-current");
+  });
+
+  it("フォーカスが無ければ current 用のクラスは付かない（AC3）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".pane-frame-edge").classes()).not.toContain("pane-frame-edge-current");
+    expect(wrapper.get(".pane-frame-name").classes()).not.toContain("pane-frame-name-current");
+  });
+
+  it("名前ラベルの上の右クリックでも、枠と同じく pane のメニューが開く（review 指摘：pointer-events: auto で覆われて枠まで届かなくなる回帰）", async () => {
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const settings = useSettingsStore(pinia);
+    const { wrapper, actions } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 12, clientY: 34 });
+    wrapper.get(".pane-frame-name").element.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(actions.openContextMenu).toHaveBeenCalledWith({ kind: "pane", paneId: "p1" }, { x: 12, y: 34 });
+  });
+});
+
+describe("PaneFrame — 名前ラベルをドラッグしての入れ替え（AC4・AC6・AC-I1〜AC-I5）", () => {
+  function pointerEvent(type: string, opts: Partial<PointerEvent> & { clientX: number; clientY: number; pointerId?: number }) {
+    return new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...opts });
+  }
+
+  function mockElementFromPointAsPane(paneId: string | null) {
+    const el = paneId
+      ? ({ closest: (sel: string) => (sel === "[data-pane-id]" ? { dataset: { paneId } } : null) } as unknown as Element)
+      : null;
+    return vi.spyOn(document, "elementFromPoint").mockReturnValue(el);
+  }
+
+  it("閾値未満のまま離すとドラッグにならず、既存のクリック（pane を選ぶ）にフォールバックする（AC-I1・AC-I5）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper, actions, registry } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 12, clientY: 10 })); // 2px。閾値(6px)未満
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 12, clientY: 10 }));
+
+    expect(useViewStore(pinia).focusedPaneId).toBe("p1");
+    expect(registry.focus).toHaveBeenCalledWith("p1");
+    expect(actions.swapPanesByDrag).not.toHaveBeenCalled();
+    expect(useViewStore(pinia).paneDrag).toBeNull();
+  });
+
+  it("ちょうど閾値（6px）動かすとドラッグが始まる（境界値。AC-I1）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 6, clientY: 0 })); // ちょうど6px
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: null });
+  });
+
+  it("閾値を超えて動かし別の pane の上で離すと swapPanesByDrag(自分, 相手) を呼ぶ（AC4・AC-I1）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper, actions } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+    const spy = mockElementFromPointAsPane("p2");
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 30, clientY: 10 })); // 20px。閾値を超える
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: "p2" });
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 30, clientY: 10 }));
+
+    expect(actions.swapPanesByDrag).toHaveBeenCalledWith("p1", "p2");
+    expect(useViewStore(pinia).paneDrag).toBeNull(); // ドラッグは終わっている
+    spy.mockRestore();
+  });
+
+  it("入れ替え後、ドラッグした pane にフォーカスが残る（AC-I4。入れ替え前に別の pane が選ばれていても）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    useViewStore(pinia).focusPane("p9"); // p1 とは別の pane が選ばれている状態から始める
+    const { wrapper, actions, registry } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+    const spy = mockElementFromPointAsPane("p2");
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 30, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 30, clientY: 10 }));
+
+    expect(actions.swapPanesByDrag).toHaveBeenCalledWith("p1", "p2");
+    expect(useViewStore(pinia).focusedPaneId).toBe("p1"); // ドラッグした pane（自分）に移る
+    expect(registry.focus).toHaveBeenCalledWith("p1");
+    spy.mockRestore();
+  });
+
+  it("自分自身の上・pane 以外の上で離すと何もしない（AC6）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper, actions } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+
+    // 自分自身の上
+    let spy = mockElementFromPointAsPane("p1");
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 30, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 30, clientY: 10 }));
+    spy.mockRestore();
+    expect(useViewStore(pinia).paneDrag).toBeNull(); // ドラッグ状態は終わっている（宙に浮かない）
+
+    // pane 以外（範囲外）
+    spy = mockElementFromPointAsPane(null);
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10, pointerId: 2 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 30, clientY: 10, pointerId: 2 }));
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 30, clientY: 10, pointerId: 2 }));
+    spy.mockRestore();
+    expect(useViewStore(pinia).paneDrag).toBeNull();
+
+    expect(actions.swapPanesByDrag).not.toHaveBeenCalled();
+  });
+
+  it("ドラッグ中に Esc を押すと取り消され、離しても swap を送らない（AC-I2）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper, actions } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+    const spy = mockElementFromPointAsPane("p2");
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 30, clientY: 10 }));
+    expect(useViewStore(pinia).paneDrag).not.toBeNull();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(useViewStore(pinia).paneDrag).toBeNull();
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 30, clientY: 10 }));
+
+    expect(actions.swapPanesByDrag).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("ドラッグ中にダイアログが開くと取り消され、離しても swap を送らない（Sidebar.vue の幅ドラッグと同じ precedent）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper, actions } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+    const spy = mockElementFromPointAsPane("p2");
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 30, clientY: 10 }));
+    expect(useViewStore(pinia).paneDrag).not.toBeNull();
+    useViewStore(pinia).openDialogWithContext({ kind: "help" });
+    await wrapper.vm.$nextTick();
+    expect(useViewStore(pinia).paneDrag).toBeNull();
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 30, clientY: 10 }));
+
+    expect(actions.swapPanesByDrag).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("ドラッグ元とドロップ候補は別インスタンスの view.paneDrag を通じて分かる（isDropTarget のクラス）", async () => {
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "one" }));
+    useSessionStore(pinia).paneUpserted(makePane("p2", { label: "two" }));
+    useSettingsStore(pinia).setPaneAgentNameVisible(true);
+    const actions = { openContextMenu: vi.fn(), swapPanesByDrag: vi.fn() };
+    const registry = { focus: vi.fn() };
+    const Host = defineComponent({
+      components: { PaneFrame },
+      template: '<div><PaneFrame pane-id="p1" enabled /><PaneFrame pane-id="p2" enabled /></div>',
+    });
+    const wrapper = mount(Host, {
+      attachTo: document.body,
+      global: { plugins: [pinia], provide: { [ActionDispatcherKey as symbol]: actions, [TerminalRegistryKey as symbol]: registry } },
+    });
+    await wrapper.vm.$nextTick();
+
+    useViewStore(pinia).startPaneDrag("p1");
+    useViewStore(pinia).setPaneDragOver("p2");
+    await wrapper.vm.$nextTick();
+
+    const frames = wrapper.findAll(".pane-frame-edge");
+    expect(frames[0]!.classes()).not.toContain("pane-frame-edge-drop-target"); // ドラッグ元自身は対象にならない
+    expect(frames[1]!.classes()).toContain("pane-frame-edge-drop-target");
+  });
+
+  it("ドラッグ元の pane 自身が消えても paneDrag が宙に浮かない（別クライアントの close 等）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 30, clientY: 10 }));
+    expect(useViewStore(pinia).paneDrag).not.toBeNull();
+
+    wrapper.unmount();
+
+    expect(useViewStore(pinia).paneDrag).toBeNull();
   });
 });

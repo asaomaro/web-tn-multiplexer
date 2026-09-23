@@ -446,6 +446,17 @@ export class SessionService {
     return other;
   }
 
+  /** 任意の2つの pane を入れ替える（20260923-pane-name-dnd-swap。design「3. サーバ側」）。 */
+  swapPaneWith(paneId: PaneId, otherPaneId: PaneId): boolean {
+    const ok = this.model.swapPaneWith(paneId, otherPaneId);
+    if (ok) {
+      const pane = this.requirePane(paneId);
+      this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
+      this.persist.touch();
+    }
+    return ok;
+  }
+
   zoomPane(paneId: PaneId, mode: "toggle" | "on" | "off"): void {
     const pane = this.requirePane(paneId);
     this.model.zoomPane(paneId, mode);
