@@ -242,9 +242,10 @@ export interface WorktreeCreateResult {
   path: string;
 }
 
-// --- agent integration（20260923-agent-session-resume）---------------------
+// --- agent integration（20260923-agent-session-resume。6つ追加: 20260923-other-agents-session-resume）---
 
-const agentIntegrationKind = z.enum(["claude", "codex"]);
+/** `model.ts` の `AgentIntegrationKind` と値を揃える（別の型なので同期がずれないよう並びも揃える）。 */
+const agentIntegrationKind = z.enum(["claude", "codex", "cursor", "copilot", "devin", "droid", "grok", "qwen"]);
 
 export const AgentIntegrationStatusParams = z.object({});
 export type AgentIntegrationStatusParams = z.infer<typeof AgentIntegrationStatusParams>;

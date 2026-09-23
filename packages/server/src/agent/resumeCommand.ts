@@ -24,6 +24,19 @@ export function resumeCommandFor(kind: string, sessionId: string): string | unde
       return `claude --resume ${sessionId}`;
     case "codex":
       return `codex resume ${sessionId}`;
+    // 20260923-other-agents-session-resume（research.md F2・decisions D3）。
+    case "cursor":
+      return `cursor-agent --resume ${sessionId}`;
+    case "copilot":
+      return `copilot --resume=${sessionId}`;
+    case "devin":
+      return `devin --resume ${sessionId}`;
+    case "droid":
+      return `droid --resume ${sessionId}`;
+    case "grok":
+      return `grok --resume ${sessionId}`;
+    case "qwen":
+      return `qwen --resume ${sessionId}`;
     default:
       return undefined;
   }

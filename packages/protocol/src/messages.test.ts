@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentIntegrationInstallParams,
   ClientThemeParams,
   METHOD_SCHEMAS,
   NewCwd,
@@ -25,6 +26,15 @@ describe("messages", () => {
   it("validates tab.move params (direction is previous/next only)", () => {
     expect(TabMoveParams.parse({ tabId: "t1", direction: "next" })).toEqual({ tabId: "t1", direction: "next" });
     expect(() => TabMoveParams.parse({ tabId: "t1", direction: "up" })).toThrow();
+  });
+
+  // 20260923-other-agents-session-resume（decisions D5。model.ts の AgentIntegrationKind と
+  // 値を揃える必要がある別スキーマだったため、追加漏れを検知するテストを足す）。
+  it("validates agent_integration.install params for all 8 kinds", () => {
+    for (const kind of ["claude", "codex", "cursor", "copilot", "devin", "droid", "grok", "qwen"]) {
+      expect(AgentIntegrationInstallParams.parse({ kind })).toEqual({ kind });
+    }
+    expect(() => AgentIntegrationInstallParams.parse({ kind: "gemini" })).toThrow();
   });
 
   it("registers a schema for every method the WebSocket table defines", () => {

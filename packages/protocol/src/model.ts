@@ -77,8 +77,12 @@ export interface Pane {
   agentSession: AgentSessionRef | null;
 }
 
-/** herdr との対応は無く、本製品独自の公式フック連携（20260923-agent-session-resume）専用。 */
-export type AgentIntegrationKind = "claude" | "codex";
+/**
+ * herdr との対応は無く、本製品独自の公式フック連携専用（20260923-agent-session-resume。
+ * 20260923-other-agents-session-resume で6つ追加——Cursor Agent CLI・GitHub Copilot CLI・
+ * Devin CLI・Droid・Grok CLI・Qwen Code）。
+ */
+export type AgentIntegrationKind = "claude" | "codex" | "cursor" | "copilot" | "devin" | "droid" | "grok" | "qwen";
 
 export interface AgentSessionRef {
   kind: AgentIntegrationKind;

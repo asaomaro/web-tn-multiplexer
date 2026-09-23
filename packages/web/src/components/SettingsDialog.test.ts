@@ -277,6 +277,12 @@ describe("SettingsDialog — 6 つの節（AC12）", () => {
   });
 });
 
+/** claude/codex 以外の6 kind は「未検出・未導入」の既定値で埋める（20260923-other-agents-session-resume）。 */
+function defaultOtherAgentStatuses(): Omit<AgentIntegrationStatusResult["agents"], "claude" | "codex"> {
+  const notInstalled = { cliDetected: false, installed: false } as const;
+  return { cursor: notInstalled, copilot: notInstalled, devin: notInstalled, droid: notInstalled, grok: notInstalled, qwen: notInstalled };
+}
+
 function makeAgentIntegrationActions(status: AgentIntegrationStatusResult) {
   const refreshAgentIntegrationStatus = vi.fn(async () => {
     useAgentIntegrationsStore(pinia).setStatus(status);
@@ -299,7 +305,7 @@ describe("SettingsDialog — 節「エージェント連携」（20260923-agent-
   it("開くたびに状態を取得する（client.hello のスナップショットに乗らないため）", async () => {
     const status: AgentIntegrationStatusResult = {
       autoResumeEnabled: true,
-      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: false, installed: true } },
+      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: false, installed: true }, ...defaultOtherAgentStatuses() },
     };
     const { actions, refreshAgentIntegrationStatus } = makeAgentIntegrationActions(status);
     const { wrapper } = await openDialog(makeController(), undefined, actions);
@@ -316,7 +322,7 @@ describe("SettingsDialog — 節「エージェント連携」（20260923-agent-
   it("未導入なら「導入」ボタンで installAgentIntegration(kind) を呼ぶ（AC-I1）", async () => {
     const status: AgentIntegrationStatusResult = {
       autoResumeEnabled: true,
-      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: true, installed: false } },
+      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: true, installed: false }, ...defaultOtherAgentStatuses() },
     };
     const { actions, installAgentIntegration } = makeAgentIntegrationActions(status);
     const { wrapper } = await openDialog(makeController(), undefined, actions);
@@ -331,7 +337,7 @@ describe("SettingsDialog — 節「エージェント連携」（20260923-agent-
   it("導入済みなら「解除」ボタンで uninstallAgentIntegration(kind) を呼ぶ（AC-I2）", async () => {
     const status: AgentIntegrationStatusResult = {
       autoResumeEnabled: true,
-      agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: true, installed: false } },
+      agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: true, installed: false }, ...defaultOtherAgentStatuses() },
     };
     const { actions, uninstallAgentIntegration } = makeAgentIntegrationActions(status);
     const { wrapper } = await openDialog(makeController(), undefined, actions);
@@ -347,7 +353,7 @@ describe("SettingsDialog — 節「エージェント連携」（20260923-agent-
   it("自動再開の switch は現在値を反映し、押すと反転して setAgentIntegrationAutoResume を呼ぶ（AC-I4）", async () => {
     const status: AgentIntegrationStatusResult = {
       autoResumeEnabled: true,
-      agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: true, installed: false } },
+      agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: true, installed: false }, ...defaultOtherAgentStatuses() },
     };
     const { actions, setAgentIntegrationAutoResume } = makeAgentIntegrationActions(status);
     const { wrapper } = await openDialog(makeController(), undefined, actions);
@@ -362,7 +368,7 @@ describe("SettingsDialog — 節「エージェント連携」（20260923-agent-
   it("失敗を伝える文言をそのまま表示する", async () => {
     const status: AgentIntegrationStatusResult = {
       autoResumeEnabled: true,
-      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: true, installed: false } },
+      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: true, installed: false }, ...defaultOtherAgentStatuses() },
     };
     const { actions } = makeAgentIntegrationActions(status);
     actions.installAgentIntegration = vi.fn(async () => ({ ok: false, message: "設定ファイルを解釈できませんでした" }));
@@ -380,6 +386,61 @@ describe("SettingsDialog — 節「エージェント連携」（20260923-agent-
     const { wrapper } = await openDialog();
     expect(agentIntegrationSection(wrapper).text()).toContain("確認中");
     // 通知の switch はそのまま押せる（他の節に影響しない。AC-I5）。
+    await notifySwitches(wrapper)[0]!.trigger("click");
+    expect(useNotificationsStore(pinia).prefs.toast).toBe(false);
+  });
+});
+
+// 20260923-other-agents-session-resume（AC-I1〜AC-I4）。
+describe("SettingsDialog — 節「エージェント連携」の6エージェント追加分", () => {
+  it("6エージェントとも行が現れ、導入・解除の操作ができる", async () => {
+    const status: AgentIntegrationStatusResult = {
+      autoResumeEnabled: true,
+      agents: {
+        claude: { cliDetected: false, installed: false },
+        codex: { cliDetected: false, installed: false },
+        cursor: { cliDetected: true, installed: false },
+        copilot: { cliDetected: true, installed: true },
+        devin: { cliDetected: false, installed: false },
+        droid: { cliDetected: true, installed: false },
+        grok: { cliDetected: true, installed: false },
+        qwen: { cliDetected: true, installed: false },
+      },
+    };
+    const { actions, installAgentIntegration, uninstallAgentIntegration } = makeAgentIntegrationActions(status);
+    const { wrapper } = await openDialog(makeController(), undefined, actions);
+
+    const section = agentIntegrationSection(wrapper);
+    for (const label of ["Cursor Agent CLI", "GitHub Copilot CLI", "Devin CLI", "Droid", "Grok CLI", "Qwen Code"]) {
+      expect(section.text()).toContain(label);
+    }
+
+    const rows = section.findAll("li.agent-integration-row");
+    expect(rows).toHaveLength(8); // claude・codex + 6
+
+    // Copilot（3行目。claude・codex に続く）は導入済みなので「解除」ボタン
+    const copilotButton = rows[3]!.find("button.settings-btn");
+    expect(copilotButton.text()).toBe("解除");
+    await copilotButton.trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(uninstallAgentIntegration).toHaveBeenCalledWith("copilot");
+
+    // Grok（6行目）は未導入なので「導入」ボタン
+    const grokButton = rows[6]!.find("button.settings-btn");
+    expect(grokButton.text()).toBe("導入");
+    await grokButton.trigger("click");
+    await wrapper.vm.$nextTick();
+    expect(installAgentIntegration).toHaveBeenCalledWith("grok");
+  });
+
+  it("他の設定項目のテンプレート・操作性に影響しない（AC-I4）", async () => {
+    const status: AgentIntegrationStatusResult = {
+      autoResumeEnabled: true,
+      agents: { claude: { cliDetected: false, installed: false }, codex: { cliDetected: false, installed: false }, ...defaultOtherAgentStatuses() },
+    };
+    const { actions } = makeAgentIntegrationActions(status);
+    const { wrapper } = await openDialog(makeController(), undefined, actions);
+    // 通知の switch（別の節）は影響を受けずそのまま押せる。
     await notifySwitches(wrapper)[0]!.trigger("click");
     expect(useNotificationsStore(pinia).prefs.toast).toBe(false);
   });

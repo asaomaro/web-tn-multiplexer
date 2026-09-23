@@ -127,3 +127,143 @@ describe("FsAgentIntegrationInstaller", () => {
     expect(await installer.uninstall("claude")).toEqual({ ok: true, message: "未導入でした" });
   });
 });
+
+// 20260923-other-agents-session-resume（design「8 kind の HookSpec 一覧」・research.md F4）。
+// 6エージェントとも設定ファイルの構造・hook エントリの形が異なるため、各 kind ごとに
+// 「書き込み内容が research F4 の表と一致するか」を確認する最小セット（fresh install・idempotent・
+// uninstall）で検証する。ホームディレクトリは一時ディレクトリへ差し替える（`home` 引数。実際の
+// `~/.cursor` 等には一切触れない）。
+describe("FsAgentIntegrationInstaller — 6エージェントの追加分", () => {
+  let workDir: string;
+  let hookScriptSource: string;
+  let home: string;
+
+  beforeEach(async () => {
+    workDir = await makeTempDir("wtm-integration-installer-other-");
+    hookScriptSource = join(workDir, "agent-hook-report.cjs");
+    await writeFile(hookScriptSource, "// fake hook script\n");
+    home = join(workDir, "home");
+  });
+
+  afterEach(async () => {
+    await rm(workDir, { recursive: true, force: true });
+  });
+
+  function makeInstaller() {
+    return new FsAgentIntegrationInstaller(hookScriptSource, { PATH: "" } as NodeJS.ProcessEnv, home);
+  }
+
+  it("cursor: installs a flat entry under hooks.sessionStart (lowercase, no hooks[] nesting)", async () => {
+    const installer = makeInstaller();
+    expect(await installer.install("cursor")).toEqual({ ok: true, message: null });
+
+    const settings = JSON.parse(await readFile(join(home, ".cursor", "hooks.json"), "utf8"));
+    expect(settings.hooks.sessionStart).toHaveLength(1);
+    const entry = settings.hooks.sessionStart[0];
+    expect(entry.command).toContain("wtm-agent-report.cjs");
+    expect(entry.command).toContain("cursor");
+    expect(entry.hooks).toBeUndefined(); // ネスト無し（research F4）
+
+    expect(await installer.install("cursor")).toEqual({ ok: true, message: "既に導入済みです" });
+    const status = await installer.status("cursor");
+    expect(status.installed).toBe(true);
+
+    expect(await installer.uninstall("cursor")).toEqual({ ok: true, message: null });
+    const after = JSON.parse(await readFile(join(home, ".cursor", "hooks.json"), "utf8"));
+    expect(after.hooks.sessionStart).toHaveLength(0);
+  });
+
+  it("copilot: writes a dedicated file in the hooks directory and never touches other *.json files there", async () => {
+    const hooksDir = join(home, ".copilot", "hooks");
+    await mkdir(hooksDir, { recursive: true });
+    await writeFile(join(hooksDir, "someone-elses-hook.json"), JSON.stringify({ hooks: { preToolUse: ["untouched"] } }));
+
+    const installer = makeInstaller();
+    expect(await installer.install("copilot")).toEqual({ ok: true, message: null });
+
+    const dedicated = JSON.parse(await readFile(join(hooksDir, "wtm-agent-report.json"), "utf8"));
+    expect(dedicated.hooks.sessionStart).toHaveLength(1);
+    const entry = dedicated.hooks.sessionStart[0];
+    expect(entry.bash).toContain("wtm-agent-report.cjs");
+    expect(entry.powershell).toContain("wtm-agent-report.cjs");
+    expect(entry.timeoutSec).toBe(10);
+
+    // 既存の他のファイルは無変更
+    const others = JSON.parse(await readFile(join(hooksDir, "someone-elses-hook.json"), "utf8"));
+    expect(others).toEqual({ hooks: { preToolUse: ["untouched"] } });
+
+    expect(await installer.install("copilot")).toEqual({ ok: true, message: "既に導入済みです" });
+  });
+
+  it("devin: installs at a top-level SessionStart key (no hooks wrapper), with timeout not async", async () => {
+    const installer = makeInstaller();
+    expect(await installer.install("devin")).toEqual({ ok: true, message: null });
+
+    const settings = JSON.parse(await readFile(join(home, ".devin", "hooks.json"), "utf8"));
+    expect(settings.SessionStart).toHaveLength(1); // トップレベル直下（`hooks` ラップ無し）
+    expect(settings.hooks).toBeUndefined();
+    const entry = settings.SessionStart[0];
+    expect(entry.hooks[0].command).toContain("wtm-agent-report.cjs");
+    expect(entry.hooks[0].timeout).toBe(10);
+    expect(entry.hooks[0].async).toBeUndefined();
+
+    expect(await installer.uninstall("devin")).toEqual({ ok: true, message: null });
+  });
+
+  it("devin: honors DEVIN_CONFIG_DIR override", async () => {
+    const override = join(workDir, "devin-override");
+    const installer = new FsAgentIntegrationInstaller(hookScriptSource, { PATH: "", DEVIN_CONFIG_DIR: override } as NodeJS.ProcessEnv, home);
+    await installer.install("devin");
+    const settings = JSON.parse(await readFile(join(override, "hooks.json"), "utf8"));
+    expect(settings.SessionStart).toHaveLength(1);
+  });
+
+  it("droid: installs at a top-level SessionStart key (same shape as devin, different path)", async () => {
+    const installer = makeInstaller();
+    expect(await installer.install("droid")).toEqual({ ok: true, message: null });
+
+    const settings = JSON.parse(await readFile(join(home, ".factory", "hooks.json"), "utf8"));
+    expect(settings.SessionStart).toHaveLength(1);
+    expect(settings.SessionStart[0].hooks[0].command).toContain("droid");
+  });
+
+  it("grok: writes a dedicated file with a flat entry under hooks.SessionStart (PascalCase, no hooks[] nesting)", async () => {
+    const hooksDir = join(home, ".grok", "hooks");
+    await mkdir(hooksDir, { recursive: true });
+    await writeFile(join(hooksDir, "unrelated.json"), JSON.stringify({ some: "thing" }));
+
+    const installer = makeInstaller();
+    expect(await installer.install("grok")).toEqual({ ok: true, message: null });
+
+    const dedicated = JSON.parse(await readFile(join(hooksDir, "wtm-agent-report.json"), "utf8"));
+    expect(dedicated.hooks.SessionStart).toHaveLength(1);
+    const entry = dedicated.hooks.SessionStart[0];
+    expect(entry.command).toContain("wtm-agent-report.cjs");
+    expect(entry.hooks).toBeUndefined();
+    expect(entry.timeout).toBe(10);
+
+    const unrelated = JSON.parse(await readFile(join(hooksDir, "unrelated.json"), "utf8"));
+    expect(unrelated).toEqual({ some: "thing" });
+  });
+
+  it("qwen: installs a flat entry under hooks.SessionStart with async:true", async () => {
+    const installer = makeInstaller();
+    expect(await installer.install("qwen")).toEqual({ ok: true, message: null });
+
+    const settings = JSON.parse(await readFile(join(home, ".qwen", "settings.json"), "utf8"));
+    expect(settings.hooks.SessionStart).toHaveLength(1);
+    const entry = settings.hooks.SessionStart[0];
+    expect(entry.command).toContain("wtm-agent-report.cjs");
+    expect(entry.name).toBe("wtm-agent-report");
+    expect(entry.async).toBe(true);
+  });
+
+  it("uninstall leaves other kinds' entries untouched when they happen to share no state (per-kind isolation)", async () => {
+    const installer = makeInstaller();
+    await installer.install("droid");
+    await installer.install("devin");
+    await installer.uninstall("droid");
+    expect((await installer.status("droid")).installed).toBe(false);
+    expect((await installer.status("devin")).installed).toBe(true);
+  });
+});

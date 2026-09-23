@@ -136,11 +136,51 @@ parent: 20260918-web-terminal-multiplexer
       （protocol 57・server 647・web 1649）・起動確認（smoke）pass。E2E は実施していない
       （[[e2e-only-on-request]]）。実物の Claude Code・Codex CLI との結線・Windows の named pipe
       権限限定は未検証（`docs/verification.md` の手動確認へ回した。decisions.md D5）。
-- [ ] セッション永続化の拡張（残り）: 画面履歴の保存と再生（opt-in）、名前付き session、更新時の
-      引き継ぎ、Claude Code・Codex 以外のエージェント（herdr が resume 対応と記載する16種）への
-      対応〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典:
+- [x] セッション永続化の拡張: Claude Code・Codex 以外で herdr が「session identity」型（セッションIDだけを
+      報告し、状態は引き続き画面判定）と記載する6エージェント（Cursor Agent CLI・GitHub Copilot CLI・
+      Devin CLI・Droid・Grok CLI・Qwen Code）への resume 対応〔D8〕 (needs:
+      20260918-web-terminal-multiplexer, 20260923-agent-session-resume)（出典:
       .aidev/works/20260918-web-terminal-multiplexer/research.md。各エージェントの再開コマンドは
-      20260923-agent-session-resume/research.md F1.2 に一覧化済み）。
+      20260923-agent-session-resume/research.md F1.2 に一覧化済み。2026-09-23、単一の
+      「セッション永続化の拡張（残り）」行から4分割した一部——他3つは下の行。当初は
+      Antigravity CLI・Qoder CLI・Letta Code・Hermes Agent を含む10エージェントを対象としていたが、
+      requirements〜design 直前の実地調査で4者とも対象外と判明した——下の非対応の行を参照）。
+      実装: `.aidev/works/20260923-other-agents-session-resume/`（`HookSpec` による kind ごとの
+      hook 設定の抽象化。`packages/server/src/agent/AgentIntegrationInstaller.ts`）。
+      実測: 単体テスト 2651 本 green（protocol 59・server 684・web 1775・cli 133）・smoke pass（2本）。
+      独立点検（cross）2件（対応済み）。review 指摘 0 件。**6エージェントとも実機未検証**
+      （`docs/verification.md` に明記。test-result.md 参照）。`docs/herdr-parity.md` H32b に
+      対応表を追加済み。
+- [ ] （非対応・参考）Antigravity CLI・Qoder CLI・Letta Code・Hermes Agent は resume 統合ができない
+      （20260923-other-agents-session-resume の requirements〜design 直前に公式ドキュメントを直接
+      確認した結果）: Antigravity CLI は `PreToolUse`/`PostToolUse`/`PreInvocation`/`PostInvocation`/`Stop`
+      の5イベントのみでセッション開始時に一度だけ発火するイベントが無い
+      （https://antigravity.google/docs/hooks/）。Qoder CLI は
+      `UserPromptSubmit`/`PreToolUse`/`PostToolUse`/`PostToolUseFailure`/`Stop` の5イベントのみで
+      同様に `SessionStart` が無い（https://docs.qoder.com/en/cli/hooks）。Letta Code は `SessionStart`
+      hook 自体は文書化されているが、セッション/会話IDの stdin JSON でのフィールド名がどこにも
+      明記されていない（https://docs.letta.com/letta-code/hooks/）。Hermes Agent（NousResearch）は
+      `~/.hermes/config.yaml` の shell hook でのID受け渡し方法が未文書化なうえ、公式ドキュメントの
+      hook 設計が Python のコールバック関数（`def my_callback(session_id, ...)`）を前提にしており、
+      本製品が想定する「shell コマンドをサブプロセスとして起動する」方式と噛み合わない可能性が高い
+      （https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks）。いずれも各ツール自身の
+      設計・ドキュメントの制約であり、本製品側の実装課題ではないため「非対応」として記録する
+      （再調査が要るのは、各ツールが将来 SessionStart 相当のイベント・exact な schema を
+      ドキュメント化したとき）。
+- [ ] セッション永続化の拡張: herdr が「lifecycle authority」型（idle/working/blocked の状態そのものを
+      hook が報告し、画面判定を使わない——本製品が未実装の統合方式）と記載する6エージェント（Kimi Code CLI・
+      OpenCode・Kilo Code CLI・MastraCode・Pi・OMP）への対応。MastraCode・OMP は本製品にまだ画面検出の
+      manifest 自体が無い（`packages/server/src/agent/agents.ts` D46）ため、resume 対応の前に検出自体が
+      要る〔D8〕 (needs: 20260918-web-terminal-multiplexer, 20260923-agent-session-resume)（出典:
+      .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、
+      20260923-other-agents-session-resume の requirements 確定時にスコープから明示的に外した分。
+      「session identity」型6エージェントの行と対になる）。
+- [ ] セッション永続化の拡張: 名前付き session〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典:
+      .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
+- [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）〔D8〕 (needs: 20260918-web-terminal-multiplexer)
+      （出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
+- [ ] セッション永続化の拡張: 更新時の引き継ぎ（live handoff）〔D8〕 (needs: 20260918-web-terminal-multiplexer)
+      （出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
 - [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 配布と運用: 自己更新・更新チャネル、ログ、シェル補完〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 規則・契約の一元化: レイアウトの隣と深さ優先の順・`/api/login` の状態コードの意味・ログインの制限の回数を `@wtm/protocol` に置き、server と web の二重持ちをなくす (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/review.md 統合 review ラウンド1 の nit）

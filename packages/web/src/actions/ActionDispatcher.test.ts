@@ -1,5 +1,5 @@
 import type { MethodName, ParamsOf, ResultOf } from "@wtm/protocol";
-import type { AgentInfo, Pane, Tab, Workspace } from "@wtm/protocol";
+import type { AgentInfo, AgentIntegrationStatusResult, Pane, Tab, Workspace } from "@wtm/protocol";
 import { createPinia, type Pinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyInputController } from "../keys/KeyInputController.js";
@@ -1008,9 +1008,19 @@ describe("ActionDispatcher — worktree", () => {
 describe("ActionDispatcher — 公式フック連携（20260923-agent-session-resume）", () => {
   it("refreshAgentIntegrationStatus：agent_integration.status を呼び、store へ反映する", async () => {
     const conn = makeConnection();
-    const status = {
+    const notInstalled = { cliDetected: false, installed: false };
+    const status: AgentIntegrationStatusResult = {
       autoResumeEnabled: true,
-      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: false, installed: false } },
+      agents: {
+        claude: { cliDetected: true, installed: false },
+        codex: notInstalled,
+        cursor: notInstalled,
+        copilot: notInstalled,
+        devin: notInstalled,
+        droid: notInstalled,
+        grok: notInstalled,
+        qwen: notInstalled,
+      },
     };
     conn.resolveWith["agent_integration.status"] = status;
     const { dispatcher } = makeDispatcher(conn);

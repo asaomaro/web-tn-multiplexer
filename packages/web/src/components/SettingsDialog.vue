@@ -324,6 +324,13 @@ function onPathEnter(ev: KeyboardEvent): void {
 const AGENT_INTEGRATION_KINDS: readonly { value: AgentIntegrationKind; label: string }[] = [
   { value: "claude", label: "Claude Code" },
   { value: "codex", label: "Codex" },
+  // 20260923-other-agents-session-resume。
+  { value: "cursor", label: "Cursor Agent CLI" },
+  { value: "copilot", label: "GitHub Copilot CLI" },
+  { value: "devin", label: "Devin CLI" },
+  { value: "droid", label: "Droid" },
+  { value: "grok", label: "Grok CLI" },
+  { value: "qwen", label: "Qwen Code" },
 ];
 /** 導入/解除の操作中は二重押しを防ぐ（対象の kind を持つ。どちらも同時には押せない設計で足りる）。 */
 const agentIntegrationBusy = ref<AgentIntegrationKind | null>(null);
@@ -811,10 +818,9 @@ function onNativeCancel(ev: Event): void {
     <section class="settings-section" aria-labelledby="settings-agent-integration">
       <h3 id="settings-agent-integration" class="settings-heading">エージェント連携</h3>
       <p class="settings-note">
-        Claude Code・Codex の公式フックを使い、サーバの再起動後にその会話を自動で再開します。導入すると、
-        それぞれの設定ファイル（Claude Code は settings.json、Codex は hooks.json）にフックが1件だけ
-        追加されます（他の設定は変更しません）。この設定は<strong>サーバ全体</strong>で共有されます
-        （ほかの節と違い、ブラウザごとではありません）。
+        各エージェントの公式フックを使い、サーバの再起動後にその会話を自動で再開します。導入すると、
+        そのエージェントの設定ファイルにフックが1件だけ追加されます（他の設定は変更しません）。
+        この設定は<strong>サーバ全体</strong>で共有されます（ほかの節と違い、ブラウザごとではありません）。
       </p>
       <ul class="settings-list">
         <li v-for="k in AGENT_INTEGRATION_KINDS" :key="k.value" class="settings-row agent-integration-row">

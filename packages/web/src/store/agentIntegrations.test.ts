@@ -15,9 +15,19 @@ describe("useAgentIntegrationsStore", () => {
   });
 
   it("setStatus replaces the status", () => {
+    const notInstalled = { cliDetected: false, installed: false };
     const status: AgentIntegrationStatusResult = {
       autoResumeEnabled: true,
-      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: false, installed: false } },
+      agents: {
+        claude: { cliDetected: true, installed: false },
+        codex: notInstalled,
+        cursor: notInstalled,
+        copilot: notInstalled,
+        devin: notInstalled,
+        droid: notInstalled,
+        grok: notInstalled,
+        qwen: notInstalled,
+      },
     };
     const store = useAgentIntegrationsStore(pinia);
     store.setStatus(status);

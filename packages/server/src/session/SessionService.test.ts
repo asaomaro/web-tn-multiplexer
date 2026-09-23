@@ -1198,6 +1198,33 @@ describe("SessionService — workspace の自動の名前", () => {
 
       expect(service.getPane(pane.id)?.agentSession).toMatchObject({ sessionId: "abc-123" });
     });
+
+    // 20260923-other-agents-session-resume（design AC5）。新規ロジックは無く、既存の
+    // `reportAgentSession`/`agentSession` の仕組みがそのまま8 kind 分に対応することの確認テスト。
+    it("8 kind すべてで agentSession へ正しく反映される", async () => {
+      const { service } = setup();
+      const kinds = ["claude", "codex", "cursor", "copilot", "devin", "droid", "grok", "qwen"] as const;
+      for (const kind of kinds) {
+        const { pane } = await service.createWorkspace("/r", kind);
+        service.reportAgentSession(pane.id, kind, `${kind}-session`);
+        expect(service.getPane(pane.id)?.agentSession).toMatchObject({ kind, sessionId: `${kind}-session` });
+      }
+    });
+
+    it("同一 cwd・同一 kind の pane が複数あっても、pane ごとに別々の sessionId を保持する（AC5）", async () => {
+      const { service } = setup();
+      const { pane: pane1 } = await service.createWorkspace("/same/cwd", "w1");
+      const { pane: pane2 } = await service.splitPane(pane1.id, "right", undefined);
+      const { pane: pane3 } = await service.splitPane(pane1.id, "down", undefined);
+
+      service.reportAgentSession(pane1.id, "claude", "session-1");
+      service.reportAgentSession(pane2.id, "claude", "session-2");
+      service.reportAgentSession(pane3.id, "claude", "session-3");
+
+      expect(service.getPane(pane1.id)?.agentSession).toMatchObject({ sessionId: "session-1" });
+      expect(service.getPane(pane2.id)?.agentSession).toMatchObject({ sessionId: "session-2" });
+      expect(service.getPane(pane3.id)?.agentSession).toMatchObject({ sessionId: "session-3" });
+    });
   });
 
   // 応答しないファイルシステムへの stat は取り消せず libuv のスレッドを塞ぐので、上限を超えた問い合わせが返るまでは根を探さない（review ラウンド 1・2）。

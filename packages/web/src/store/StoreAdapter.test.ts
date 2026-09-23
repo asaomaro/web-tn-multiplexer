@@ -214,7 +214,20 @@ describe("StoreAdapter", () => {
   it("agent_integration.changed は注入した onAgentIntegrationChanged へ（20260923-agent-session-resume。省略時は例外を投げない）", () => {
     const onAgentIntegrationChanged = vi.fn();
     const { adapter } = makeAdapter({ onAgentIntegrationChanged });
-    const status = { autoResumeEnabled: false, agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: false, installed: false } } } as const;
+    const notInstalled = { cliDetected: false, installed: false } as const;
+    const status = {
+      autoResumeEnabled: false,
+      agents: {
+        claude: { cliDetected: true, installed: true },
+        codex: notInstalled,
+        cursor: notInstalled,
+        copilot: notInstalled,
+        devin: notInstalled,
+        droid: notInstalled,
+        grok: notInstalled,
+        qwen: notInstalled,
+      },
+    } as const;
     adapter.applyEvent({ event: "agent_integration.changed", data: status });
     expect(onAgentIntegrationChanged).toHaveBeenCalledWith(status);
 
