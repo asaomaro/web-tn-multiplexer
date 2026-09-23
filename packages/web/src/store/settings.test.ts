@@ -7,6 +7,7 @@ import {
   loadNewCwdPolicy,
   loadPaneAgentNameVisible,
   loadPaneFrameThickness,
+  loadPaneOuterBorders,
   loadStatusSymbols,
   PANE_FRAME_THICKNESS_PX,
   useSettingsStore,
@@ -95,6 +96,92 @@ describe("useSettingsStore — pane の枠・隙間の太さ／エージェン�
     const store = useSettingsStore(createPinia());
     expect(store.paneFrameThickness).toBe("default");
     expect(store.paneAgentNameVisible).toBe(false);
+  });
+});
+
+// 20260922-tabbar-pane-appearance（PR #12 から取り込み）。
+describe("loadPaneOuterBorders", () => {
+  it("boolean はそのまま、それ以外は既定の「切」", () => {
+    expect(loadPaneOuterBorders(true)).toBe(true);
+    expect(loadPaneOuterBorders(false)).toBe(false);
+    for (const raw of [undefined, null, "true", 1, {}]) {
+      expect(loadPaneOuterBorders(raw), String(raw)).toBe(false);
+    }
+  });
+});
+
+describe("useSettingsStore — tab バーの位置・右端エントリ・pane の外周（20260922-tabbar-pane-appearance。PR #12 から取り込み）", () => {
+  it("何も保存されていなければ、位置は上・右端は空・区切りは半角スペース・外周は無し", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.tabBarPosition).toBe("top");
+    expect(store.tabBarRight).toEqual([]);
+    expect(store.tabBarRightSeparator).toBe(" ");
+    expect(store.paneOuterBorders).toBe(false);
+  });
+
+  it("位置を変えると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setTabBarPosition("bottom");
+    expect(store.tabBarPosition, "押した時点で反映").toBe("bottom");
+    expect(readPrefs()["tabBarPosition"]).toBe("bottom");
+    expect(useSettingsStore(createPinia()).tabBarPosition).toBe("bottom");
+  });
+
+  it("外周の枠を有効にすると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneOuterBorders(true);
+    expect(store.paneOuterBorders, "押した時点で反映").toBe(true);
+    expect(readPrefs()["paneOuterBorders"]).toBe(true);
+    expect(useSettingsStore(createPinia()).paneOuterBorders).toBe(true);
+  });
+
+  it("右端エントリの追加・並び替え・削除・更新・区切り文字（AC3・AC4 相当）", () => {
+    const store = useSettingsStore(pinia);
+    store.addTabBarRightEntry("hostname");
+    store.addTabBarRightEntry("text");
+    expect(store.tabBarRight).toEqual([{ kind: "hostname" }, { kind: "text", text: "" }]);
+
+    store.updateTabBarRightEntry(1, { kind: "text", text: "hello" });
+    expect(store.tabBarRight[1]).toEqual({ kind: "text", text: "hello" });
+
+    store.moveTabBarRightEntry(1, -1); // 上へ：text が先頭に来る
+    expect(store.tabBarRight).toEqual([{ kind: "text", text: "hello" }, { kind: "hostname" }]);
+    store.moveTabBarRightEntry(0, -1); // 端（0番目をさらに上へ）は何もしない
+    expect(store.tabBarRight).toEqual([{ kind: "text", text: "hello" }, { kind: "hostname" }]);
+
+    store.removeTabBarRightEntry(0);
+    expect(store.tabBarRight).toEqual([{ kind: "hostname" }]);
+    expect(readPrefs()["tabBarRight"]).toEqual([{ kind: "hostname" }]);
+
+    store.setTabBarRightSeparator(" / ");
+    expect(store.tabBarRightSeparator).toBe(" / ");
+    expect(readPrefs()["tabBarRightSeparator"]).toBe(" / ");
+  });
+
+  it("上限（MAX_TAB_BAR_RIGHT_ENTRIES=16）に達すると追加は何もしない", () => {
+    const store = useSettingsStore(pinia);
+    for (let i = 0; i < 16; i++) store.addTabBarRightEntry("zoom");
+    expect(store.tabBarRight).toHaveLength(16);
+    store.addTabBarRightEntry("zoom");
+    expect(store.tabBarRight, "17個目は追加されない").toHaveLength(16);
+  });
+
+  // `statusSymbols`/`paneFrameThickness` と同じ形：壊れた値でも起動できる。
+  it("保存された値が壊れていれば既定で起動する", () => {
+    writePrefs({ tabBarPosition: "left", tabBarRight: "not an array", tabBarRightSeparator: 5, paneOuterBorders: "yes" });
+    const store = useSettingsStore(createPinia());
+    expect(store.tabBarPosition).toBe("top");
+    expect(store.tabBarRight).toEqual([]);
+    expect(store.tabBarRightSeparator).toBe(" ");
+    expect(store.paneOuterBorders).toBe(false);
+  });
+
+  it("別のタブ・ウィンドウでの変更に storage イベントで追従する", () => {
+    const store = useSettingsStore(pinia);
+    writePrefs({ tabBarPosition: "bottom", paneOuterBorders: true });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.tabBarPosition).toBe("bottom");
+    expect(store.paneOuterBorders).toBe(true);
   });
 });
 

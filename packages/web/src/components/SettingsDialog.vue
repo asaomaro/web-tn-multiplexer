@@ -10,6 +10,12 @@ import { DISPLAY_STATES, stateGlyph, stateLabel } from "../store/stateIndicator.
 import { useViewStore } from "../store/view.js";
 import { effectiveScrollback, scrollbackChoices, type ScrollbackPref } from "../term/scrollback.js";
 import { siblingThemes, THEME_LABELS } from "../theme/themes.js";
+import {
+  MAX_TAB_BAR_RIGHT_ENTRIES,
+  type DatetimeFormat,
+  type TabBarPosition,
+  type TabBarRightEntry,
+} from "../tabbar/tabBarRight.js";
 import KeySettings from "./KeySettings.vue";
 
 /**
@@ -160,6 +166,92 @@ function choosePaneFrameThickness(v: PaneFrameThickness): void {
 /** pane にエージェント名を可視で出すか（20260922-appearance-settings-rest。既定は無効。AC10）。 */
 function toggleAgentNameVisible(): void {
   settings.setPaneAgentNameVisible(!settings.paneAgentNameVisible);
+}
+
+/**
+ * tab バーの位置・右端のエントリ・pane 領域の外周の枠（20260922-tabbar-pane-appearance。PR #12 から
+ * 取り込み）。位置・外周は既存の switch/select と同じ「選んだ時点で反映・保存」（確定ボタン無し）。
+ * 右端エントリの追加・削除・並び替え・区切り文字も同様、`:value` を読んで `@change`/Enter で確定する形
+ * （打ちかけの値で保存しない。テーマの `chooseThemeFor` と同じ流儀）。
+ */
+const TAB_BAR_POSITIONS: readonly { value: TabBarPosition; label: string }[] = [
+  { value: "top", label: "上" },
+  { value: "bottom", label: "下" },
+];
+const ENTRY_KINDS: readonly { value: TabBarRightEntry["kind"]; label: string }[] = [
+  { value: "zoom", label: "拡大の状態" },
+  { value: "hostname", label: "接続先のホスト名" },
+  { value: "datetime", label: "日時" },
+  { value: "text", label: "固定文字列" },
+];
+const DATETIME_FORMATS: readonly { value: DatetimeFormat; label: string }[] = [
+  { value: "time", label: "時刻（時:分）" },
+  { value: "time-seconds", label: "時刻（時:分:秒）" },
+  { value: "date", label: "日付" },
+  { value: "date-time", label: "日付と時刻" },
+];
+
+/** 「追加する種類」の選択（既定は先頭の zoom）。 */
+const newEntryKind = ref<TabBarRightEntry["kind"]>("zoom");
+
+function entryKindLabel(kind: TabBarRightEntry["kind"]): string {
+  return ENTRY_KINDS.find((k) => k.value === kind)?.label ?? kind;
+}
+
+function onTabBarPositionChange(ev: Event): void {
+  settings.setTabBarPosition((ev.target as HTMLSelectElement).value as TabBarPosition);
+}
+
+function togglePaneOuterBorders(): void {
+  settings.setPaneOuterBorders(!settings.paneOuterBorders);
+}
+
+function addTabBarRightEntry(): void {
+  settings.addTabBarRightEntry(newEntryKind.value);
+}
+
+/** 削除後のフォーカスの行き先を `KeySettings.vue` の `removeBinding` と同じ考え方で実装する（AC-I4）。 */
+function removeTabBarRightEntry(index: number, ev: Event): void {
+  // 「追加」ボタンは `<ul class="tabbar-right-list">` の**外**（兄弟の `<div>`）にあるので、フォールバック先も
+  // 含めて捜す範囲は fieldset 全体にする（`ul` だけだと「最後の行を消す→追加ボタンへ」が見つからない）。
+  const fieldsetEl = (ev.currentTarget as HTMLElement | null)?.closest("fieldset.tabbar-right-fieldset") ?? null;
+  settings.removeTabBarRightEntry(index);
+  void nextTick(() => {
+    // 消えた位置に繰り上がった行の［削除］。最後を消したときは無いので［追加］へ。
+    const removeButtons = fieldsetEl?.querySelectorAll<HTMLElement>("[data-remove-entry]") ?? [];
+    (removeButtons[index] ?? fieldsetEl?.querySelector<HTMLElement>("[data-add-entry]"))?.focus();
+  });
+}
+
+function moveTabBarRightEntry(index: number, direction: -1 | 1): void {
+  settings.moveTabBarRightEntry(index, direction);
+}
+
+function onTabBarRightEntryFormatChange(index: number, ev: Event): void {
+  settings.updateTabBarRightEntry(index, { kind: "datetime", format: (ev.target as HTMLSelectElement).value as DatetimeFormat });
+}
+
+function onTabBarRightEntryTextChange(index: number, ev: Event): void {
+  settings.updateTabBarRightEntry(index, { kind: "text", text: (ev.target as HTMLInputElement).value });
+}
+
+/**
+ * Enter でも確定する。**`blur()` を呼んで `change` に任せない**——`.value` を script で書き換えた入力欄は、
+ * ブラウザが「利用者が触った」と扱わない実装があり、blur で必ず `change` が立つとは限らない（`onPathEnter`
+ * と同じ、IME 変換確定の Enter を除く注意も適用する）。ここで直接読んで確定する。
+ */
+function onTabBarRightEntryTextEnter(index: number, ev: KeyboardEvent): void {
+  if (ev.isComposing || ev.keyCode === 229) return;
+  settings.updateTabBarRightEntry(index, { kind: "text", text: (ev.target as HTMLInputElement).value });
+}
+
+function onTabBarRightSeparatorChange(ev: Event): void {
+  settings.setTabBarRightSeparator((ev.target as HTMLInputElement).value);
+}
+
+function onTabBarRightSeparatorEnter(ev: KeyboardEvent): void {
+  if (ev.isComposing || ev.keyCode === 229) return;
+  settings.setTabBarRightSeparator((ev.target as HTMLInputElement).value);
 }
 
 /** サーバの上限（snapshot の `limits`）。上限を超える値は、選んでも黙って上限分しか届かないので出さない。 */
@@ -400,6 +492,86 @@ function onNativeCancel(ev: Event): void {
             <span>pane にエージェント名を表示する</span>
           </button>
         </li>
+        <li class="settings-row">
+          <button type="button" role="switch" class="settings-switch" :aria-checked="settings.paneOuterBorders" @click="togglePaneOuterBorders">
+            <span class="settings-mark">{{ settings.paneOuterBorders ? "入" : "切" }}</span>
+            <span>pane 領域の外周の枠</span>
+          </button>
+        </li>
+        <li class="settings-row">
+          <label class="settings-select-row">
+            <span>tab バーの位置</span>
+            <select class="settings-select" :value="settings.tabBarPosition" @change="onTabBarPositionChange">
+              <option v-for="p in TAB_BAR_POSITIONS" :key="p.value" :value="p.value">{{ p.label }}</option>
+            </select>
+          </label>
+        </li>
+        <li class="settings-row">
+          <fieldset class="settings-fieldset tabbar-right-fieldset">
+            <legend class="settings-legend">tab バー右端の表示</legend>
+            <ul class="tabbar-right-list">
+              <li v-for="(entry, index) in settings.tabBarRight" :key="index" class="tabbar-right-entry">
+                <span class="tabbar-right-entry-kind">{{ entryKindLabel(entry.kind) }}</span>
+                <select
+                  v-if="entry.kind === 'datetime'"
+                  class="settings-select"
+                  :value="entry.format"
+                  aria-label="日時の書式"
+                  @change="onTabBarRightEntryFormatChange(index, $event)"
+                >
+                  <option v-for="f in DATETIME_FORMATS" :key="f.value" :value="f.value">{{ f.label }}</option>
+                </select>
+                <input
+                  v-if="entry.kind === 'text'"
+                  type="text"
+                  class="settings-path"
+                  aria-label="固定文字列"
+                  :value="entry.text"
+                  @change="onTabBarRightEntryTextChange(index, $event)"
+                  @keydown.enter="onTabBarRightEntryTextEnter(index, $event)"
+                />
+                <button type="button" class="settings-btn" :disabled="index === 0" @click="moveTabBarRightEntry(index, -1)">上へ</button>
+                <button
+                  type="button"
+                  class="settings-btn"
+                  :disabled="index === settings.tabBarRight.length - 1"
+                  @click="moveTabBarRightEntry(index, 1)"
+                >
+                  下へ
+                </button>
+                <button type="button" class="settings-btn" data-remove-entry @click="removeTabBarRightEntry(index, $event)">削除</button>
+              </li>
+            </ul>
+            <div class="tabbar-right-add">
+              <label class="settings-select-row">
+                <span>追加する種類</span>
+                <select v-model="newEntryKind" class="settings-select">
+                  <option v-for="k in ENTRY_KINDS" :key="k.value" :value="k.value">{{ k.label }}</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                class="settings-btn"
+                data-add-entry
+                :disabled="settings.tabBarRight.length >= MAX_TAB_BAR_RIGHT_ENTRIES"
+                @click="addTabBarRightEntry"
+              >
+                追加
+              </button>
+            </div>
+            <label class="settings-select-row">
+              <span>右端エントリの区切り文字</span>
+              <input
+                type="text"
+                class="settings-path"
+                aria-label="区切り文字"
+                :value="settings.tabBarRightSeparator"
+                @change="onTabBarRightSeparatorChange"
+                @keydown.enter="onTabBarRightSeparatorEnter"
+              />
+            </label>
+          </fieldset>
+        </li>
       </ul>
     </section>
     <section class="settings-section" aria-labelledby="settings-terminal">
@@ -614,5 +786,53 @@ function onNativeCancel(ev: Event): void {
   margin: 1em 0 0;
   font-size: 0.85em;
   opacity: 0.7;
+}
+/* 20260922-tabbar-pane-appearance（PR #12 から取り込み）：`KeySettings.vue` の `.keys-btn` と同じ見た目
+ * （押せる大きさ・枠）。 */
+.settings-btn {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.15em 0.7em;
+  min-height: 1.75rem;
+  cursor: pointer;
+}
+.settings-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tabbar-right-fieldset {
+  margin: 0;
+  padding: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+.tabbar-right-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+}
+.tabbar-right-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em;
+}
+.tabbar-right-entry-kind {
+  flex: none;
+  min-width: 6em;
+}
+.tabbar-right-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6em;
 }
 </style>

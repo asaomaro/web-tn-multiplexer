@@ -2,7 +2,9 @@
 import { computed, inject, nextTick, onUnmounted, ref, watch } from "vue";
 import { ActionDispatcherKey, ConnectionKey, TerminalRegistryKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
+import { formatDatetime, type TabBarRightEntry } from "../tabbar/tabBarRight.js";
 
 /**
  * tab の一覧（design「サイドバー」隣接の tab バー。D56 の訂正 9・10）。状態の印は出さない、拡大中は「Z」だけ。
@@ -10,11 +12,16 @@ import { useViewStore } from "../store/view.js";
  *
  * **tab が1個のときは自動で隠す**（20260922-appearance-settings-rest。design「US2」・AC4〜AC6）。
  * 切り替える先が無いので、常に表示し続ける意味が無い——空いた縦の領域を端末に使う。
- * **右端に現在時刻を出す**（design「US3」・AC7・AC8。tab バーが表示されているときだけ、装飾的な情報
- * として `aria-hidden` で出す）。
+ * **上/下の位置・右端に複数エントリ（拡大の状態・ホスト名・日時・固定文字列）を出せる**
+ * （20260922-tabbar-pane-appearance。PR #12 から取り込み。design 元は herdr の `ui.tab_bar_position`・
+ * `ui.tab_bar_right` 相当）。既定は今までどおり位置「上」・右端は空（何も出ない）——20260922-
+ * appearance-settings-rest の「常時 HH:mm」は、このより一般的な「日時エントリを足す」形に統合された
+ * （利用者が設定で日時エントリを足せば同じ見た目になる。既定を維持するために `loadTabBarRightEntries`
+ * 側の「空なら空」という素直な読み込みは変えない）。
  */
 const session = useSessionStore();
 const view = useViewStore();
+const settings = useSettingsStore();
 const actions = inject(ActionDispatcherKey);
 const conn = inject(ConnectionKey);
 const registry = inject(TerminalRegistryKey, undefined);
@@ -48,31 +55,48 @@ watch(visible, (isVisible) => {
   });
 });
 
+/** いま表示中の tab（右端の zoom エントリに使う。20260922-tabbar-pane-appearance）。 */
+const currentTab = computed(() => (view.tabId ? session.tabs.get(view.tabId) : undefined));
+
 /**
- * 現在時刻（AC7・AC8）。15秒ごとに更新——分の変わり目を最大15秒の遅延で拾えば足りる（design「US3」）。
- * **表示されている間だけ動かす**——`v-if` はこのコンポーネント自身の内側にあり、隠れていても
- * コンポーネント自体は生き続けるので、素朴に `onMounted`/`onUnmounted` だけに任せると隠れている
- * 間も無駄に動き続ける。
+ * 右端の日時（`tabBarRight` に `datetime` 種別が1つでもあるときだけ動かす）。15秒ごとに更新——分の
+ * 変わり目を最大15秒の遅延で拾えば足りる（design「US3」の元の粒度を踏襲。herdr は秒単位だが、この
+ * 粒度で困った報告は無い）。**表示されている間だけ動かす**——`v-if` はこのコンポーネント自身の内側に
+ * あり、隠れていてもコンポーネント自体は生き続けるので、素朴に `onMounted`/`onUnmounted` だけに
+ * 任せると隠れている間・日時エントリが無い間も無駄に動き続ける。
  */
+const hasDatetimeEntry = computed(() => settings.tabBarRight.some((e) => e.kind === "datetime"));
+const clockActive = computed(() => visible.value && hasDatetimeEntry.value);
 const now = ref(new Date());
 let clockTimer: ReturnType<typeof setInterval> | undefined;
 watch(
-  visible,
-  (isVisible) => {
+  clockActive,
+  (isActive) => {
     clearInterval(clockTimer);
     clockTimer = undefined;
-    if (!isVisible) return;
-    now.value = new Date(); // 隠れていた間に古くなった値を、出た瞬間に最新へ
+    if (!isActive) return;
+    now.value = new Date(); // 止まっていた間に古くなった値を、動き出した瞬間に最新へ
     clockTimer = setInterval(() => (now.value = new Date()), 15_000);
   },
   { immediate: true },
 );
 onUnmounted(() => clearInterval(clockTimer));
-const clockText = computed(() => {
-  const h = String(now.value.getHours()).padStart(2, "0");
-  const m = String(now.value.getMinutes()).padStart(2, "0");
-  return `${h}:${m}`;
-});
+
+function entryText(entry: TabBarRightEntry): string {
+  switch (entry.kind) {
+    case "zoom":
+      return currentTab.value?.zoomedPaneId ? "Z" : "";
+    case "hostname":
+      return session.host?.hostname ?? "";
+    case "datetime":
+      return formatDatetime(entry.format, now.value);
+    case "text":
+      return entry.text;
+  }
+}
+
+/** 右端の帯の文字列（既定は空＝何も出ない。設定でエントリを足すと出る）。 */
+const rightText = computed(() => settings.tabBarRight.map(entryText).join(settings.tabBarRightSeparator));
 
 function selectTab(tabId: string): void {
   const tab = session.tabs.get(tabId);
@@ -104,8 +128,15 @@ function onWheel(ev: WheelEvent): void {
 </script>
 
 <template>
-  <div v-if="tabs.length !== 1" ref="root" class="tab-bar" @wheel="onWheel">
-    <!-- `role="tablist"` が持てるのは `tab` だけなので、＋ と時刻はこの入れ子の外に置く。 -->
+  <div
+    v-if="tabs.length !== 1"
+    ref="root"
+    class="tab-bar"
+    :class="`tab-bar-${settings.tabBarPosition}`"
+    :style="{ order: settings.tabBarPosition === 'bottom' ? 1 : 0 }"
+    @wheel="onWheel"
+  >
+    <!-- `role="tablist"` が持てるのは `tab` だけなので、＋ と右端の帯はこの入れ子の外に置く。 -->
     <div class="tab-bar-tabs" role="tablist">
       <button
         v-for="tab in tabs"
@@ -123,7 +154,7 @@ function onWheel(ev: WheelEvent): void {
       </button>
     </div>
     <button type="button" class="tab-bar-new" :disabled="!view.workspaceId" aria-label="新しいタブ" @click="onNewTab" @keydown.stop>＋</button>
-    <span class="tab-bar-clock" aria-hidden="true">{{ clockText }}</span>
+    <span v-if="rightText" class="tab-bar-right" aria-hidden="true">{{ rightText }}</span>
   </div>
 </template>
 
@@ -134,8 +165,16 @@ function onWheel(ev: WheelEvent): void {
 .tab-bar {
   flex: none;
   display: flex;
+  align-items: center;
   background: var(--wtm-menu-bg, #282a36);
+}
+/* 区切り線は帯が接する側に置く（20260922-tabbar-pane-appearance）。上：pane 領域との境が下側。
+ * 下：pane 領域との境が上側。 */
+.tab-bar-top {
   border-bottom: 1px solid var(--wtm-menu-border, #44475a);
+}
+.tab-bar-bottom {
+  border-top: 1px solid var(--wtm-menu-border, #44475a);
 }
 /* 横スクロールはタブの列だけ。＋ は右端に残す（スクロールの向こうへ消えない）。 */
 .tab-bar-tabs {
@@ -183,12 +222,17 @@ function onWheel(ev: WheelEvent): void {
   opacity: 0.7;
   font-size: 0.85em;
 }
-/* 現在時刻（20260922-appearance-settings-rest。design「US3」・AC7）。装飾的な情報なので控えめに。 */
-.tab-bar-clock {
-  flex: none;
-  align-self: center;
+/* 右端の帯（20260922-tabbar-pane-appearance。PR #12 から取り込み）。タブの列・＋ の後、右端に寄せる。 */
+.tab-bar-right {
+  flex: 1 1 auto;
   padding: 0 0.8em;
+  overflow: hidden;
+  text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
-  opacity: 0.7;
+  color: var(--wtm-fg, #f8f8f2);
+  opacity: 0.75;
+  font-size: 0.9em;
 }
 </style>

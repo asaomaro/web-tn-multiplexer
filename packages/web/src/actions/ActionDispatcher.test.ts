@@ -661,6 +661,10 @@ describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-a
     expect(settings.paneFrameThickness).toBe("default");
     expect(settings.paneAgentNameVisible).toBe(false);
     expect(settings.themeAuto).toBe(false);
+    expect(settings.tabBarPosition).toBe("top");
+    expect(settings.tabBarRight).toEqual([]);
+    expect(settings.tabBarRightSeparator).toBe(" ");
+    expect(settings.paneOuterBorders).toBe(false);
     expect(view.sidebarWidth).toBe(240);
     expect(view.sidebarCollapsed).toBe(false);
     expect(view.agentSort).toBe("grouped");
@@ -678,6 +682,10 @@ describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-a
         themeAuto: true,
         paneFrameThickness: "thick",
         paneAgentNameVisible: true,
+        tabBarPosition: "bottom",
+        tabBarRight: [{ kind: "hostname" }],
+        tabBarRightSeparator: " / ",
+        paneOuterBorders: true,
         sidebarWidth: 300,
         sidebarCollapsed: true,
         agentSort: "priority",
@@ -694,6 +702,10 @@ describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-a
     expect(settings.themeAuto).toBe(true);
     expect(settings.paneFrameThickness).toBe("thick");
     expect(settings.paneAgentNameVisible).toBe(true);
+    expect(settings.tabBarPosition).toBe("bottom");
+    expect(settings.tabBarRight).toEqual([{ kind: "hostname" }]);
+    expect(settings.tabBarRightSeparator).toBe(" / ");
+    expect(settings.paneOuterBorders).toBe(true);
     expect(view.sidebarWidth).toBe(300);
     expect(view.sidebarCollapsed).toBe(true);
     expect(view.agentSort).toBe("priority");
