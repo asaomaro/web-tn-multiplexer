@@ -194,6 +194,19 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       「AltGr で入力する文字は…」と拒否されること。［herdr のおすすめの直接のキー］を足したあとも、`AltGr+8`・`AltGr+9`（`[`・`]`）が端末に打てること。**Windows・Linux**——取り込み待ちで `Ctrl+T`・`Ctrl+W` を押しても何も取り込まれない（ブラウザが先に処理する）こと。
       **macOS**——`Option+D`（QWERTY 配列）が `alt+d` として取り込まれ、`∂` にならないこと。`Cmd+T`・`Cmd+W` はブラウザが先に受けるので取り込まれず、`Ctrl+T` は画面に届いて取り込める
       （`ctrl+t` として。端末のアプリが使うキーなので、割り当てる前に確かめる）こと。IME を有効にしたまま取り込み待ちに入り、変換中のキーが取り込まれないこと。
+- [ ] キーバインドのプリセット（20260922-keybinding-presets）：
+      （1）`prefix+s` で設定を開き、節「キー」の一括操作の `<select>` で「tmux 風」を選び、［足す］を押す。
+      期待：案内文に「tmux 風を N 個足しました：…」（`prefix+%` 等を含む）が出て、右へ分割の行の割り当てに
+      `prefix+v / prefix+%` が並ぶ。
+      （2）Esc で閉じ、pane で `Ctrl+B` → `%` を押す。期待：`prefix+%` で右へ分割される（既存の `prefix+v` と同じ動作）。
+      （3）設定を開き直し、`<select>` を既定（「herdr のおすすめの直接のキー（ctrl+alt）」）へ戻して［足す］を押す。
+      期待：案内文に「herdr のおすすめの直接のキー（ctrl+alt）を … 個足しました」（まだ足していない分だけ）。
+      （4）［すべて既定に戻す］→［戻す］。期待：tmux 風・herdr のおすすめ双方の追加分が消え、右へ分割は
+      `prefix+v` だけに戻る。`<select>` は既定（先頭）のまま。
+      **自動のテストは Linux の Chromium だけなので、次を環境ごとに手で確かめる**：
+      **Firefox・Safari・Windows・macOS**——`<select>` の開閉・矢印キーでの選択が、既存のキー取り込み待ち
+      （節「キー」の他の部分）や設定ダイアログの Esc 閉じと干渉しないこと（20260921-keybinding-customization
+      で確かめた挙動が、この `<select>` を挟んでも変わらないこと）。
 - [ ] キーの設定の使い勝手（20260922-keybinding-usability）：**AC1〜AC7・AC9・AC11・AC14・
       AC-I1〜AC-I12 は `packages/e2e` の `key-bindings.spec.ts` が自動で確かめている
       （Linux・Chromium）ので、ここでは自動で確かめられない AC8・AC12・AC13 だけを手で確かめる**。

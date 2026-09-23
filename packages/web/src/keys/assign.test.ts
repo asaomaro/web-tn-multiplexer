@@ -603,9 +603,9 @@ describe("applyRecommended — herdr のおすすめの直接のキー（AC10）
     };
     const r = applyRecommended(resolveKeymap(prefs).keymap, prefs);
     expect(r.added).toHaveLength(8);
-    expect(r.skipped.map((s) => s.chord).sort()).toEqual(["ctrl+alt+d", "ctrl+alt+z"]);
-    expect(r.skipped.find((s) => s.chord === "ctrl+alt+z")!.reason).toContain("キー一覧");
-    expect(r.skipped.find((s) => s.chord === "ctrl+alt+d")!.reason).toContain("prefix");
+    expect(r.skipped.map((s) => s.binding).sort()).toEqual(["ctrl+alt+d", "ctrl+alt+z"]);
+    expect(r.skipped.find((s) => s.binding === "ctrl+alt+z")!.reason).toContain("キー一覧");
+    expect(r.skipped.find((s) => s.binding === "ctrl+alt+d")!.reason).toContain("prefix");
   });
 
   it("上書き済みの操作には、上書きの後ろに足す", () => {
@@ -627,9 +627,32 @@ describe("applyRecommended — 一式の中の重なり（足すたびに表を�
     const r = applyRecommended(DEFAULT_KEYMAP, emptyKeyPrefs(), set);
     expect(r.added).toEqual(["ctrl+alt+y"]);
     expect(r.skipped).toHaveLength(1);
-    expect(r.skipped[0]!).toMatchObject({ id: "goto", chord: "ctrl+alt+y" });
+    expect(r.skipped[0]!).toMatchObject({ id: "goto", binding: "ctrl+alt+y" });
     expect(r.skipped[0]!.reason).toContain("拡大表示");
     expect(resolveKeymap(r.prefs).keymap.bindingsOf("goto")).toEqual(["prefix+g"]);
+  });
+});
+
+describe("applyRecommended — 一般化（20260922-keybinding-presets。design「`assign.ts` の一般化」）", () => {
+  it("`prefix+…` のエントリ（tmux 風プリセット相当）も、prefix の後のキーとして正しく足す", () => {
+    const set = [["split_vertical", "prefix+%"]] as const;
+    const r = applyRecommended(DEFAULT_KEYMAP, emptyKeyPrefs(), set);
+    expect(r.added).toEqual(["prefix+%"]);
+    expect(r.skipped).toEqual([]);
+    const km2 = resolveKeymap(r.prefs).keymap;
+    expect(km2.bindingsOf("split_vertical")).toEqual(["prefix+v", "prefix+%"]);
+    expect(km2.ownerOf("prefix", "%")).toBe("split_vertical");
+  });
+
+  it("読めない割り当て文字列は、その 1 件だけ skipped にし、他のエントリは通常どおり処理する", () => {
+    const set = [
+      ["zoom", ""],
+      ["goto", "ctrl+alt+y"],
+    ] as const;
+    const r = applyRecommended(DEFAULT_KEYMAP, emptyKeyPrefs(), set);
+    expect(r.added).toEqual(["ctrl+alt+y"]);
+    expect(r.skipped).toEqual([{ id: "zoom", binding: "", reason: "読めない割り当てです。" }]);
+    expect(resolveKeymap(r.prefs).keymap.bindingsOf("goto")).toEqual(["prefix+g", "ctrl+alt+y"]);
   });
 });
 

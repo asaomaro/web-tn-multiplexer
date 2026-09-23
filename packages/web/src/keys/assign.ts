@@ -280,17 +280,21 @@ export const RECOMMENDED_DIRECT: ReadonlyArray<readonly [ActionId, string]> = [
 
 export interface RecommendedResult {
   prefs: KeyPrefs;
-  /** 足せたもの（`ctrl+alt+h` 等）。 */
+  /** 足せたもの（表に書かれた割り当て文字列そのまま。`ctrl+alt+h`・`prefix+%` 等）。 */
   added: string[];
   /** すでにその操作が持っていたもの（何もしない）。 */
   already: string[];
-  /** 足せなかったもの（別の操作が使っている・prefix と同じ）と理由。 */
-  skipped: { id: ActionId; chord: string; reason: string }[];
+  /** 足せなかったもの（別の操作が使っている・prefix と同じ・読めない）と理由。 */
+  skipped: { id: ActionId; binding: string; reason: string }[];
 }
 
 /**
- * おすすめの一式を足す（AC10）。**冪等**（すでに持っていれば何もしない）。1 つずつ通常の取り込みと同じ検証（`validateAssignment`）を通し、通らないものは足さずに理由を返す。
- * 足すたびに表を作り直すので、一式の中の重なりも見える（`set` は一式の差し替え。既定は herdr のおすすめ。一式の中の重なりを試すテストが使う）。
+ * プリセット（一式）を足す（AC10。20260922-keybinding-presets で `RECOMMENDED_DIRECT` 専用から
+ * 一般化——design「`assign.ts` の一般化」）。**冪等**（すでに持っていれば何もしない）。表の各エントリの
+ * 割り当て文字列は `ActionDef.defaults` と同じ書式（`prefix+…` も bare の直接のキーも可）で、
+ * `parseBinding` で `via`/chord に分けたうえで、1 つずつ通常の取り込みと同じ検証（`validateAssignment`）
+ * を通す。通らないものは足さずに理由を返す。足すたびに表を作り直すので、一式の中の重なりも見える
+ * （`set` は一式の差し替え。既定は herdr のおすすめ。一式の中の重なりを試すテストが使う）。
  */
 export function applyRecommended(
   km: ResolvedKeymap,
@@ -300,23 +304,28 @@ export function applyRecommended(
   let current = prefs;
   let working = km;
   const result: RecommendedResult = { prefs, added: [], already: [], skipped: [] };
-  for (const [id, chord] of set) {
-    if (working.bindingsOf(id).includes(chord)) {
-      result.already.push(chord);
+  for (const [id, binding] of set) {
+    if (working.bindingsOf(id).includes(binding)) {
+      result.already.push(binding);
+      continue;
+    }
+    const parsed = parseBinding(binding);
+    if (parsed === null) {
+      result.skipped.push({ id, binding, reason: "読めない割り当てです。" });
       continue;
     }
     const r = validateAssignment(
       working,
-      { kind: "binding", id, via: "direct" },
-      chordToKeyInput(chord),
+      { kind: "binding", id, via: parsed.via },
+      chordToKeyInput(parsed.chord),
     );
     if (!r.ok) {
-      result.skipped.push({ id, chord, reason: r.reason });
+      result.skipped.push({ id, binding, reason: r.reason });
       continue;
     }
     current = withBindings(current, id, [...working.bindingsOf(id), r.binding]);
     working = resolveKeymap(current).keymap;
-    result.added.push(chord);
+    result.added.push(binding);
   }
   result.prefs = current;
   return result;
