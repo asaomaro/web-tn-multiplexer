@@ -67,6 +67,11 @@ parent: 20260918-web-terminal-multiplexer
       実測: 実装 36 ファイル・単体 1161 件 / E2E 69 件 pass。**削除とグループ化は下の行に残っている**
 - [ ] workspace のグルーピング: herdr 同等の Git worktree グループ＋利用者による任意の束ね、workspace・tab の並べ替え〔D6〕。
       **worktree の作成・一覧は 20260920-git-worktree-actions で済んだので、残りはグループ化と並べ替え** (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
+- [x] D&D による pane の入れ替え（Web 固有の操作。上の項目のうち入れ替えだけ）: 20260923-pane-name-dnd-swap で対応。
+      pane 名ラベルを別の pane の上へドラッグ＆ドロップすると同一 tab 内の2つの pane が入れ替わる
+      （`pane.swap_with`。`packages/server/src/session/SessionModel.ts` の `swapPaneWith`）。
+      実測: 実装 11 ファイル・単体 2372 件 pass（`packages/web/src/components/PaneFrame.test.ts` 34 件含む）。
+      **分割・分割解除・別 tab / 新規 workspace への移動は下の行に残っている**
 - [ ] D&D による pane の分割 / 分割解除 / 移動（Web 固有の操作） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] エージェント対応の拡充: 主要数種以外の検出、herdr の integrations / plugins 相当 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] 複数ホストの集約: herdr の remote / several machines 相当。複数ホストのセッションを 1 画面に (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）

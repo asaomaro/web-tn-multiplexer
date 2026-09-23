@@ -149,6 +149,49 @@ describe("SessionModel — focus / navigation", () => {
     });
   });
 
+  // 20260923-pane-name-dnd-swap：任意の2つの pane を入れ替える（ドラッグでの入れ替え用。隣接不要）。
+  describe("swapPaneWith", () => {
+    it("同一 tab の2つの pane を入れ替える（隣接していなくてもよい）", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      const { pane: right } = model.splitPane(pane.id, "right", undefined, p2, init);
+      const p3 = model.reserveNextPaneId();
+      model.splitPane(right.id, "down", undefined, p3, init);
+
+      const ok = model.swapPaneWith(pane.id, p3);
+
+      expect(ok).toBe(true);
+      const layout = model.getTab(tab.id)?.layout;
+      // a 側の葉が入れ替わっている（元は pane.id、今は p3）。
+      expect(layout).toMatchObject({ a: { paneId: p3 } });
+    });
+
+    it("同じ pane 同士では何もしない", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getTab(tab.id)?.layout;
+
+      expect(model.swapPaneWith(pane.id, pane.id)).toBe(false);
+      expect(model.getTab(tab.id)?.layout).toEqual(before);
+    });
+
+    it("別 tab の pane とは入れ替えない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const { pane: otherTabPane } = model.createWorkspace("/home/u", "other", init);
+
+      expect(model.swapPaneWith(pane.id, otherTabPane.id)).toBe(false);
+    });
+
+    it("存在しない pane（相手側）とは入れ替えない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+
+      expect(model.swapPaneWith(pane.id, "p-nonexistent")).toBe(false);
+    });
+  });
+
   it("cyclePane focuses the next pane in depth-first order, wrapping at the ends", () => {
     const model = new SessionModel();
     const { pane } = model.createWorkspace("/home/u", "api", init);

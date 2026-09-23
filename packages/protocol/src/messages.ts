@@ -184,6 +184,18 @@ export interface PaneSwapResult {
   paneId: string;
 }
 
+/**
+ * 任意の2つの pane を入れ替える（20260923-pane-name-dnd-swap。ドラッグでの入れ替え用）。
+ * 既存の `pane.swap`（方向ベース。隣接する pane のみ）とは別方式——キーボード操作の意味を変えない
+ * ため（decisions.md D4）。
+ */
+export const PaneSwapWithParams = z.object({ paneId, otherPaneId: paneId });
+export type PaneSwapWithParams = z.infer<typeof PaneSwapWithParams>;
+export interface PaneSwapWithResult {
+  /** 同一 tab でない・同じ pane 同士等、何も起きなかったときは false（design「エラー処理」）。 */
+  ok: boolean;
+}
+
 export const PaneZoomParams = z.object({ paneId, mode: zoomMode });
 export type PaneZoomParams = z.infer<typeof PaneZoomParams>;
 
@@ -288,6 +300,7 @@ export const METHOD_SCHEMAS = {
   "pane.rename": PaneRenameParams,
   "pane.focus_direction": PaneFocusDirectionParams,
   "pane.swap": PaneSwapParams,
+  "pane.swap_with": PaneSwapWithParams,
   "pane.zoom": PaneZoomParams,
   "pane.resize": PaneResizeParams,
   "pane.input.set": PaneInputSetParams,
@@ -325,6 +338,7 @@ export interface MethodResultMap {
   "pane.rename": Record<string, never>;
   "pane.focus_direction": PaneFocusDirectionResult;
   "pane.swap": PaneSwapResult;
+  "pane.swap_with": PaneSwapWithResult;
   "pane.zoom": Record<string, never>;
   "pane.resize": Record<string, never>;
   "pane.input.set": Record<string, never>;

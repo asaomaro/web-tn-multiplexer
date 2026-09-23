@@ -459,6 +459,20 @@ export class SessionModel {
     return neighbor;
   }
 
+  /**
+   * 任意の2つの pane を入れ替える（20260923-pane-name-dnd-swap。ドラッグでの入れ替え用。
+   * `swapPane` と違い隣接である必要は無い。design D4）。同一 tab の別 pane でなければ何もせず false。
+   */
+  swapPaneWith(paneId: PaneId, otherPaneId: PaneId): boolean {
+    if (paneId === otherPaneId) return false;
+    const pane = this.requirePane(paneId);
+    const other = this.panes.get(otherPaneId);
+    if (!other || other.tabId !== pane.tabId) return false;
+    const tab = this.requireTab(pane.tabId);
+    this.tabs.set(tab.id, { ...tab, layout: Layout.swap(tab.layout, paneId, otherPaneId) });
+    return true;
+  }
+
   zoomPane(paneId: PaneId, mode: "toggle" | "on" | "off"): void {
     const pane = this.requirePane(paneId);
     const tab = this.requireTab(pane.tabId);

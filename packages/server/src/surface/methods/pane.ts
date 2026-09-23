@@ -7,6 +7,7 @@ import {
   PaneResizeParams,
   PaneSplitParams,
   PaneSwapParams,
+  PaneSwapWithParams,
   PaneZoomParams,
 } from "@wtm/protocol";
 import type { ControlSurface } from "../ControlSurface.js";
@@ -70,6 +71,15 @@ export function registerPaneMethods(surface: ControlSurface, deps: MethodDeps): 
       const other = deps.session.swapPane(params.paneId, params.direction);
       deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
       return { paneId: other };
+    },
+  });
+
+  surface.register("pane.swap_with", {
+    schema: PaneSwapWithParams,
+    handler: (ctx, params) => {
+      const ok = deps.session.swapPaneWith(params.paneId, params.otherPaneId);
+      deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
+      return { ok };
     },
   });
 

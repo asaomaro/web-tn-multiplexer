@@ -70,7 +70,7 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 | H38 | CLI / socket API（workspace・tab・pane・agent の操作） | 20260923-external-control-api（**範囲を絞った**：workspace/tab/pane の作成・close・rename・split・入力送信・出力読取・状態の一括取得〔snapshot〕・状態購読〔イベント購読〕。既存の WebSocket RPC・認証・Origin 判定をそのまま再利用する新規 CLI パッケージ `packages/cli`〔バイナリ名 `wtmctl`〕。agent の lifecycle・graphics・plugin・layout.export/apply・worktree 経由の操作は対象外——後述 H39・H40、および対象外のまま） | AC1〜AC12（同 work） |
 | H39 | エージェント自動化（`agent start`／`prompt --wait` 等） | 後続:エージェント自動化 API / CLI（20260923-external-control-api の decisions.md D2 で切り出し。`agent start`/`agent prompt --wait`/`agent wait`/`agent read` 相当と agent skill ファイルの検討を含む。pane とは別の「エージェント」という addressable な概念・lifecycle の待ち合わせという新しい状態機械が要るため、H38 の CRUD 系とは別 work とした） | — |
 | H40 | pane 単体接続・閲覧専用購読・制御ストリーム | 後続:pane 直接接続・制御ストリーム（20260923-external-control-api の decisions.md D2 で切り出し。`terminal attach`/`session observe`/`session control` 相当。書き込み権限の排他制御・専用フレーミングが要り、複数クライアントが同時に読める既存の `pane.subscribe` とは前提が異なるため、H38 の CRUD 系とは別 work とした） | — |
-| H41 | pane の移動（別 tab・新規 tab・新規 workspace） | 後続:D&D による pane の分割/分割解除/移動 | — |
+| H41 | pane の移動（別 tab・新規 tab・新規 workspace） | 同一 tab 内の入れ替えは 20260923-pane-name-dnd-swap（`PaneFrame.vue` の名前ラベルをポインタでドラッグし、別の pane の上へドロップして 2 つの pane を入れ替える。**herdr との違い**：herdr は TUI のためドラッグ操作自体が無く、本機能は Web 画面であることを活かした独自機能）。**pane の分割・分割解除・別 tab・新規 tab・新規 workspace への移動は対象外のまま**（`.aidev/backlog/product-roadmap.md` へ後続として残す） | AC4, AC6, AC7（同 work） |
 | H42 | プラグイン（manifest・アクション・イベントフック等） | 後続:エージェント対応の拡充 | — |
 | H43 | 保存済みマシン（複数 SSH 先の集約）・`--remote`・`--machine` | 後続:複数ホストの集約 | — |
 | H44 | リモートへのクリップボード画像の転送 | 後続:複数ホストの集約 | — |

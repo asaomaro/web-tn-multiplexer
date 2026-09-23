@@ -187,6 +187,11 @@ export const useViewStore = defineStore("view", () => {
   /** navigate モード中に選択中の workspace（`↑/↓` で動かす。Enter で確定）。 */
   const navigateSelection = ref<string | null>(null);
   const contextMenu = ref<{ target: MenuTarget; at: { x: number; y: number } } | null>(null);
+  /**
+   * pane 名ラベルをドラッグして入れ替える操作の一時状態（20260923-pane-name-dnd-swap。design「1.」）。
+   * 複数の `PaneFrame` インスタンスをまたいで共有する必要があるためここに置く（`contextMenu` と同じ流儀）。
+   */
+  const paneDrag = ref<{ sourcePaneId: string; overPaneId: string | null } | null>(null);
   const connectionState = ref<ConnectionState>("connecting");
   const authRequired = ref(false);
   /**
@@ -297,6 +302,21 @@ export const useViewStore = defineStore("view", () => {
     contextMenu.value = null;
   }
 
+  /** ドラッグ開始（20260923-pane-name-dnd-swap。閾値を超えて初めて呼ぶ。design「5.」）。 */
+  function startPaneDrag(paneId: string): void {
+    paneDrag.value = { sourcePaneId: paneId, overPaneId: null };
+  }
+
+  /** ポインタ直下の pane が変わるたびに呼ぶ。無駄な再描画を避けるため同値なら何もしない。 */
+  function setPaneDragOver(paneId: string | null): void {
+    if (!paneDrag.value || paneDrag.value.overPaneId === paneId) return;
+    paneDrag.value = { ...paneDrag.value, overPaneId: paneId };
+  }
+
+  function endPaneDrag(): void {
+    paneDrag.value = null;
+  }
+
   function onConnectionState(s: ConnectionState): void {
     connectionState.value = s;
     // `rejected`（`/api/session` が 403 で `/ws` も開く前に閉じた）も下ろす：サーバは Cookie を先に確かめ、無効なら Host を問わず
@@ -364,6 +384,7 @@ export const useViewStore = defineStore("view", () => {
     dialogContext,
     navigateSelection,
     contextMenu,
+    paneDrag,
     connectionState,
     authRequired,
     authRequiredCount,
@@ -387,6 +408,9 @@ export const useViewStore = defineStore("view", () => {
     setNavigateSelection,
     openContextMenu,
     closeContextMenu,
+    startPaneDrag,
+    setPaneDragOver,
+    endPaneDrag,
     onConnectionState,
     onAuthRequired,
     setOriginRejectSuspected,
