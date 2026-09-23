@@ -117,6 +117,24 @@ async function recordFirstPaint(context: BrowserContext): Promise<void> {
 
 const firstPaint = (page: Page) =>
   page.evaluate(() => (window as unknown as { __wtmFirstPaint?: { menuBg: string; colorScheme: string } }).__wtmFirstPaint ?? null);
+
+/**
+ * 20260922-theme-custom-overrides：本体（module）が走る前の `--wtm-accent`（上書きが控えに含まれるか。AC9）。
+ * 既存の `recordFirstPaint`（`menuBg`・`colorScheme` だけを記録）とは別の window の印にする——形を変えると、
+ * 既存の `toEqual({ menuBg, colorScheme })` の各所を直すことになるため。
+ */
+async function recordFirstPaintAccent(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    document.addEventListener("readystatechange", () => {
+      if (document.readyState !== "interactive") return;
+      (window as unknown as { __wtmFirstPaintAccent: unknown }).__wtmFirstPaintAccent =
+        document.documentElement.style.getPropertyValue("--wtm-accent");
+    });
+  });
+}
+
+const firstPaintAccent = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __wtmFirstPaintAccent?: string }).__wtmFirstPaintAccent ?? null);
 const dialog = (page: Page) => page.locator("dialog.settings-dialog");
 const themeSection = (page: Page) => dialog(page).locator('section[aria-labelledby="settings-theme"]');
 const themeSelect = (page: Page) => themeSection(page).locator("select").first();
@@ -436,6 +454,97 @@ test("設定ダイアログの上のキーは、ショートカットにも端�
 // **`defaultBrowserType` は describe の中では使えない**（`settings.spec.ts` と同じ事情）。端末の条件だけを借りる。
 const IPHONE_13 = { ...devices["iPhone 13"] };
 delete (IPHONE_13 as { defaultBrowserType?: string }).defaultBrowserType;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-theme-custom-overrides：色の個別の上書き（AC1・AC2・AC3・AC4・AC5・AC6・AC7・AC9）
+// ---------------------------------------------------------------------------------------------------------------------
+
+const overridesDetails = (page: Page) => themeSection(page).locator("details.settings-theme-overrides");
+const overrideInput = (page: Page, key: string, bucket: "light" | "dark") =>
+  overridesDetails(page).locator(`[data-override-input="${bucket}:${key}"]`);
+const overrideStatus = (page: Page) => overridesDetails(page).locator('[role="status"]');
+const computedAccent = (page: Page) =>
+  page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--wtm-accent").trim());
+
+async function openOverrides(page: Page): Promise<void> {
+  await openSettingsByKey(page);
+  await overridesDetails(page).locator("summary").click();
+}
+
+test("色を上書きすると、その場で画面の枠に反映され、再読み込みでも最初から当たる（ちらつかない。AC1・AC2・AC9）", async ({ browser, appServer }) => {
+  const o = await openBrowser(browser, appServer); // 既定は dracula（暗い）
+  await recordFirstPaintAccent(o.context);
+  await openOverrides(o.page);
+  const before = await computedAccent(o.page);
+  const input = overrideInput(o.page, "--wtm-accent", "dark");
+  await input.fill("#ff00ff");
+  await input.press("Enter");
+  await expect(overrideStatus(o.page)).toContainText("を #ff00ff にしました");
+  expect(await computedAccent(o.page), "確定した瞬間に反映").toBe("#ff00ff");
+  expect(await computedAccent(o.page)).not.toBe(before);
+  await o.page.keyboard.press("Escape"); // 取り込み中ではないので設定画面が閉じる
+  await expect(dialog(o.page)).not.toHaveAttribute("open", "");
+
+  await reloadAndWait(o);
+  expect(await firstPaintAccent(o.page), "本体が走る前の控えにも上書きが入っている").toBe("#ff00ff");
+  expect(await computedAccent(o.page)).toBe("#ff00ff");
+});
+
+test("「明るいとき」「暗いとき」は、いま当たっている明暗にだけ効く。テーマを替えると切り替わる（AC3・AC4）", async ({ browser, appServer }) => {
+  const o = await openBrowser(browser, appServer); // dracula（暗い）
+  await openOverrides(o.page);
+  await overrideInput(o.page, "--wtm-accent", "dark").fill("#111111");
+  await overrideInput(o.page, "--wtm-accent", "dark").press("Enter");
+  await overrideInput(o.page, "--wtm-accent", "light").fill("#eeeeee");
+  await overrideInput(o.page, "--wtm-accent", "light").press("Enter");
+  expect(await computedAccent(o.page), "暗いテーマなので暗いときの上書きが効く").toBe("#111111");
+
+  await themeSelect(o.page).selectOption("one-light"); // 明るいテーマへ
+  await expect.poll(() => computedAccent(o.page), "明るいテーマに替わると明るいときの上書きに切り替わる").toBe("#eeeeee");
+
+  await themeSelect(o.page).selectOption("dracula"); // 暗いテーマへ戻す
+  await expect.poll(() => computedAccent(o.page)).toBe("#111111");
+});
+
+test("妥当でない値は理由を示して拒否し、既定に戻すとその 1 色だけ既定に戻る（AC5・AC6）", async ({ browser, appServer }) => {
+  const o = await openBrowser(browser, appServer);
+  await openOverrides(o.page);
+  const before = await computedAccent(o.page);
+  const input = overrideInput(o.page, "--wtm-accent", "dark");
+  await input.fill("notacolor");
+  await input.press("Enter");
+  await expect(overrideStatus(o.page)).toContainText("notacolor は色として読めません");
+  expect(await computedAccent(o.page), "拒否されたので変わらない").toBe(before);
+  await expect(input).toHaveValue("");
+
+  await input.fill("#123456");
+  await input.press("Enter");
+  expect(await computedAccent(o.page)).toBe("#123456");
+  const row = o.page.locator(".theme-override-row").filter({ hasText: "強調の色" });
+  await row.getByRole("button", { name: /既定に戻す/ }).first().click();
+  await expect.poll(() => computedAccent(o.page), "既定に戻すとその色だけ既定に戻る").toBe(before);
+});
+
+test("すべての上書きを既定に戻す：確認を挟み、戻すとすべて消え、再読み込みしても既定のまま（AC7）", async ({ browser, appServer }) => {
+  const o = await openBrowser(browser, appServer);
+  await openOverrides(o.page);
+  const defaultAccent = await computedAccent(o.page); // 既定の値を、上書きを当てる前に測る
+  await overrideInput(o.page, "--wtm-accent", "dark").fill("#222222");
+  await overrideInput(o.page, "--wtm-accent", "dark").press("Enter");
+  expect(await computedAccent(o.page)).toBe("#222222");
+
+  await overridesDetails(o.page).locator("[data-reset-all-overrides]").click();
+  await overridesDetails(o.page).locator("[data-confirm-yes-overrides]").click();
+  await expect.poll(() => computedAccent(o.page), "既定の値そのものに戻る").toBe(defaultAccent);
+  await expect(overrideStatus(o.page)).toContainText("すべての色の上書きを既定へ戻しました");
+
+  await o.page.keyboard.press("Escape");
+  await reloadAndWait(o);
+  const afterReload = await computedAccent(o.page);
+  await openOverrides(o.page);
+  expect(await overrideInput(o.page, "--wtm-accent", "dark")).toHaveValue("");
+  expect(afterReload, "再読み込みしても既定の値のまま").toBe(defaultAccent);
+});
 
 test.describe("モバイル", () => {
   test.use(IPHONE_13);

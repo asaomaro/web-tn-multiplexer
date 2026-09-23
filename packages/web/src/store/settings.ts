@@ -13,6 +13,16 @@ import {
 } from "../keys/keyPrefs.js";
 import { resolveKeymap, type ResolvedKeymap } from "../keys/keymap.js";
 import { loadThemePrefs, resolveTheme } from "../theme/themes.js";
+import {
+  emptyThemeOverrides,
+  loadThemeOverrides,
+  serializeThemeOverrides,
+  withOverride,
+  withoutOverride,
+  type ThemeOverrideBucket,
+  type ThemeOverrides,
+} from "../theme/themeOverrides.js";
+import type { CssVar } from "../theme/uiTokens.js";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
 import {
   loadTabBarPosition,
@@ -315,8 +325,14 @@ export const useSettingsStore = defineStore("settings", () => {
   }
 
   /**
+   * 色の個別の上書き（20260922-theme-custom-overrides。design「store」・herdr の `[theme.custom]` 相当）。**既定との差だけ**を持つ
+   * （`theme/themeOverrides.ts`）。読み込みは値ごとに落とす（AC8）。ブラウザごと（テーマの設定と同じ）。
+   */
+  const themeOverrides = ref<ThemeOverrides>(loadThemeOverrides(initial["themeOverrides"]));
+
+  /**
    * 同じブラウザの別のウィンドウ・タブで割り当てが変わったら追従する。`writePrefs` は書くたびに保存された全体を読んで項目だけ差し替えるので、ほかの設定は先の変更を消さないが、
-   * `keys` は 1 つのまとまりをメモリの状態から丸ごと書く——追従しないと、古い状態から別の変更をしたとき、先に保存された変更を上書きしてしまう。
+   * `keys`／`themeOverrides` は 1 つのまとまりをメモリの状態から丸ごと書く——追従しないと、古い状態から別の変更をしたとき、先に保存された変更を上書きしてしまう。
    * `storage` は**ほかの**ウィンドウの書き込みでだけ発火する（自分の書き込みでは来ない）。
    */
   window.addEventListener("storage", () => {
@@ -326,6 +342,13 @@ export const useSettingsStore = defineStore("settings", () => {
       JSON.stringify(serializeKeyPrefs(keyPrefs.value) ?? null)
     )
       keyPrefs.value = fresh;
+    // 20260922-theme-custom-overrides：色の上書きも同じ理由で追従する（同じ listener の中でまとめて見る。listener を増やさない）。
+    const freshOverrides = loadThemeOverrides(readPrefs()["themeOverrides"]);
+    if (
+      JSON.stringify(serializeThemeOverrides(freshOverrides) ?? null) !==
+      JSON.stringify(serializeThemeOverrides(themeOverrides.value) ?? null)
+    )
+      themeOverrides.value = freshOverrides;
   });
 
   /**
@@ -343,6 +366,39 @@ export const useSettingsStore = defineStore("settings", () => {
     const nextOuter = loadPaneOuterBorders(prefs["paneOuterBorders"]);
     if (nextOuter !== paneOuterBorders.value) paneOuterBorders.value = nextOuter;
   });
+
+  /**
+   * 差し替えて保存する。`replaceKeyPrefs`（上の「キーの割り当て」節）と同じ形：読み直して正規化し、二重の守り（読めない値は
+   * 反映せず捨てる）、状態も保存も同じなら何もしない、保存が状態と違うときは保存だけを直す、差が無くなれば `themeOverrides`
+   * ごと消す。
+   */
+  function replaceThemeOverrides(next: ThemeOverrides): void {
+    const normalized = loadThemeOverrides(serializeThemeOverrides(next));
+    const serialized = serializeThemeOverrides(normalized);
+    const sameState =
+      JSON.stringify(serialized ?? null) ===
+      JSON.stringify(serializeThemeOverrides(themeOverrides.value) ?? null);
+    const sameStored =
+      JSON.stringify(serialized ?? null) === JSON.stringify(readPrefs()["themeOverrides"] ?? null);
+    if (sameState && sameStored) return;
+    if (!sameState) themeOverrides.value = normalized;
+    writePrefs({ themeOverrides: serialized });
+  }
+
+  /** ある CSS 変数の、明るいとき／暗いときどちらかの上書きを差し替える。 */
+  function setThemeOverride(bucket: ThemeOverrideBucket, key: CssVar, value: string): void {
+    replaceThemeOverrides(withOverride(themeOverrides.value, bucket, key, value));
+  }
+
+  /** ある CSS 変数の、明るいとき／暗いときどちらかの上書きを外す（既定へ戻す。AC6）。 */
+  function resetThemeOverride(bucket: ThemeOverrideBucket, key: CssVar): void {
+    replaceThemeOverrides(withoutOverride(themeOverrides.value, bucket, key));
+  }
+
+  /** すべての上書きを既定へ戻す（AC7。`themeOverrides` を消す）。 */
+  function resetAllThemeOverrides(): void {
+    replaceThemeOverrides(emptyThemeOverrides());
+  }
 
   /** prefix を変える（chord。null は既定へ）。反映と保存を同時に行う（確定ボタンを置かない。AC8）。 */
   function setKeyPrefix(chord: string | null): void {
@@ -388,6 +444,7 @@ export const useSettingsStore = defineStore("settings", () => {
     effectiveTheme,
     keyPrefs,
     keymap,
+    themeOverrides,
     setStatusSymbols,
     setPaneFrameThickness,
     setPaneAgentNameVisible,
@@ -412,5 +469,9 @@ export const useSettingsStore = defineStore("settings", () => {
     resetKeyAction,
     resetKeyPrefix,
     resetAllKeys,
+    replaceThemeOverrides,
+    setThemeOverride,
+    resetThemeOverride,
+    resetAllThemeOverrides,
   };
 });

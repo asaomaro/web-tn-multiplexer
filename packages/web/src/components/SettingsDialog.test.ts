@@ -743,6 +743,177 @@ describe("SettingsDialog — テーマの節", () => {
   });
 });
 
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-theme-custom-overrides：色の個別の上書き（AC1・AC5・AC6・AC7・AC12・AC-I1〜I5）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("SettingsDialog — 色の個別の上書き", () => {
+  const themeSection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get('section[aria-labelledby="settings-theme"]');
+  const overridesDetails = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => themeSection(w).get("details.settings-theme-overrides");
+  const rows = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => overridesDetails(w).findAll(".theme-override-row");
+  const input = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"], key: string, bucket: "light" | "dark") =>
+    overridesDetails(w).get<HTMLInputElement>(`[data-override-input="${bucket}:${key}"]`);
+  const status = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => overridesDetails(w).get('[role="status"]');
+
+  it("折りたたみ（既定は閉じている）に、19 個の CSS 変数それぞれ、ラベル・説明・明るいとき／暗いときの入力欄がある（AC1・AC12・AC-I1）", async () => {
+    const { wrapper } = await openDialog();
+    const details = overridesDetails(wrapper);
+    expect(details.attributes("open")).toBeUndefined();
+    expect(rows(wrapper)).toHaveLength(19);
+    const first = rows(wrapper)[0]!;
+    expect(first.get("code").text()).toBe("--wtm-bg");
+    expect(first.text()).toContain("画面地の背景");
+    expect(first.findAll(".theme-override-input")).toHaveLength(2);
+    expect(first.findAll(".theme-override-bucket-label").map((s) => s.text())).toEqual(["明るいとき", "暗いとき"]);
+  });
+
+  it("妥当な色を確定すると、即座に反映・保存される（確定ボタンは無い。AC2・AC-I2）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const field = input(wrapper, "--wtm-accent", "light");
+    await field.setValue("#a6e3a1");
+    await field.trigger("change");
+    expect(settings.themeOverrides).toEqual({ light: { "--wtm-accent": "#a6e3a1" }, dark: {} });
+    expect(readPrefs()["themeOverrides"]).toEqual({ light: { "--wtm-accent": "#a6e3a1" } });
+    expect(status(wrapper).text()).toContain("を #a6e3a1 にしました");
+  });
+
+  it("Enter でも確定する（IME 変換中は確定しない）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const field = input(wrapper, "--wtm-accent", "dark");
+    // `setValue` は change も立てる（`typeInto` と同じ理由で input だけにする。打ちかけを作る）。
+    field.element.value = "#ff0000";
+    await field.trigger("input");
+    await field.trigger("keydown", { key: "Enter", isComposing: true });
+    expect(settings.themeOverrides.dark, "変換の確定では反映しない").toEqual({});
+    await field.trigger("keydown", { key: "Enter", keyCode: 229 }); // Safari は確定の keydown で isComposing が false
+    expect(settings.themeOverrides.dark).toEqual({});
+    await field.trigger("keydown", { key: "Enter" });
+    expect(settings.themeOverrides.dark).toEqual({ "--wtm-accent": "#ff0000" });
+  });
+
+  it("無効な値は理由を示して拒否し、元の値（未入力なら空）へ戻す。反映も保存もしない（AC5）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const field = input(wrapper, "--wtm-accent", "light");
+    await field.setValue("notacolor");
+    await field.trigger("change");
+    expect(settings.themeOverrides.light).toEqual({});
+    expect(readPrefs()).not.toHaveProperty("themeOverrides");
+    expect(status(wrapper).text()).toContain("「強調の色（フォーカスの枠等）」（明るいとき）：notacolor は色として読めません");
+    expect((field.element as HTMLInputElement).value).toBe(""); // 元は未入力
+  });
+
+  it("空欄で確定すると、既定へ戻す（無効値としては扱わない）", async () => {
+    useSettingsStore(pinia).setThemeOverride("light", "--wtm-accent", "#a6e3a1"); // 開く前に設定（開くたびに保存値から始める）
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const field = input(wrapper, "--wtm-accent", "light");
+    expect((field.element as HTMLInputElement).value).toBe("#a6e3a1");
+    field.element.value = "";
+    await field.trigger("input");
+    await field.trigger("change");
+    expect(settings.themeOverrides.light).toEqual({});
+    expect(readPrefs()).not.toHaveProperty("themeOverrides");
+  });
+
+  it("色ごとに「既定に戻す」ボタンがあり、上書き中だけ出る。押すとその 1 色だけ外れ、フォーカスは同じ行の入力欄へ（AC6・AC-I4）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.setThemeOverride("light", "--wtm-accent", "#a6e3a1");
+    settings.setThemeOverride("light", "--wtm-bg", "#eff1f5");
+    await wrapper.vm.$nextTick();
+    const row = rows(wrapper)[7]!; // --wtm-accent の行
+    const resetBtn = row.findAll("button").find((b) => b.text() === "既定に戻す")!;
+    await resetBtn.trigger("click");
+    expect(settings.themeOverrides.light).toEqual({ "--wtm-bg": "#eff1f5" }); // ほかは残る
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(input(wrapper, "--wtm-accent", "light").element);
+    expect(row.findAll("button").some((b) => b.text() === "既定に戻す")).toBe(false); // ボタン自体が消える
+  });
+
+  it("すべての上書きを既定に戻すボタンは確認を挟み、やめると何も変わらず、戻すとすべて消える（AC7・AC-I2）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    settings.setThemeOverride("light", "--wtm-accent", "#a6e3a1");
+    settings.setThemeOverride("dark", "--wtm-bg", "#000000");
+    await wrapper.vm.$nextTick();
+    const details = overridesDetails(wrapper);
+    await details.get("[data-reset-all-overrides]").trigger("click");
+    expect(document.activeElement).toBe(details.get("[data-confirm-no-overrides]").element); // 安全側
+    await details.get("[data-confirm-no-overrides]").trigger("click");
+    expect(settings.themeOverrides).toEqual({ light: { "--wtm-accent": "#a6e3a1" }, dark: { "--wtm-bg": "#000000" } });
+    expect(document.activeElement).toBe(details.get("[data-reset-all-overrides]").element);
+
+    await details.get("[data-reset-all-overrides]").trigger("click");
+    await details.get("[data-confirm-yes-overrides]").trigger("click");
+    expect(settings.themeOverrides).toEqual({ light: {}, dark: {} });
+    expect(readPrefs()).not.toHaveProperty("themeOverrides");
+    expect(status(wrapper).text()).toContain("すべての色の上書きを既定へ戻しました");
+  });
+
+  it("確認の中の Esc は確認を閉じるだけで、親（設定画面）へ届かない（KeySettings の同じ確認と同じ形）", async () => {
+    const { wrapper } = await openDialog();
+    let leaked = 0;
+    document.addEventListener("keydown", () => (leaked += 1));
+    const details = overridesDetails(wrapper);
+    await details.get("[data-reset-all-overrides]").trigger("click");
+    const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    details.get("[data-confirm-no-overrides]").element.dispatchEvent(ev);
+    await wrapper.vm.$nextTick();
+    expect(ev.defaultPrevented).toBe(true);
+    expect(leaked).toBe(0);
+    expect(details.find("[data-confirm-yes-overrides]").exists()).toBe(false); // 確認は閉じる
+    expect(document.activeElement).toBe(details.get("[data-reset-all-overrides]").element);
+  });
+
+  it("キーボードだけで通せる：折りたたみを開く→入力欄へ Tab→値を入れて確定→リセットのボタンへ Tab→Enter（AC-I3）", async () => {
+    const { wrapper } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const summary = overridesDetails(wrapper).get("summary");
+    (summary.element as HTMLElement).focus();
+    await summary.trigger("click"); // <details> を開く（標準の Enter/Space・クリック相当）
+    const field = input(wrapper, "--wtm-bg", "light");
+    (field.element as HTMLElement).focus();
+    await field.setValue("#eff1f5");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(settings.themeOverrides.light).toEqual({ "--wtm-bg": "#eff1f5" });
+    // その入力欄のすぐ次に、同じ色の「既定に戻す」ボタンがある（DOM 順）。
+    const row = rows(wrapper)[0]!;
+    const resetBtn = row.findAll("button").find((b) => b.text() === "既定に戻す")!;
+    (resetBtn.element as HTMLElement).focus();
+    await resetBtn.trigger("keydown", { key: "Enter" });
+    await resetBtn.trigger("click"); // happy-dom は Enter で click を合成しないので、明示する
+    expect(settings.themeOverrides.light).toEqual({});
+  });
+
+  it("開き直すと、前回の結果の文・確認は持ち越さない", async () => {
+    const { wrapper, view } = await openDialog();
+    const settings = useSettingsStore(pinia);
+    const field = input(wrapper, "--wtm-accent", "light");
+    await field.setValue("notacolor");
+    await field.trigger("change");
+    expect(status(wrapper).text()).not.toBe("");
+    settings.setThemeOverride("dark", "--wtm-bg", "#000000");
+    await wrapper.vm.$nextTick();
+    await overridesDetails(wrapper).get("[data-reset-all-overrides]").trigger("click");
+    view.closeDialog();
+    await wrapper.vm.$nextTick();
+    view.openDialogWithContext({ kind: "settings" });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(status(wrapper).text()).toBe("");
+    expect(overridesDetails(wrapper).find("[data-confirm-no-overrides]").exists()).toBe(false); // 確認は出ていない
+  });
+
+  // AC-I5（既存操作を妨げないか）：この入力欄は `pathDraft` 等ほかの設定の入力欄と同じ、素の `<input>` で、独自の
+  // keydown ハンドラを持たない。prefix・直接のキーに奪われないのは、`main.ts` の window の keydown listener が
+  // `view.openDialog` を見て**ダイアログが開いている間は何もしない**という既存の配線（本 work では触っていない）に
+  // よるもので、この配線はコンポーネント単体のテスト（`main.ts` を結線しない）では検証できない。実物のブラウザでの
+  // 確認は E2E（T5）で行う。
+});
+
 describe("SettingsDialog — テーマの節（名前付けと値の束縛）", () => {
   const themeSection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get('section[aria-labelledby="settings-theme"]');
   const selects = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => themeSection(w).findAll("select");
