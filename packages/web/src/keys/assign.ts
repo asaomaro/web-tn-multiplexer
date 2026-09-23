@@ -5,6 +5,7 @@ import {
   chordToKeyInput,
   expandRange,
   formatBinding,
+  formatChord,
   isAltGrComposed,
   isDirectChord,
   isModifierOnly,
@@ -15,6 +16,7 @@ import {
 import {
   withBindings,
   withoutBindings,
+  withoutNavigateBinding,
   withPrefix,
   emptyKeyPrefs,
   type KeyPrefs,
@@ -25,6 +27,8 @@ import {
   resolveKeymap,
   type ResolvedKeymap,
 } from "./keymap.js";
+import { navigateKeyDef, NAVIGATE_RESERVED_CHORDS, type NavigateKeyId } from "./navigateKeys.js";
+import { resolveNavigateKeymap, type ResolvedNavigateKeymap } from "./navigateKeymap.js";
 
 /**
  * 取り込んだキーを割り当てにできるかの検証・戻し・おすすめの追加（20260921-keybinding-customization。design「取り込みの検証」）。**純粋**——DOM にも Vue にも store にも依存しない
@@ -329,4 +333,90 @@ export function applyRecommended(
   }
   result.prefs = current;
   return result;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// navigate モードの6操作（20260923-navigate-mode-keys。design「取り込みの検証（keys/assign.ts）」）
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** navigate の1操作への割り当て。`replacing` は置き換える割り当ての chord（［変更］。追加なら省く）。 */
+export type NavigateAssignTarget = { kind: "navigateKey"; id: NavigateKeyId; replacing?: string };
+
+function navigateLabelOf(id: NavigateKeyId): string {
+  return navigateKeyDef(id)?.label ?? id;
+}
+
+/**
+ * 取り込んだキー `k` を navigate の1操作へ割り当てられるか（design「取り込みの検証」手順1〜8）。
+ * 既存34〜35操作の `validateAssignment`/`validateBinding` と同じ骨格だが、prefix 概念・`isDirectChord`
+ * の modifier 必須規則を持たない——navigate モードは端末入力を奪う心配が無いので、bare な単一文字も
+ * 許す（decisions D2）。**`conflict` は常に付けない**（「こちらへ移す」は navigate 側には設けない設計方針。
+ * design「設計方針」）。
+ */
+export function validateNavigateAssignment(
+  km: ResolvedNavigateKeymap,
+  target: NavigateAssignTarget,
+  k: KeyInput,
+): AssignResult {
+  // chord の途中・確定でないもの：待ち続ける（既存34〜35操作と同じ判定）。
+  if (k.type !== "keydown" || k.composing || k.repeat === true) return IGNORE_SILENT;
+  if (isModifierOnly(k))
+    return {
+      ok: false,
+      ignore: true,
+      reason: "修飾キーだけでは割り当てられません。続けてほかのキーを押してください。",
+    };
+  if (isAltGrComposed(k))
+    return { ok: false, reason: "AltGr で入力する文字は、キーの割り当てに使えません。" };
+  const chord = chordOf(k);
+  if (chord === null) return { ok: false, reason: "このキーは割り当てに使えません。" };
+
+  if (NAVIGATE_RESERVED_CHORDS.has(chord))
+    return {
+      ok: false,
+      reason: `${chord} は navigate モードの中で予約されているキーなので、割り当てられません。`,
+    };
+
+  const { id, replacing } = target;
+  const owner = km.ownerOf(chord);
+  if (owner !== null && owner !== id)
+    return { ok: false, reason: `${chord} は「${navigateLabelOf(owner)}」がすでに使っています。` };
+  if (owner === id && chord !== replacing)
+    return { ok: false, reason: `${chord} はこの操作にすでに割り当てられています。` };
+
+  return { ok: true, binding: chord };
+}
+
+/** navigate の1操作を既定へ戻す対象。「すべて」は既存の `resetAllKeys`（`emptyKeyPrefs()`）が
+ *  `navigateKeys` も一緒に既定へ戻すのでここには無い（design「設計方針」）。 */
+export type NavigateResetTarget = { kind: "navigateKey"; id: NavigateKeyId };
+
+/**
+ * ある navigate 操作を既定へ戻したあとの `KeyPrefs`（`planReset` の `"action"` 分岐と同型）。
+ * 既定のキーを別の navigate 操作が使っていれば、その分は戻さず `skipped` で返す（上書きが既定に勝つ）。
+ */
+export function planNavigateReset(
+  km: ResolvedNavigateKeymap,
+  prefs: KeyPrefs,
+  target: NavigateResetTarget,
+): ResetPlan {
+  const next = withoutNavigateBinding(prefs, target.id);
+  const after = resolveNavigateKeymap(next.navigateKeys).keymap;
+  const effective = new Set(after.bindingsOf(target.id));
+  const skipped: SkippedBinding[] = [];
+  for (const binding of navigateKeyDef(target.id)?.defaults ?? []) {
+    if (effective.has(binding)) continue;
+    skipped.push({ binding, reason: whyNavigateNotRestored(after, binding) });
+  }
+  return { ok: true, prefs: next, skipped };
+}
+
+/** 既定の割り当てが戻らなかった理由（持ち主の名前）。`whyNotRestored`（34〜35操作向け）と同型。 */
+function whyNavigateNotRestored(km: ResolvedNavigateKeymap, binding: string): string {
+  const parts = parseChord(binding);
+  if (parts === null) return "読めない割り当てです";
+  const owner = km.ownerOf(formatChord(parts));
+  return owner !== null
+    ? `${binding} は「${navigateLabelOf(owner)}」が使っています`
+    : "ほかの割り当てと重なっています";
 }

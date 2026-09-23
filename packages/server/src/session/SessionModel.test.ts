@@ -255,6 +255,58 @@ describe("SessionModel — misc mutations", () => {
     expect(model.getWorkspace(workspace.id)?.label).toBe("renamed");
   });
 
+  // 20260923-missing-keybinding-actions（move_tab_previous/move_tab_next 相当）。
+  describe("moveTab", () => {
+    it("single tab: no-op (returns null)", () => {
+      const model = new SessionModel();
+      const { workspace, tab } = model.createWorkspace("/home/u", "api", init);
+      expect(model.moveTab(tab.id, "next")).toBeNull();
+      expect(model.getWorkspace(workspace.id)?.tabIds).toEqual([tab.id]);
+    });
+
+    it("swaps the target tab with its neighbor toward the front/back", () => {
+      const model = new SessionModel();
+      const { workspace, tab: t1 } = model.createWorkspace("/home/u", "api", init);
+      const { tab: t2 } = model.createTab(workspace.id, "b", init);
+      const { tab: t3 } = model.createTab(workspace.id, "c", init);
+      expect(model.getWorkspace(workspace.id)?.tabIds).toEqual([t1.id, t2.id, t3.id]);
+
+      const afterNext = model.moveTab(t2.id, "next");
+      expect(afterNext?.tabIds).toEqual([t1.id, t3.id, t2.id]);
+
+      const afterPrevious = model.moveTab(t2.id, "previous");
+      expect(afterPrevious?.tabIds).toEqual([t1.id, t2.id, t3.id]);
+    });
+
+    it("wraps around at the ends (first tab 'previous' goes to the back, last tab 'next' goes to the front)", () => {
+      const model = new SessionModel();
+      const { workspace, tab: t1 } = model.createWorkspace("/home/u", "api", init);
+      const { tab: t2 } = model.createTab(workspace.id, "b", init);
+      const { tab: t3 } = model.createTab(workspace.id, "c", init);
+      expect(model.getWorkspace(workspace.id)?.tabIds).toEqual([t1.id, t2.id, t3.id]);
+
+      // 先頭の t1 を「前へ」→ 末尾へ（herdr の remove+insert と同じ。単純な隣接swapではない。decisions D10）。
+      expect(model.moveTab(t1.id, "previous")?.tabIds).toEqual([t2.id, t3.id, t1.id]);
+      // 末尾に移った t1 を「後ろへ」→ 先頭へ戻る（境界の巡回が対称であることの確認）。
+      expect(model.moveTab(t1.id, "next")?.tabIds).toEqual([t1.id, t2.id, t3.id]);
+    });
+
+    it("does not change activeTabId (references are by id, not position)", () => {
+      const model = new SessionModel();
+      const { workspace, tab: t1 } = model.createWorkspace("/home/u", "api", init);
+      model.createTab(workspace.id, "b", init); // activeTabId は新しい tab（createTab の既存の流儀）へ移る
+      model.focusTab(t1.id); // activeTabId を t1 に戻してから確かめる
+      expect(model.getWorkspace(workspace.id)?.activeTabId).toBe(t1.id);
+      model.moveTab(t1.id, "next");
+      expect(model.getWorkspace(workspace.id)?.activeTabId).toBe(t1.id);
+    });
+
+    it("throws NotFoundError for an unknown tab id", () => {
+      const model = new SessionModel();
+      expect(() => model.moveTab("t99", "next")).toThrow(NotFoundError);
+    });
+  });
+
   // 20260921-workspace-auto-label：以前は workspace の名前に印が無く、どれも付けた名前と同じ扱いだった。
   it("autoLabel は作成・名前変更・復元で呼ぶ側が決めたとおりに入る", () => {
     const model = new SessionModel();

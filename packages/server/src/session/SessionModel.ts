@@ -325,6 +325,34 @@ export class SessionModel {
     return this.closeTabInternal(id);
   }
 
+  /**
+   * `tab.move`（20260923-missing-keybinding-actions。herdr の move_tab_previous/move_tab_next 相当）。
+   * 対象 tab を1つ隣へ動かす（巡回込み）。`tabIds` が1個以下なら意味の無い変化なので `null` を返す
+   * （design「エラー処理 / 異常系」。SessionService はこのとき `workspace.updated` を発行しない）。
+   *
+   * **単純な2要素 swap ではない**（coding 中に見つけた design/research の誤り。decisions.md D10）。
+   * 先頭の tab を「前へ」・末尾の tab を「後ろへ」動かすときは、対象を配列の反対の端へ移し、
+   * 間の要素は1つずつ詰める（herdr の `Workspace::move_tab`＝`remove(source)` して `insert(target)` と
+   * 同じ結果。`herdr:src/workspace.rs:591-611`）。内側（先頭/末尾以外）のときは結果的に隣接swapと
+   * 一致する。`splice` の remove→insert がこの両方を同じ式で表す。
+   * `activeTabId` は id で指しているので、並べ替えでは変わらない（herdr の `active_tab`〔インデックス〕
+   * を都度引き直す必要が無い。design「検討した代替案」）。
+   */
+  moveTab(id: TabId, direction: "previous" | "next"): Workspace | null {
+    const tab = this.requireTab(id);
+    const ws = this.requireWorkspace(tab.workspaceId);
+    if (ws.tabIds.length <= 1) return null;
+    const idx = ws.tabIds.indexOf(id);
+    const last = ws.tabIds.length - 1;
+    const newIdx = direction === "next" ? (idx === last ? 0 : idx + 1) : idx === 0 ? last : idx - 1;
+    const tabIds = [...ws.tabIds];
+    tabIds.splice(idx, 1);
+    tabIds.splice(newIdx, 0, id);
+    const updated = { ...ws, tabIds };
+    this.workspaces.set(ws.id, updated);
+    return updated;
+  }
+
   private closeTabInternal(id: TabId): RemovalResult {
     const tab = this.requireTab(id);
     const ws = this.requireWorkspace(tab.workspaceId);

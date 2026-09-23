@@ -1,4 +1,5 @@
 import type { Action } from "./actions.js";
+import { RESIZE_STEP } from "./ResizeMode.js";
 
 /**
  * 操作のカタログ（20260921-keybinding-customization。design「操作のカタログ」）。**利用者に見せる単位は「操作」**——名前は herdr の `[keys]` の項目名にそろえる
@@ -21,7 +22,7 @@ interface ActionDefBase {
 }
 
 /**
- * 操作の定義。**範囲の操作（`indexed`。`switch_tab` だけ）は `action` が数字から作る関数**で、それ以外は `Action` そのもの——判別共用体にして、
+ * 操作の定義。**範囲の操作（`indexed`。`switch_tab`・`focus_agent`）は `action` が数字から作る関数**で、それ以外は `Action` そのもの——判別共用体にして、
  * 「範囲の操作か」の判定（`indexed`）と `action` の形が食い違う定義を型で弾く。
  */
 export type ActionDef = ActionDefBase &
@@ -154,6 +155,58 @@ export const ACTIONS = [
     defaults: ["prefix+shift+x"],
     action: { type: "closeTab" },
   },
+  // 20260923-missing-keybinding-actions（herdr にあって本製品に操作自体が無かったもの。既定は herdr と
+  // 同じく全て「割り当てなし」。research F1）。
+  {
+    id: "previous_workspace",
+    label: "前の workspace",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "workspaceDelta", delta: -1 },
+  },
+  {
+    id: "next_workspace",
+    label: "次の workspace",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "workspaceDelta", delta: 1 },
+  },
+  {
+    id: "move_tab_previous",
+    label: "tab を前へ動かす",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "moveTab", direction: "previous" },
+  },
+  {
+    id: "move_tab_next",
+    label: "tab を後ろへ動かす",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "moveTab", direction: "next" },
+  },
+  {
+    id: "previous_agent",
+    label: "前の agent へフォーカス",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "agentDelta", delta: -1 },
+  },
+  {
+    id: "next_agent",
+    label: "次の agent へフォーカス",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "agentDelta", delta: 1 },
+  },
+  {
+    id: "focus_agent",
+    label: "agent へフォーカス（1〜9）",
+    group: "workspace / tab",
+    defaults: [],
+    indexed: true,
+    action: (index: number): Action => ({ type: "focusAgentIndex", index: index - 1 }),
+  },
   // pane
   {
     id: "split_vertical",
@@ -284,6 +337,43 @@ export const ACTIONS = [
     group: "pane",
     defaults: ["prefix+b"],
     action: { type: "toggleSidebar" },
+  },
+  // 20260923-missing-keybinding-actions（herdr にあって本製品に操作自体が無かったもの。既定は herdr と
+  // 同じく全て「割り当てなし」。research F1）。
+  {
+    id: "last_pane",
+    label: "直前の pane へ戻る",
+    group: "pane",
+    defaults: [],
+    action: { type: "lastPane" },
+  },
+  {
+    id: "resize_pane_left",
+    label: "pane を左へ広げる（直接）",
+    group: "pane",
+    defaults: [],
+    action: { type: "resizeBy", dir: "left", amount: RESIZE_STEP },
+  },
+  {
+    id: "resize_pane_down",
+    label: "pane を下へ広げる（直接）",
+    group: "pane",
+    defaults: [],
+    action: { type: "resizeBy", dir: "down", amount: RESIZE_STEP },
+  },
+  {
+    id: "resize_pane_up",
+    label: "pane を上へ広げる（直接）",
+    group: "pane",
+    defaults: [],
+    action: { type: "resizeBy", dir: "up", amount: RESIZE_STEP },
+  },
+  {
+    id: "resize_pane_right",
+    label: "pane を右へ広げる（直接）",
+    group: "pane",
+    defaults: [],
+    action: { type: "resizeBy", dir: "right", amount: RESIZE_STEP },
   },
 ] as const satisfies readonly ActionDef[];
 

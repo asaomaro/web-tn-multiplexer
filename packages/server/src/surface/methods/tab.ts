@@ -1,4 +1,4 @@
-import { TabCloseParams, TabCreateParams, TabFocusParams, TabRenameParams } from "@wtm/protocol";
+import { TabCloseParams, TabCreateParams, TabFocusParams, TabMoveParams, TabRenameParams } from "@wtm/protocol";
 import type { ControlSurface } from "../ControlSurface.js";
 import type { MethodDeps } from "./deps.js";
 
@@ -26,6 +26,14 @@ export function registerTabMethods(surface: ControlSurface, deps: MethodDeps): v
       deps.session.focusTab(params.tabId);
       const focusedPaneId = deps.session.getTab(params.tabId)?.focusedPaneId;
       if (focusedPaneId) deps.sizeAuthority.noteInteraction(ctx.clientId, focusedPaneId);
+      return {};
+    },
+  });
+
+  surface.register("tab.move", {
+    schema: TabMoveParams,
+    handler: (_ctx, params) => {
+      deps.session.moveTab(params.tabId, params.direction);
       return {};
     },
   });

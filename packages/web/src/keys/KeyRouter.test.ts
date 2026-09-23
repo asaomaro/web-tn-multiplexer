@@ -497,7 +497,13 @@ describe("KeyRouter.setKeymap — 割り当ての差し替え（AC8）", () => {
   it("差し替えると、新しい割り当てが即時に効き、旧い割り当ては効かなくなる", () => {
     const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
     expect(router.handle(ctrlAlt("d"))).toEqual<KeyDecision>({ kind: "pass" });
-    router.setKeymap(resolveKeymap({ prefix: "ctrl+a", bindings: { split_vertical: ["ctrl+alt+d"] } }).keymap);
+    router.setKeymap(
+      resolveKeymap({
+        prefix: "ctrl+a",
+        bindings: { split_vertical: ["ctrl+alt+d"] },
+        navigateKeys: {},
+      }).keymap,
+    );
     expect(router.handle(ctrlAlt("d"))).toEqual<KeyDecision>({ kind: "action", action: { type: "split", dir: "right" } });
     expect(router.handle(ctrlB())).toEqual<KeyDecision>({ kind: "pass" });
     expect(router.handle(key({ key: "a", ctrl: true }))).toEqual<KeyDecision>({ kind: "consume" });
@@ -509,7 +515,9 @@ describe("KeyRouter.setKeymap — 割り当ての差し替え（AC8）", () => {
     const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
     router.handle(ctrlB());
     expect(router.mode).toBe("prefix");
-    router.setKeymap(resolveKeymap({ prefix: null, bindings: { zoom: ["prefix+y"] } }).keymap);
+    router.setKeymap(
+      resolveKeymap({ prefix: null, bindings: { zoom: ["prefix+y"] }, navigateKeys: {} }).keymap,
+    );
     expect(router.mode).toBe("prefix"); // 進行中の prefix は変えない
     expect(router.handle(key({ key: "y" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "zoom" } });
     expect(router.mode).toBe("terminal");

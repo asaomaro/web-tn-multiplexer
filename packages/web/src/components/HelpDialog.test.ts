@@ -169,8 +169,18 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     // 全体：prefix・?・q・s・o・（後続の shift+r）
     expect(groups[0]!.findAll("dt").map((el) => el.text())).toEqual(["ctrl+b", "prefix+?", "prefix+q", "prefix+s", "prefix+o", "prefix+shift+r"]);
     expect(groups[0]!.findAll("dd")[0]!.text()).toContain("prefix");
-    // 移動（navigate モードの中のキー）は固定。pane の巡回の行は無い
-    expect(groups[1]!.findAll("dt").map((el) => el.text())).toEqual(["esc", "↑ / ↓", "h / j / k / l ・← / →", "enter"]);
+    // 移動（navigate モードの6操作は現在の割り当てから作る。20260923-navigate-mode-keys。AC7）。
+    // 既定は up/down/h/j/k/l で、pane 左右は矢印の固定フォールバックが常に併記される（decisions D3）。
+    expect(groups[1]!.findAll("dt").map((el) => el.text())).toEqual([
+      "esc",
+      "up",
+      "down",
+      "h ・ ←",
+      "j",
+      "k",
+      "l ・ →",
+      "enter",
+    ]);
     // workspace / tab
     expect(groups[2]!.findAll("dt").map((el) => el.text())).toContain("prefix+1..9");
     expect(groups[2]!.findAll("dt").map((el) => el.text())).toContain("prefix+shift+n");
@@ -264,5 +274,42 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     await wrapper.get("input").setValue("ctrl+alt");
     expect(wrapper.findAll(".help-dialog-group-name").map((el) => el.text())).toEqual(["pane"]);
     expect(dts(wrapper)).toEqual(["prefix+v / ctrl+alt+d"]);
+  });
+
+  it("navigate モードの移動キーを変えると、移動の群の行が即時に追従する（20260923-navigate-mode-keys・AC7）", async () => {
+    const settings = useSettingsStore(pinia);
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    settings.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    await wrapper.vm.$nextTick();
+    const group = wrapper.findAll(".help-dialog-group")[1]!;
+    expect(group.findAll("dt").map((el) => el.text())).toEqual([
+      "esc",
+      "up",
+      "down",
+      "ctrl+h ・ ←",
+      "j",
+      "k",
+      "l ・ →",
+      "enter",
+    ]);
+  });
+
+  it("navigate の割り当てを外しても、矢印は常に併記される（pane 左右は固定フォールバック。decisions D3）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setNavigateKeyBindings("navigate_pane_left", []);
+    settings.setNavigateKeyBindings("navigate_workspace_up", []);
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog();
+    await open(view, wrapper);
+    const group = wrapper.findAll(".help-dialog-group")[1]!;
+    const rows = group.findAll("dt");
+    expect(rows.map((el) => el.text())).toContain("なし ・ ←"); // 素の割り当ては無いが矢印は常に効く
+    expect(rows.map((el) => el.text())).toContain("なし"); // workspace 上は矢印の固定フォールバックが無い
+    expect(rows[1]!.classes()).toContain("help-dialog-grayed"); // navigate_workspace_up の行（未設定なので灰色）
+    // pane 左（rows[3]）は素の割り当てが無くても矢印が常に効くので、灰色にしない（design のスケッチどおり）。
+    expect(rows[3]!.text()).toBe("なし ・ ←");
+    expect(rows[3]!.classes()).not.toContain("help-dialog-grayed");
   });
 });

@@ -1,0 +1,230 @@
+import { describe, expect, it } from "vitest";
+import { CliUsageError, DEFAULT_URL, parseArgs } from "./cliArgs.js";
+
+const noEnv = {} as NodeJS.ProcessEnv;
+
+describe("parseArgs — help", () => {
+  it.each([[], ["help"], ["--help"], ["-h"]])("%s -> help", (...argv) => {
+    expect(parseArgs(argv, noEnv)).toEqual({ kind: "help" });
+  });
+});
+
+describe("parseArgs — global opts (--url/--token, env fallback, defaults)", () => {
+  it("既定は DEFAULT_URL・token 無し", () => {
+    expect(parseArgs(["snapshot"], noEnv)).toEqual({ kind: "snapshot", opts: { url: DEFAULT_URL, token: undefined } });
+  });
+  it("--url/--token を優先する", () => {
+    expect(parseArgs(["snapshot", "--url", "http://h:1", "--token", "t"], noEnv)).toEqual({
+      kind: "snapshot",
+      opts: { url: "http://h:1", token: "t" },
+    });
+  });
+  it("環境変数 WTMCTL_URL/WTMCTL_TOKEN にフォールバックする", () => {
+    const env = { WTMCTL_URL: "http://envhost:2", WTMCTL_TOKEN: "envtoken" } as NodeJS.ProcessEnv;
+    expect(parseArgs(["snapshot"], env)).toEqual({ kind: "snapshot", opts: { url: "http://envhost:2", token: "envtoken" } });
+  });
+  it("--url は環境変数より優先する", () => {
+    const env = { WTMCTL_URL: "http://envhost:2" } as NodeJS.ProcessEnv;
+    expect(parseArgs(["snapshot", "--url", "http://flag:3"], env)).toEqual({ kind: "snapshot", opts: { url: "http://flag:3", token: undefined } });
+  });
+});
+
+describe("parseArgs — login", () => {
+  it("--token 必須", () => {
+    expect(() => parseArgs(["login", "--url", "http://h:1"], noEnv)).toThrow(CliUsageError);
+  });
+  it("正常系", () => {
+    expect(parseArgs(["login", "--url", "http://h:1", "--token", "t"], noEnv)).toEqual({
+      kind: "login",
+      opts: { url: "http://h:1", token: "t" },
+    });
+  });
+});
+
+describe("parseArgs — workspace", () => {
+  it("create（フラグ無し）", () => {
+    expect(parseArgs(["workspace", "create"], noEnv)).toEqual({
+      kind: "workspace-create",
+      opts: { url: DEFAULT_URL, token: undefined },
+      cwd: undefined,
+      label: undefined,
+    });
+  });
+  it("create --cwd --label", () => {
+    expect(parseArgs(["workspace", "create", "--cwd", "/repo", "--label", "api"], noEnv)).toEqual({
+      kind: "workspace-create",
+      opts: { url: DEFAULT_URL, token: undefined },
+      cwd: "/repo",
+      label: "api",
+    });
+  });
+  it("close は workspaceId が必須", () => {
+    expect(() => parseArgs(["workspace", "close"], noEnv)).toThrow(CliUsageError);
+  });
+  it("close 正常系", () => {
+    expect(parseArgs(["workspace", "close", "w1"], noEnv)).toEqual({
+      kind: "workspace-close",
+      opts: { url: DEFAULT_URL, token: undefined },
+      workspaceId: "w1",
+    });
+  });
+  it("rename は workspaceId と label が必須", () => {
+    expect(() => parseArgs(["workspace", "rename", "w1"], noEnv)).toThrow(CliUsageError);
+  });
+  it("rename 正常系", () => {
+    expect(parseArgs(["workspace", "rename", "w1", "new-name"], noEnv)).toEqual({
+      kind: "workspace-rename",
+      opts: { url: DEFAULT_URL, token: undefined },
+      workspaceId: "w1",
+      label: "new-name",
+    });
+  });
+  it("余分な位置引数は拒否する", () => {
+    expect(() => parseArgs(["workspace", "close", "w1", "extra"], noEnv)).toThrow(CliUsageError);
+  });
+  it("未知のサブコマンドは拒否する", () => {
+    expect(() => parseArgs(["workspace", "delete", "w1"], noEnv)).toThrow(CliUsageError);
+  });
+  it("サブコマンド自体が無い場合も拒否する", () => {
+    expect(() => parseArgs(["workspace"], noEnv)).toThrow(CliUsageError);
+  });
+});
+
+describe("parseArgs — tab", () => {
+  it("create（フラグ無し）", () => {
+    expect(parseArgs(["tab", "create"], noEnv)).toEqual({
+      kind: "tab-create",
+      opts: { url: DEFAULT_URL, token: undefined },
+      workspaceId: undefined,
+      label: undefined,
+    });
+  });
+  it("create --workspace --label", () => {
+    expect(parseArgs(["tab", "create", "--workspace", "w1", "--label", "logs"], noEnv)).toEqual({
+      kind: "tab-create",
+      opts: { url: DEFAULT_URL, token: undefined },
+      workspaceId: "w1",
+      label: "logs",
+    });
+  });
+  it("close は tabId が必須", () => {
+    expect(() => parseArgs(["tab", "close"], noEnv)).toThrow(CliUsageError);
+  });
+  it("サブコマンド自体が無い場合も拒否する", () => {
+    expect(() => parseArgs(["tab"], noEnv)).toThrow(CliUsageError);
+  });
+});
+
+describe("parseArgs — pane split", () => {
+  it("--direction は必須", () => {
+    expect(() => parseArgs(["pane", "split", "p1"], noEnv)).toThrow(CliUsageError);
+  });
+  it("--direction が right/down 以外なら拒否する", () => {
+    expect(() => parseArgs(["pane", "split", "p1", "--direction", "up"], noEnv)).toThrow(CliUsageError);
+  });
+  it("正常系（--ratio 省略）", () => {
+    expect(parseArgs(["pane", "split", "p1", "--direction", "right"], noEnv)).toEqual({
+      kind: "pane-split",
+      opts: { url: DEFAULT_URL, token: undefined },
+      paneId: "p1",
+      direction: "right",
+      ratio: undefined,
+    });
+  });
+  it("--ratio は 0.05〜0.95 の範囲を受け付ける", () => {
+    expect(parseArgs(["pane", "split", "p1", "--direction", "down", "--ratio", "0.3"], noEnv)).toMatchObject({ ratio: 0.3 });
+  });
+  it.each(["0.04", "0.96", "abc", "-1"])("--ratio %s は範囲外・非数値として拒否する", (bad) => {
+    expect(() => parseArgs(["pane", "split", "p1", "--direction", "down", "--ratio", bad], noEnv)).toThrow(CliUsageError);
+  });
+});
+
+describe("parseArgs — pane close/input/run", () => {
+  it("サブコマンド自体が無い場合も拒否する", () => {
+    expect(() => parseArgs(["pane"], noEnv)).toThrow(CliUsageError);
+  });
+  it("close は paneId が必須", () => {
+    expect(() => parseArgs(["pane", "close"], noEnv)).toThrow(CliUsageError);
+  });
+  it("--で始まるテキストは未知のオプションとして拒否される（既知の制約）", () => {
+    expect(() => parseArgs(["pane", "input", "p1", "--not-a-flag"], noEnv)).toThrow(CliUsageError);
+  });
+  it("input は paneId と text が必須", () => {
+    expect(() => parseArgs(["pane", "input", "p1"], noEnv)).toThrow(CliUsageError);
+  });
+  it("input 正常系", () => {
+    expect(parseArgs(["pane", "input", "p1", "echo hi"], noEnv)).toEqual({
+      kind: "pane-input",
+      opts: { url: DEFAULT_URL, token: undefined },
+      paneId: "p1",
+      text: "echo hi",
+    });
+  });
+  it("run は paneId と command が必須", () => {
+    expect(() => parseArgs(["pane", "run", "p1"], noEnv)).toThrow(CliUsageError);
+  });
+  it("run 正常系", () => {
+    expect(parseArgs(["pane", "run", "p1", "ls -la"], noEnv)).toEqual({
+      kind: "pane-run",
+      opts: { url: DEFAULT_URL, token: undefined },
+      paneId: "p1",
+      command: "ls -la",
+    });
+  });
+});
+
+describe("parseArgs — pane read", () => {
+  it("既定（--follow/--raw 無し・--timeout 既定 5000）", () => {
+    expect(parseArgs(["pane", "read", "p1"], noEnv)).toEqual({
+      kind: "pane-read",
+      opts: { url: DEFAULT_URL, token: undefined },
+      paneId: "p1",
+      follow: false,
+      raw: false,
+      timeoutMs: 5000,
+    });
+  });
+  it("--follow --raw --timeout", () => {
+    expect(parseArgs(["pane", "read", "p1", "--follow", "--raw", "--timeout", "1000"], noEnv)).toEqual({
+      kind: "pane-read",
+      opts: { url: DEFAULT_URL, token: undefined },
+      paneId: "p1",
+      follow: true,
+      raw: true,
+      timeoutMs: 1000,
+    });
+  });
+  it.each(["0", "-1", "abc", "1.5"])("--timeout %s は正の整数以外として拒否する", (bad) => {
+    expect(() => parseArgs(["pane", "read", "p1", "--timeout", bad], noEnv)).toThrow(CliUsageError);
+  });
+});
+
+describe("parseArgs — snapshot/watch", () => {
+  it("snapshot に余分な位置引数は拒否する", () => {
+    expect(() => parseArgs(["snapshot", "extra"], noEnv)).toThrow(CliUsageError);
+  });
+  it("watch 既定は --json 無し", () => {
+    expect(parseArgs(["watch"], noEnv)).toEqual({ kind: "watch", opts: { url: DEFAULT_URL, token: undefined }, json: false });
+  });
+  it("watch --json", () => {
+    expect(parseArgs(["watch", "--json"], noEnv)).toEqual({ kind: "watch", opts: { url: DEFAULT_URL, token: undefined }, json: true });
+  });
+});
+
+describe("parseArgs — 未知のオプション・値の欠落・未知のコマンド（変異的な誤り入力の網羅）", () => {
+  it("未知のトップレベルコマンド", () => {
+    expect(() => parseArgs(["bogus"], noEnv)).toThrow(CliUsageError);
+  });
+  it("未知のオプション", () => {
+    expect(() => parseArgs(["snapshot", "--bogus"], noEnv)).toThrow(CliUsageError);
+  });
+  it("値の無いオプション（末尾）", () => {
+    expect(() => parseArgs(["snapshot", "--url"], noEnv)).toThrow(CliUsageError);
+  });
+  it("値の無いオプション（次が別のフラグ）", () => {
+    expect(() => parseArgs(["snapshot", "--url", "--token", "t"], noEnv)).toThrow(CliUsageError);
+  });
+  it("bool フラグに値を渡そうとしても、その値は位置引数として扱われ余分な引数エラーになる", () => {
+    expect(() => parseArgs(["watch", "--json", "extra"], noEnv)).toThrow(CliUsageError);
+  });
+});

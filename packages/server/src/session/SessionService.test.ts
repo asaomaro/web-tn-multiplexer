@@ -397,6 +397,30 @@ describe("SessionService — tabs and panes", () => {
     expect(service.snapshot().workspaces.find((w) => w.id === workspace.id)?.tabIds).toContain(newTab.id);
   });
 
+  it("moveTab emits workspace.updated with the reordered tabIds (20260923-missing-keybinding-actions)", async () => {
+    const { workspace, tab: firstTab } = await service.createWorkspace("/home/u", "api");
+    const { tab: secondTab } = await service.createTab(workspace.id, "second");
+    const events: { event: string; workspace?: { id: string; tabIds: string[] } }[] = [];
+    bus.subscribe((e) => events.push({ event: e.event, ...(e.data as { workspace?: { id: string; tabIds: string[] } }) }));
+
+    service.moveTab(firstTab.id, "next");
+
+    const wsUpdated = events.filter((e) => e.event === "workspace.updated");
+    expect(wsUpdated).toHaveLength(1);
+    expect(wsUpdated[0]!.workspace?.tabIds).toEqual([secondTab.id, firstTab.id]);
+  });
+
+  it("moveTab does not emit workspace.updated when the workspace has only one tab (AC5)", async () => {
+    const { workspace, tab } = await service.createWorkspace("/home/u", "api");
+    const events: string[] = [];
+    bus.subscribe((e) => events.push(e.event));
+
+    service.moveTab(tab.id, "next");
+
+    expect(events).toEqual([]);
+    expect(service.snapshot().workspaces.find((w) => w.id === workspace.id)?.tabIds).toEqual([tab.id]);
+  });
+
   it("closeTab emits workspace.updated (not workspace.closed) when a sibling tab remains (D88)", async () => {
     const { workspace } = await service.createWorkspace("/home/u", "api");
     const { tab: secondTab } = await service.createTab(workspace.id, "second");

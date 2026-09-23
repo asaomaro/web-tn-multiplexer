@@ -106,6 +106,18 @@ describe("DefaultSizeAuthority — taking ownership", () => {
     expect(session.getPane(pane.id)?.cols).not.toBe(40);
   });
 
+  it("an external client (wtmctl) does not claim ownership on interaction, same as a mobile client without fit (20260923-external-control-api D4)", async () => {
+    const { session, clients, authority } = ctx;
+    const { tab, pane } = await session.createWorkspace("/home/u", "api");
+    const client = clients.register("external");
+    clients.setView(client, { workspaceId: tab.workspaceId, tabId: tab.id, visible: [{ paneId: pane.id, cols: 40, rows: 20 }] });
+
+    authority.noteInteraction(client, pane.id);
+
+    expect(session.getTab(tab.id)?.sizeOwnerClientId).toBeNull();
+    expect(session.getPane(pane.id)?.cols).not.toBe(40);
+  });
+
   it("a mobile client with fit enabled can claim ownership", async () => {
     const { session, clients, authority } = ctx;
     const { tab, pane } = await session.createWorkspace("/home/u", "api");

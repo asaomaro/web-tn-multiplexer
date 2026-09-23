@@ -1,0 +1,88 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionStore } from "../session.js";
+import type { WtmClient } from "../wsClient.js";
+import { runWorkspaceClose, runWorkspaceCreate, runWorkspaceRename } from "./workspace.js";
+
+vi.mock("../withSession.js", () => ({ withSession: vi.fn() }));
+vi.mock("../output.js", () => ({ printJson: vi.fn(), printLine: vi.fn() }));
+
+import { printJson } from "../output.js";
+import { withSession } from "../withSession.js";
+
+const mockedWithSession = vi.mocked(withSession);
+const mockedPrintJson = vi.mocked(printJson);
+
+function fakeClient(requestImpl: (method: string, params: unknown) => unknown): WtmClient {
+  return {
+    hello: vi.fn().mockResolvedValue({ clientId: "c1", snapshot: {} }),
+    request: vi.fn(requestImpl) as unknown as WtmClient["request"],
+    sendInput: vi.fn(),
+    onEvent: vi.fn(),
+    onOutput: vi.fn(),
+    onSnapshot: vi.fn(),
+    onClose: vi.fn(),
+    close: vi.fn(),
+  } as unknown as WtmClient;
+}
+
+const OPTS = { url: "http://127.0.0.1:7780", token: undefined };
+const store = {} as SessionStore;
+
+beforeEach(() => {
+  mockedWithSession.mockReset();
+  mockedPrintJson.mockReset();
+});
+
+describe("runWorkspaceCreate", () => {
+  it("client.hello() を先に呼んでから workspace.create を呼び、結果をそのまま printJson する", async () => {
+    const order: string[] = [];
+    const client = fakeClient(() => ({ workspace: { id: "w1" }, tab: { id: "t1" }, pane: { id: "p1" } }));
+    (client.hello as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("hello");
+      return { clientId: "c1", snapshot: {} };
+    });
+    (client.request as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("request");
+      return { workspace: { id: "w1" }, tab: { id: "t1" }, pane: { id: "p1" } };
+    });
+    mockedWithSession.mockImplementation(async (_opts, _store, fn) => fn(client));
+
+    await runWorkspaceCreate({ kind: "workspace-create", opts: OPTS, cwd: "/repo", label: "api" }, store);
+
+    expect(order).toEqual(["hello", "request"]);
+    expect(client.request).toHaveBeenCalledWith("workspace.create", { cwd: "/repo", label: "api" });
+    expect(mockedPrintJson).toHaveBeenCalledWith({ workspace: { id: "w1" }, tab: { id: "t1" }, pane: { id: "p1" } });
+  });
+
+  it("cwd/label を省略すると、その分のキーを持たないオブジェクトを渡す（exactOptionalPropertyTypes）", async () => {
+    const client = fakeClient(() => ({}));
+    mockedWithSession.mockImplementation(async (_opts, _store, fn) => fn(client));
+
+    await runWorkspaceCreate({ kind: "workspace-create", opts: OPTS, cwd: undefined, label: undefined }, store);
+
+    expect(client.request).toHaveBeenCalledWith("workspace.create", {});
+  });
+});
+
+describe("runWorkspaceClose", () => {
+  it("workspace.close を呼び、結果をそのまま printJson する", async () => {
+    const client = fakeClient(() => ({}));
+    mockedWithSession.mockImplementation(async (_opts, _store, fn) => fn(client));
+
+    await runWorkspaceClose({ kind: "workspace-close", opts: OPTS, workspaceId: "w1" }, store);
+
+    expect(client.request).toHaveBeenCalledWith("workspace.close", { workspaceId: "w1" });
+    expect(mockedPrintJson).toHaveBeenCalledWith({});
+  });
+});
+
+describe("runWorkspaceRename", () => {
+  it("workspace.rename を呼ぶ", async () => {
+    const client = fakeClient(() => ({}));
+    mockedWithSession.mockImplementation(async (_opts, _store, fn) => fn(client));
+
+    await runWorkspaceRename({ kind: "workspace-rename", opts: OPTS, workspaceId: "w1", label: "new" }, store);
+
+    expect(client.request).toHaveBeenCalledWith("workspace.rename", { workspaceId: "w1", label: "new" });
+  });
+});

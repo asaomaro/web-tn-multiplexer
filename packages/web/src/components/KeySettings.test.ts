@@ -66,14 +66,14 @@ const moveHereBtn = (): HTMLElement | null =>
   document.querySelector<HTMLElement>("[data-move-here]");
 
 describe("KeySettings — 一覧（AC1）", () => {
-  it("prefix と、3 群 35 個の操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
+  it("prefix と、3 群 47 個の操作＋navigate 6操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
     const { settings } = await mountKeys();
     expect(document.querySelector("h3")!.textContent).toBe("キー");
     expect(document.querySelector(".keys-prefix .keys-binding")!.textContent).toBe("ctrl+b");
     expect(
       Array.from(document.querySelectorAll(".keys-group-name")).map((h) => h.textContent),
-    ).toEqual(["全体", "workspace / tab", "pane"]);
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(35);
+    ).toEqual(["全体", "workspace / tab", "pane", "navigate モードの移動"]);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(53); // 47 + navigate 6
     expect(summaryText("split_vertical")).toBe("prefix+v");
     expect(summaryText("switch_tab")).toBe("prefix+1..9");
     expect(summaryText("cycle_pane_previous")).toBe("prefix+shift+tab");
@@ -105,6 +105,41 @@ describe("KeySettings — 一覧（AC1）", () => {
     expect(addBtn("goto", "direct").getAttribute("aria-label")).toBe(
       "追加：直接（「goto（workspace・tab・pane から探す）」）",
     );
+  });
+});
+
+// 20260923-missing-keybinding-actions（AC8）。`bindings.ts` へ登録するだけで KeySettings.vue が
+// 汎用に拾うことは design で確認済み（新規実装なし）——ここでは実際にその12操作のうち代表1つで
+// 「なし」表示・追加・削除・既定に戻す（defaults: [] なので「なし」に戻る）を通しで確かめる。
+describe("KeySettings — herdr にあって本製品に操作自体が無かった12操作（AC8）", () => {
+  it("既定は「なし」として現れ、追加・削除・既定に戻す（[]へ）ができる", async () => {
+    const { settings } = await mountKeys();
+    expect(summaryText("last_pane")).toBe("なし");
+    expect(resetActionBtn("last_pane")).toBeNull(); // 既定（[]）のままなので出ない
+
+    addBtn("last_pane", "prefix").focus();
+    addBtn("last_pane", "prefix").click();
+    await settle();
+    press(capture()!, "y");
+    await settle();
+    expect(settings.keymap.bindingsOf("last_pane")).toEqual(["prefix+y"]);
+    expect(summaryText("last_pane")).toBe("prefix+y");
+    expect(resetActionBtn("last_pane")).not.toBeNull(); // 既定（[]）から変わったので出る
+
+    resetActionBtn("last_pane")!.click();
+    await settle();
+    expect(settings.keymap.bindingsOf("last_pane")).toEqual([]);
+    expect(summaryText("last_pane")).toBe("なし"); // 既定へ戻すと「なし」（defaults: []）
+  });
+
+  it("focus_agent は範囲キー（1..9）を割り当てられる（switch_tab と同じ indexed 操作）", async () => {
+    const { settings } = await mountKeys();
+    addBtn("focus_agent", "prefix").click();
+    await settle();
+    press(capture()!, "3", { altKey: true }); // 数字のキー1つでその修飾の組の範囲になる
+    await settle();
+    expect(settings.keymap.bindingsOf("focus_agent")).toEqual(["prefix+alt+1..9"]);
+    expect(settings.keymap.prefixMap.get("alt+7")).toEqual({ type: "focusAgentIndex", index: 6 });
   });
 });
 
@@ -442,6 +477,20 @@ describe("KeySettings — キーボードだけで通せる（AC-I3）", () => {
 
 const resetActionBtn = (id: string): HTMLElement | null =>
   row(id).querySelector<HTMLElement>("[data-reset-action]");
+// navigate 6操作版のヘルパー（20260923-navigate-mode-keys）。
+const navRow = (id: string): HTMLElement =>
+  document.querySelector<HTMLElement>(`[data-navigate-key="${id}"]`)!;
+const navSummaryText = (id: string): string =>
+  navRow(id).querySelector(".keys-bindings")!.textContent!.trim();
+const navChangeBtn = (id: string, binding: string): HTMLElement =>
+  document.querySelector<HTMLElement>(`[data-nav-change="${id}|${binding}"]`)!;
+const navAddBtn = (id: string): HTMLElement => navRow(id).querySelector<HTMLElement>("[data-nav-add]")!;
+const navDeleteBtn = (id: string, binding: string): HTMLElement =>
+  Array.from(navRow(id).querySelectorAll<HTMLElement>("button")).find((b) =>
+    b.getAttribute("aria-label")?.endsWith(`の ${binding} を削除`),
+  )!;
+const navResetBtn = (id: string): HTMLElement | null =>
+  navRow(id).querySelector<HTMLElement>("[data-reset-navigate-key]");
 const resetPrefixBtn = (): HTMLElement | null =>
   document.querySelector<HTMLElement>("[data-reset-prefix]");
 const resetAllBtn = (): HTMLElement | null =>
@@ -562,7 +611,7 @@ describe("KeySettings — すべてを既定へ戻す（インラインの確認
     await settle();
     confirmYes()!.click();
     await settle();
-    expect(settings.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    expect(settings.keyPrefs).toEqual({ prefix: null, bindings: {}, navigateKeys: {} });
     expect(settings.keymap.prefix).toBe("ctrl+b");
     expect(settings.keymap.bindingsOf("help")).toEqual(["prefix+?"]);
     expect(status()).toBe("すべての割り当てと prefix を既定へ戻しました。");
@@ -769,7 +818,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
   it("最初から表示され（開閉の概念を持たない）、操作名の一部で一致する操作だけが残る（AC1・AC-I1）", async () => {
     await mountKeys();
     expect(filterInput()).not.toBeNull();
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(35);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(53);
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     expect(row("zoom")).not.toBeNull();
@@ -793,7 +842,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     await typeFilter("");
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(35);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(53);
   });
 
   it("絞り込み中もフォーカスが入力欄に残る（入力のたびに奪われない。AC-I4）", async () => {
@@ -1050,5 +1099,234 @@ describe("KeySettings — Keyboard Lock の switch（AC11・AC-I11）", () => {
     await mountKeys();
     expect(keyboardLockSwitch().textContent).toContain("全画面");
     expect(keyboardLockSwitch().textContent).toContain("対応ブラウザ");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260923-navigate-mode-keys：navigate モードの移動キー（AC1・AC2・AC4・AC5・AC-I1〜AC-I5）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("KeySettings — navigate モードの移動（一覧・AC1）", () => {
+  it("6操作の現在の割り当てが見える（既定は今のキー）。予約キー・矢印の注記を含む", async () => {
+    await mountKeys();
+    expect(navSummaryText("navigate_workspace_up")).toBe("up");
+    expect(navSummaryText("navigate_workspace_down")).toBe("down");
+    expect(navSummaryText("navigate_pane_left")).toBe("h");
+    expect(navSummaryText("navigate_pane_down")).toBe("j");
+    expect(navSummaryText("navigate_pane_up")).toBe("k");
+    expect(navSummaryText("navigate_pane_right")).toBe("l");
+    const note = document.querySelector(".keys-navigate-note")!.textContent!;
+    expect(note).toContain("esc");
+    expect(note).toContain("予約");
+    expect(note).toContain("pane の左右移動");
+  });
+
+  it("注記に navigate モードへ入る現在の割り当て（既定は ctrl+b w）が出る", async () => {
+    const { settings } = await mountKeys();
+    expect(settings.keymap.hintFor("workspace_picker")).toBe("ctrl+b w"); // 前提の確認
+    const note = document.querySelector(".keys-navigate-note")!.textContent!;
+    expect(note).toContain("navigate モード（ctrl+b w）");
+  });
+
+  it("prefix を変えると、注記の表記も追従する", async () => {
+    const { settings } = await mountKeys();
+    settings.setKeyPrefix("ctrl+a");
+    await settle();
+    const note = document.querySelector(".keys-navigate-note")!.textContent!;
+    expect(note).toContain("navigate モード（ctrl+a w）");
+  });
+
+  it("workspace_picker の割り当てを全部外すと、注記から割り当ての表記が消える（未解決のプレースホルダを出さない。60 review ラウンド2の回帰）", async () => {
+    const { settings } = await mountKeys();
+    settings.setKeyBindings("workspace_picker", []);
+    await settle();
+    expect(settings.keymap.hintFor("workspace_picker")).toBeNull(); // 前提の確認
+    const note = document.querySelector(".keys-navigate-note")!.textContent!;
+    expect(note).not.toContain("prefix+w");
+    expect(note).not.toContain("ctrl+b w");
+    expect(note).not.toContain("（）"); // 空の丸括弧も残さない
+    expect(note).toContain("navigate モードの中だけで効く"); // 注記の本文自体は出る
+  });
+});
+
+describe("KeySettings — navigate の割り当ての追加・変更・削除（AC1・AC-I4）", () => {
+  it("［追加］：押したキーで足され、フォーカスは押した［追加］へ戻る", async () => {
+    const { settings } = await mountKeys();
+    navAddBtn("navigate_pane_left").focus();
+    navAddBtn("navigate_pane_left").click();
+    await settle();
+    press(capture()!, "h", { ctrlKey: true });
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h", "ctrl+h"]);
+    expect(navSummaryText("navigate_pane_left")).toBe("h / ctrl+h");
+    expect(status()).toBe("「pane を左へ選ぶ」に ctrl+h を割り当てました。");
+    expect(document.activeElement).toBe(navAddBtn("navigate_pane_left"));
+  });
+
+  it("［変更］：その割り当てを置き換え、フォーカスは新しい割り当ての［変更］へ移る", async () => {
+    const { settings } = await mountKeys();
+    navChangeBtn("navigate_pane_left", "h").click();
+    await settle();
+    press(capture()!, "h", { ctrlKey: true });
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["ctrl+h"]);
+    expect(settings.navigateKeymap.ownerOf("h")).toBeNull();
+    expect(document.activeElement).toBe(navChangeBtn("navigate_pane_left", "ctrl+h"));
+  });
+
+  it("［削除］：割り当てを外す。フォーカスは同じ行の次の［変更］、無ければ単一の［追加］へ", async () => {
+    const { settings } = await mountKeys();
+    settings.setNavigateKeyBindings("navigate_pane_left", ["h", "ctrl+h", "alt+h"]);
+    await settle();
+    navDeleteBtn("navigate_pane_left", "h").click();
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["ctrl+h", "alt+h"]);
+    expect(document.activeElement).toBe(navChangeBtn("navigate_pane_left", "ctrl+h"));
+    navDeleteBtn("navigate_pane_left", "alt+h").click();
+    await settle();
+    navDeleteBtn("navigate_pane_left", "ctrl+h").click();
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual([]);
+    expect(navSummaryText("navigate_pane_left")).toBe("なし");
+    expect(document.activeElement).toBe(navAddBtn("navigate_pane_left"));
+    expect(status()).toContain("外しました");
+  });
+
+  it("外したキーは、別の navigate 操作へ割り当てられるようになる", async () => {
+    const { settings } = await mountKeys();
+    navDeleteBtn("navigate_pane_left", "h").click();
+    await settle();
+    navAddBtn("navigate_pane_down").click();
+    await settle();
+    press(capture()!, "h");
+    await settle();
+    expect(settings.navigateKeymap.ownerOf("h")).toBe("navigate_pane_down");
+  });
+});
+
+describe("KeySettings — navigate の拒否（AC2・AC4・AC-I2）", () => {
+  it("予約キー（tab・enter・shift+tab・left・right・修飾無し1〜9）は理由を出して拒否される（Esc 自体は「取り消し」の特別扱いを先に取るので対象外——AC-I1 の既存挙動）", async () => {
+    const { settings } = await mountKeys();
+    navAddBtn("navigate_pane_left").click();
+    await settle();
+    press(capture()!, "Enter");
+    await settle();
+    expect(status()).toContain("予約");
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+    expect(capture()).toBeNull(); // 拒否：取り込み待ちは終わる（AC-I2）
+  });
+
+  it("別の navigate 操作がすでに使っているキーは理由（持ち主の名前）を出して拒否される", async () => {
+    const { settings } = await mountKeys();
+    navAddBtn("navigate_pane_left").click();
+    await settle();
+    press(capture()!, "j");
+    await settle();
+    expect(status()).toContain("下へ選ぶ");
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+  });
+
+  it("34〜35操作側で使われているキーとは衝突しない（表が完全に別）", async () => {
+    const { settings } = await mountKeys();
+    navAddBtn("navigate_workspace_up").click();
+    await settle();
+    press(capture()!, "v"); // prefix の後で split_vertical が使っている文字だが、navigate は別表
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_workspace_up")).toEqual(["up", "v"]);
+  });
+
+  it("修飾キー単体・IME・繰り返しは無視して待ち続ける", async () => {
+    await mountKeys();
+    navAddBtn("navigate_pane_left").click();
+    await settle();
+    press(capture()!, "Control", { ctrlKey: true });
+    await settle();
+    expect(capture()).not.toBeNull();
+    expect(status()).toContain("修飾キーだけでは");
+  });
+
+  it("Escape（取り込み待ちの取り消し自体）で元のまま終わる", async () => {
+    const { settings } = await mountKeys();
+    navChangeBtn("navigate_pane_left", "h").focus();
+    navChangeBtn("navigate_pane_left", "h").click();
+    await settle();
+    press(capture()!, "Escape");
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+    expect(capture()).toBeNull();
+    expect(document.activeElement).toBe(navChangeBtn("navigate_pane_left", "h"));
+  });
+});
+
+describe("KeySettings — navigate の既定へ戻す（AC5）", () => {
+  it("［既定に戻す］は上書きしている操作にだけ出る。押すと既定へ戻り、フォーカスは単一の［追加］へ", async () => {
+    const { settings } = await mountKeys();
+    expect(navResetBtn("navigate_pane_left")).toBeNull();
+    settings.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    await settle();
+    expect(navResetBtn("navigate_pane_left")).not.toBeNull();
+    expect(navResetBtn("navigate_pane_down")).toBeNull(); // 他の操作は変わらず出ない
+    navResetBtn("navigate_pane_left")!.click();
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+    expect(status()).toBe("「pane を左へ選ぶ」を既定へ戻しました。");
+    expect(navResetBtn("navigate_pane_left")).toBeNull();
+    expect(document.activeElement).toBe(navAddBtn("navigate_pane_left"));
+    expect(readPrefs()).not.toHaveProperty("keys");
+  });
+
+  it("既定のキーを別の navigate 操作が使っていれば、その分は戻さず、持ち主の名前を出す", async () => {
+    const { settings } = await mountKeys();
+    settings.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    settings.setNavigateKeyBindings("navigate_pane_down", ["h"]);
+    await settle();
+    navResetBtn("navigate_pane_left")!.click();
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual([]);
+    expect(status()).toContain("上書きを外しました");
+    expect(status()).not.toContain("既定へ戻しました");
+    expect(status()).toContain("戻せなかった既定のキー");
+    expect(status()).toContain("下へ選ぶ");
+  });
+
+  it("割り当てなし（[]）にした操作も戻せる", async () => {
+    const { settings } = await mountKeys();
+    navDeleteBtn("navigate_workspace_up", "up").click();
+    await settle();
+    expect(navSummaryText("navigate_workspace_up")).toBe("なし");
+    expect(navResetBtn("navigate_workspace_up")).not.toBeNull();
+    navResetBtn("navigate_workspace_up")!.click();
+    await settle();
+    expect(settings.navigateKeymap.bindingsOf("navigate_workspace_up")).toEqual(["up"]);
+  });
+
+  it("「すべて既定に戻す」でも navigate の上書きが消える（既存34〜35操作のボタンを共用）", async () => {
+    const { settings } = await mountKeys();
+    settings.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    await settle();
+    resetAllBtn()!.click();
+    await settle();
+    document.querySelector<HTMLElement>("[data-confirm-yes]")!.click();
+    await settle();
+    expect(settings.keyPrefs).toEqual({ prefix: null, bindings: {}, navigateKeys: {} });
+    expect(navSummaryText("navigate_pane_left")).toBe("h");
+  });
+});
+
+describe("KeySettings — navigate は絞り込みの対象に含まれる（AC1）", () => {
+  it("操作名の一部で一致すれば残り、一致しなければ節ごと消える", async () => {
+    await mountKeys();
+    await typeFilter("workspace を上へ選ぶ");
+    expect(navRow("navigate_workspace_up")).not.toBeNull();
+    expect(document.querySelector('[data-navigate-key="navigate_pane_left"]')).toBeNull();
+    expect(
+      Array.from(document.querySelectorAll(".keys-group-name")).map((h) => h.textContent),
+    ).not.toContain("全体"); // 34〜35操作側は一致が無いので消える
+
+    await typeFilter("該当なしのはずの文字列ｚｚｚ");
+    expect(document.querySelector('[data-navigate-key]')).toBeNull();
+    expect(
+      Array.from(document.querySelectorAll(".keys-group-name")).map((h) => h.textContent),
+    ).not.toContain("navigate モードの移動");
   });
 });

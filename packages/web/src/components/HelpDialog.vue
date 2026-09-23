@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { ACTIONS, type ActionGroup } from "../keys/bindings.js";
+import { navigateKeyDef, type NavigateKeyId } from "../keys/navigateKeys.js";
 import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 
@@ -9,7 +10,10 @@ import { useViewStore } from "../store/view.js";
  * `keybind_help_groups()`/`filter_keybind_help_groups()` を移植——群（全体・移動・workspace / tab・pane）
  * ごとの一覧、`custom` 群は本製品にカスタムキーバインド（独自コマンド）が無いので常に出さない（D56 の訂正 8）。
  * **キーは現在の割り当て（`settings.keymap`）から作る**（20260921-keybinding-customization。design「案内の追従」・D8）——prefix の後のキーは `prefix+v`、直接のキーは
- * `ctrl+alt+d`、割り当てなしは「なし」。移動の群（navigate モードの中のキー）は変えられない固定の表記。
+ * `ctrl+alt+d`、割り当てなしは「なし」。**移動の群（navigate モードの中の6操作）も現在の割り当て
+ * （`settings.navigateKeymap`）から作る**（20260923-navigate-mode-keys。design「HelpDialog.vue『移動』群の
+ * 動的化」で「固定の表記」から変更）——`esc`（戻る）・`enter`（決定）は6操作に含まれないため固定のまま、
+ * `←`/`→` は予約キーで表に無いため pane 左右移動の固定フォールバックとして常に併記する（decisions D3）。
  * 絞り込みは herdr と同じくキー表記・説明の部分一致（大小無視）で、一致 0 件の群は丸ごと消える。
  *
  * Esc/Enter/スクロールの分岐は herdr の `route_overlay_key`（`overlay_input.rs:773-873`）を実測して
@@ -48,13 +52,41 @@ function actionEntries(group: ActionGroup): HelpEntry[] {
   });
 }
 
-/** 移動の群：navigate モード（`prefix+w`）の中のキー。**固定**で変えられない（herdr でも `navigate_*` 以外は固定）。 */
-const NAVIGATE_ENTRIES: HelpEntry[] = [
+/** navigate 6操作の現在の割り当て表記（20260923-navigate-mode-keys）。割り当てなしは「なし」。 */
+function navigateBindingText(id: NavigateKeyId): string {
+  const list = settings.navigateKeymap.bindingsOf(id);
+  return list.length === 0 ? "なし" : list.join(" / ");
+}
+/**
+ * 素の行（表の割り当てが無ければ灰色）。navigate_pane_left/right はこれを使わず、下の
+ * `navigateEntries` で別途組み立てる（矢印の固定フォールバックがあるので灰色にしない。design
+ * 「HelpDialog.vue『移動』群の動的化」のスケッチどおり）。
+ */
+function navigateEntry(id: NavigateKeyId): HelpEntry {
+  const list = settings.navigateKeymap.bindingsOf(id);
+  return { keys: navigateBindingText(id), label: navigateKeyDef(id)?.label ?? id, grayed: list.length === 0 };
+}
+/**
+ * 移動の群：navigate モード（`prefix+w`）の中の6操作は現在の割り当てから作る（AC7）。
+ * `esc`（戻る）・`enter`（決定）は6操作に含まれないため固定のまま。`←`/`→` は予約キーで表に無いが、
+ * `NavigateMode` の固定 case として常に pane 左右移動に効くため、表の割り当てに関わらず常に併記する
+ * （decisions D3）。**pane 左右の2行は `grayed` を立てない**——表の割り当て（`h`/`l` 等）を外しても
+ * 矢印キーが常に効くため、「使えない」ように見せない（design のスケッチどおり。workspace 上下・
+ * pane 上下の4行は矢印の固定フォールバックが無いので、割り当てなしのとき灰色にする）。
+ */
+const navigateEntries = computed<HelpEntry[]>(() => [
   { keys: "esc", label: "戻る" },
-  { keys: "↑ / ↓", label: "workspace の一覧を選ぶ" },
-  { keys: "h / j / k / l ・← / →", label: "pane を選ぶ" },
+  navigateEntry("navigate_workspace_up"),
+  navigateEntry("navigate_workspace_down"),
+  { keys: `${navigateBindingText("navigate_pane_left")} ・ ←`, label: navigateKeyDef("navigate_pane_left")!.label },
+  navigateEntry("navigate_pane_down"),
+  navigateEntry("navigate_pane_up"),
+  {
+    keys: `${navigateBindingText("navigate_pane_right")} ・ →`,
+    label: navigateKeyDef("navigate_pane_right")!.label,
+  },
   { keys: "enter", label: "選んだ workspace を開く" },
-];
+]);
 
 // herdr の keybind_help_groups() の群分けに合わせる（D76）。先頭に prefix 自身の行（herdr の「prefix mode」の行と同じ）。
 const helpGroups = computed<HelpGroup[]>(() => [
@@ -68,7 +100,7 @@ const helpGroups = computed<HelpGroup[]>(() => [
       // 呼ぶ必要が無くなった——常に空を返すだけになる）。
     ],
   },
-  { name: "移動", entries: NAVIGATE_ENTRIES },
+  { name: "移動", entries: navigateEntries.value },
   { name: "workspace / tab", entries: actionEntries("workspace / tab") },
   { name: "pane", entries: [...actionEntries("pane"), ...notYetEntry("e")] },
 ]);

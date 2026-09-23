@@ -8,6 +8,14 @@ import type { ClientHelloParams, MethodName, ParamsOf, ResultOf, ServerEvent, Se
 export type ClientKind = ClientHelloParams["kind"];
 
 /**
+ * このブラウザの端末の種類（`main.ts` が `isCoarsePointer()` で決める。desktop / mobile の2値のみ）。
+ * `ClientKind`（`client.hello` に送る種別。20260923-external-control-api で `"external"` が増えた）とは
+ * 別物——ブラウザが `"external"`（画面を持たない CLI 用の種別）になることは無いため、`DeviceKindKey`
+ * のような「この端末は desktop/mobile のどちらか」を表す箇所ではこちらを使う。
+ */
+export type DeviceKind = "desktop" | "mobile";
+
+/**
  * 接続の状態。`rejected` は、Cookie は有効だが、このページのアドレス（Host／Origin）をサーバが許可していない
  * （`GET /api/session` が 403 で、その後に 1 回だけ試した `/ws` も開く前に閉じた。サーバの D106）——自動では繋ぎ直さず、理由と
  * `--origin <このページの Origin>` を示して「再試行」（`connect()`）を待つ（D107。以前は 401 以外と同じく「再接続中…」のまま

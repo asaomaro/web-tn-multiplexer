@@ -101,12 +101,16 @@ const inputGate = new InputGate(conn);
 // キーの割り当て（20260921-keybinding-customization）：prefix と割り当ては**設定（`settings.keymap`）から解決した表**で、設定画面で変えると即時に差し替える（AC8）。
 // macOS の Option は文字を別の文字に化かすので、macOS のときだけ `code` で元へ戻す（D6b。ほかの環境で入力を書き換えない）。
 setOptionComposes(isMacPlatform());
+// navigate モードの6操作（20260923-navigate-mode-keys）も同じ流儀——初期表を直接渡し、設定画面で
+// 変えると `settings.navigateKeymap` の watch で即時に差し替える（design「main.ts の配線」）。
+const navigateMode = new NavigateMode(settings.navigateKeymap);
 const router = new KeyRouter(
   settings.keymap,
   { now: () => Date.now(), setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (h) => window.clearTimeout(h as number) },
-  { navigate: new NavigateMode(), copy: new CopyMode(), resize: new ResizeMode() },
+  { navigate: navigateMode, copy: new CopyMode(), resize: new ResizeMode() },
 );
 watch(() => settings.keymap, (keymap) => router.setKeymap(keymap));
+watch(() => settings.navigateKeymap, (keymap) => navigateMode.setKeymap(keymap));
 const keys = new KeyInputController(router, inputGate);
 
 const renderers = new RendererPool({ capacity: webglCapacity });

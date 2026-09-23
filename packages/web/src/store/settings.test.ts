@@ -422,7 +422,7 @@ describe("useSettingsStore — テーマ（20260921-theme-settings）", () => {
 describe("useSettingsStore — キーの割り当て（AC8）", () => {
   it("何も保存されていなければ既定の表（prefix は ctrl+b・割り当ては既定）", () => {
     const store = useSettingsStore(pinia);
-    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {}, navigateKeys: {} });
     expect(store.keymap.prefix).toBe("ctrl+b");
     expect(store.keymap.bindingsOf("split_vertical")).toEqual(["prefix+v"]);
     expect(store.keymap.directMap.size).toBe(0);
@@ -486,13 +486,21 @@ describe("useSettingsStore — キーの割り当て（AC8）", () => {
 
   it("replaceKeyPrefs を直に呼んでも、読めない値は反映も保存もしない（二重の守り。setKeyPrefix・setKeyBindings は手前で弾くので、ここでしか届かない）", () => {
     const store = useSettingsStore(pinia);
-    store.replaceKeyPrefs({ prefix: "cmd+b", bindings: { zoom: ["nonsense"] } });
-    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    store.replaceKeyPrefs({ prefix: "cmd+b", bindings: { zoom: ["nonsense"] }, navigateKeys: {} });
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {}, navigateKeys: {} });
     expect(store.keymap.prefix).toBe("ctrl+b");
     expect(readPrefs()).not.toHaveProperty("keys");
     // 一部だけ読めないなら、読める分だけ（状態にも保存にも）残る。
-    store.replaceKeyPrefs({ prefix: "cmd+b", bindings: { zoom: ["prefix+y", "nonsense"] } });
-    expect(store.keyPrefs).toEqual({ prefix: null, bindings: { zoom: ["prefix+y"] } });
+    store.replaceKeyPrefs({
+      prefix: "cmd+b",
+      bindings: { zoom: ["prefix+y", "nonsense"] },
+      navigateKeys: {},
+    });
+    expect(store.keyPrefs).toEqual({
+      prefix: null,
+      bindings: { zoom: ["prefix+y"] },
+      navigateKeys: {},
+    });
     expect(readPrefs()["keys"]).toEqual({ bindings: { zoom: ["prefix+y"] } });
   });
 
@@ -537,7 +545,7 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
     expect(store.keymap.prefix).toBe("ctrl+b");
     expect(store.keymap.bindingsOf("help")).toEqual([]);
     store.resetAllKeys();
-    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {}, navigateKeys: {} });
     expect(store.keymap.bindingsOf("help")).toEqual(["prefix+?"]);
     expect(readPrefs()).not.toHaveProperty("keys");
   });
@@ -554,14 +562,22 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
 
   it("replaceKeyPrefs：戻し・おすすめの結果（KeyPrefs）をそのまま採る", () => {
     const store = useSettingsStore(pinia);
-    store.replaceKeyPrefs({ prefix: "alt+x", bindings: { zoom: ["ctrl+alt+z", "prefix+z"] } });
+    store.replaceKeyPrefs({
+      prefix: "alt+x",
+      bindings: { zoom: ["ctrl+alt+z", "prefix+z"] },
+      navigateKeys: {},
+    });
     expect(store.keymap.prefix).toBe("alt+x");
     expect(store.keymap.bindingsOf("zoom")).toEqual(["ctrl+alt+z", "prefix+z"]);
   });
 
   it("同じ内容を渡し直しても、書かず、keymap も作り直さない（購読は変えたときだけ動く。押すたびに作り直さない）", async () => {
     const store = useSettingsStore(pinia);
-    const next = { prefix: "alt+x", bindings: { zoom: ["ctrl+alt+z", "prefix+z"] } };
+    const next = {
+      prefix: "alt+x",
+      bindings: { zoom: ["ctrl+alt+z", "prefix+z"] },
+      navigateKeys: {},
+    };
     store.replaceKeyPrefs(next);
     const km = store.keymap;
     let fired = 0;
@@ -572,7 +588,11 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
     );
     const setItem = vi.spyOn(localStorage, "setItem");
     try {
-      store.replaceKeyPrefs({ prefix: "alt+x", bindings: { zoom: ["ctrl+alt+z", "prefix+z"] } });
+      store.replaceKeyPrefs({
+        prefix: "alt+x",
+        bindings: { zoom: ["ctrl+alt+z", "prefix+z"] },
+        navigateKeys: {},
+      });
       store.setKeyPrefix("alt+x");
       store.setKeyBindings("zoom", ["ctrl+alt+z", "prefix+z"]);
       await nextTick();
@@ -591,7 +611,7 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
   it("壊れた keys が保存に残っていても、すべて戻す・prefix を戻す操作で保存が直る（状態は既定のまま・表は作り直さない）", () => {
     writePrefs({ keys: "x" });
     const a = useSettingsStore(pinia);
-    expect(a.keyPrefs).toEqual({ prefix: null, bindings: {} });
+    expect(a.keyPrefs).toEqual({ prefix: null, bindings: {}, navigateKeys: {} });
     const km = a.keymap;
     a.resetAllKeys();
     expect(readPrefs()).not.toHaveProperty("keys");
@@ -602,6 +622,73 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
     expect(b.keymap.prefix).toBe("ctrl+b");
     b.setKeyPrefix(null);
     expect(readPrefs()).not.toHaveProperty("keys");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260923-navigate-mode-keys：navigate モードの6操作の割り当て（AC1・AC5・AC6）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("useSettingsStore — navigate モードの移動キー（AC1・AC5・AC6）", () => {
+  it("何も保存されていなければ既定の表", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.keyPrefs.navigateKeys).toEqual({});
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+    expect(store.navigateKeymap.bindingsOf("navigate_workspace_up")).toEqual(["up"]);
+  });
+
+  it("setNavigateKeyBindings で変えると、解決した表が即時に変わり、wtm.prefs.v1 の keys.navigate に差だけが保存される", () => {
+    const store = useSettingsStore(pinia);
+    store.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["ctrl+h"]);
+    expect(store.navigateKeymap.ownerOf("h")).toBeNull(); // 既定の h は空く
+    expect(readPrefs()["keys"]).toEqual({ navigate: { navigate_pane_left: ["ctrl+h"] } });
+  });
+
+  it("34〜35操作側の割り当てには影響しない（navigate 専用の表として独立している）", () => {
+    const store = useSettingsStore(pinia);
+    store.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    // keyPrefs は1つの ref なので、navigate だけを変えても `keymap`（34〜35操作側）は作り直る
+    // （`keyPrefs.value` の差し替えに反応するため。design「store」の対象は「別の表を持つ」ことで、
+    // computed の参照安定性の保証までは含まない）が、**中身**（bindings の割り当て）は変わらない。
+    expect(store.keymap.bindingsOf("focus_pane_left")).toEqual(["prefix+h"]); // 34〜35操作側は無傷
+    expect(store.keyPrefs.bindings).toEqual({});
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["ctrl+h"]);
+  });
+
+  it("resetNavigateKey で1操作だけ既定へ戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    store.setNavigateKeyBindings("navigate_pane_down", ["ctrl+j"]);
+    store.resetNavigateKey("navigate_pane_left");
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_down")).toEqual(["ctrl+j"]); // 他は変わらない
+  });
+
+  it("resetAllKeys は navigateKeys も一緒に既定へ戻す（design「設計方針」）", () => {
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("ctrl+a");
+    store.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    store.resetAllKeys();
+    expect(store.keyPrefs).toEqual({ prefix: null, bindings: {}, navigateKeys: {} });
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["h"]);
+    expect(readPrefs()).not.toHaveProperty("keys");
+  });
+
+  it("通らない値は反映せず捨てる（二重の守り）：予約キー・全部無効な入力", () => {
+    const store = useSettingsStore(pinia);
+    store.setNavigateKeyBindings("navigate_pane_left", ["esc"]);
+    expect(store.keyPrefs.navigateKeys).toEqual({});
+    store.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h", "esc"]); // 有効な分だけ反映
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_left")).toEqual(["ctrl+h"]);
+  });
+
+  it("別のウィンドウで navigate の割り当てが変わったら（storage イベント）追従する", () => {
+    const store = useSettingsStore(pinia);
+    store.setNavigateKeyBindings("navigate_pane_left", ["ctrl+h"]);
+    writePrefs({ keys: { navigate: { navigate_pane_left: ["ctrl+h"], navigate_pane_down: ["ctrl+j"] } } });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.navigateKeymap.bindingsOf("navigate_pane_down")).toEqual(["ctrl+j"]);
   });
 });
 

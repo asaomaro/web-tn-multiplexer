@@ -217,7 +217,7 @@ describe("resolveKeymap — 上書きと衝突（AC4・AC6・AC8。D7）", () =>
     expect(a.keymap.bindingsOf("zoom")).toEqual(["prefix+z"]);
     expect(a.keymap.prefixMap.has("alt+1")).toBe(false);
     expect(a.problems).toHaveLength(1);
-    expect(a.problems[0]).toContain("tab の番号選択だけ"); // 範囲を範囲でない操作に与えた向き
+    expect(a.problems[0]).toContain("範囲対応の操作にしか使えません"); // 範囲を範囲でない操作に与えた向き
     const b = resolveKeymap(
       prefs({ bindings: { switch_tab: ["prefix+alt+5", "prefix+alt+1..9"] } }),
     );

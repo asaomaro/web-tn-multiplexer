@@ -2,10 +2,13 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import {
   applyRecommended,
+  planNavigateReset,
   planReset,
   validateAssignment,
+  validateNavigateAssignment,
   type AssignResult,
   type AssignTarget,
+  type NavigateAssignTarget,
 } from "../keys/assign.js";
 import {
   ACTIONS,
@@ -16,6 +19,7 @@ import {
 } from "../keys/bindings.js";
 import { formatBinding, keyInputOf, type KeyboardEventLike } from "../keys/chord.js";
 import { displayBinding, type LayoutMap } from "../keys/chordDisplay.js";
+import { NAVIGATE_KEYS, navigateKeyDef, type NavigateKeyId } from "../keys/navigateKeys.js";
 import { KEY_PRESETS } from "../keys/presets.js";
 import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
@@ -54,11 +58,27 @@ const actionsByGroup = computed(() => {
     actions: ACTIONS.filter((a) => a.group === group && matches(a, group)),
   })).filter((g) => g.actions.length > 0); // AC2：0 件の群は見出しごと消える
 });
+/**
+ * navigate 6操作の絞り込み（20260923-navigate-mode-keys）。既存34〜35操作の絞り込みと同じ扱い
+ * （一致 0 件なら節ごと消える）だが、群を持たないので `NAVIGATE_KEYS` を直接絞り込む。
+ */
+const navigateKeysFiltered = computed(() => {
+  const q = filterText.value.trim().toLowerCase();
+  return NAVIGATE_KEYS.filter((d) => q === "" || d.label.toLowerCase().includes(q));
+});
+
+/**
+ * この節の取り込み対象は2系統ある（20260923-navigate-mode-keys）：既存34〜35操作（`AssignTarget`。
+ * prefix の後／直接のキー）と、navigate モードの6操作（`NavigateAssignTarget`。prefix なしの素のキー。
+ * design「別の表」）。取り込みの枠組み（`captureAttrs`/`onCaptureKeydown`/`endCapture`/フォーカス制御）は
+ * 共通なので、`CaptureTarget` の合併型で1つの状態に載せ、`kind` で検証・適用先だけ分ける。
+ */
+type CaptureTarget = AssignTarget | NavigateAssignTarget;
 
 const root = ref<HTMLElement | null>(null);
 const message = ref("");
 /** いま取り込み待ちの対象（無ければ null）。 */
-const target = ref<AssignTarget | null>(null);
+const target = ref<CaptureTarget | null>(null);
 /** 取り込み待ちを始めたボタン（終わったら戻す先）。 */
 let trigger: HTMLElement | null = null;
 /**
@@ -71,6 +91,9 @@ const pendingMove = ref<{
 } | null>(null);
 
 const bindingsOf = (id: ActionId): readonly string[] => settings.keymap.bindingsOf(id);
+/** navigate 6操作版の `bindingsOf`（20260923-navigate-mode-keys）。 */
+const navigateBindingsOf = (id: NavigateKeyId): readonly string[] =>
+  settings.navigateKeymap.bindingsOf(id);
 /**
  * macOS の非 US 配列での Option chord 表示の補正（20260922-keybinding-usability。design「US3」・
  * AC8〜AC10）。`getLayoutMap()` が使えない環境・macOS 以外では `null` のまま（AC9。取得中も
@@ -89,8 +112,21 @@ onMounted(async () => {
   }
 });
 const displayFor = (binding: string): string => displayBinding(binding, layoutMap.value);
+/**
+ * navigate モードへ入るキーの案内（20260923-navigate-mode-keys）。`workspace_picker` の割り当てを
+ * 全部外していれば `hintFor` は `null` を返す——文字どおりの `"prefix+w"` を未解決のまま出さず、
+ * `Toast.vue`（`hintFor` が `null` なら出さない流儀）と同じく空にする（60 review ラウンド1で発見）。
+ */
+const navigateModeHint = computed<string>(() => {
+  const hint = settings.keymap.hintFor("workspace_picker");
+  return hint === null ? "" : `（${displayFor(hint)}）`;
+});
 const bindingsText = (id: ActionId): string => {
   const list = bindingsOf(id);
+  return list.length === 0 ? "なし" : list.map(displayFor).join(" / ");
+};
+const navigateBindingsText = (id: NavigateKeyId): string => {
+  const list = navigateBindingsOf(id);
   return list.length === 0 ? "なし" : list.map(displayFor).join(" / ");
 };
 const viaOf = (binding: string): "prefix" | "direct" =>
@@ -108,25 +144,38 @@ const changeTarget = (id: ActionId, binding: string): AssignTarget => ({
   via: viaOf(binding),
   replacing: binding,
 });
+/** navigate 6操作の［追加］の対象（prefix/direct の区別が無いので1種類）。 */
+const navigateAddTarget = (id: NavigateKeyId): NavigateAssignTarget => ({ kind: "navigateKey", id });
+const navigateChangeTarget = (id: NavigateKeyId, binding: string): NavigateAssignTarget => ({
+  kind: "navigateKey",
+  id,
+  replacing: binding,
+});
 
-function isCapturing(t: AssignTarget): boolean {
+function isCapturing(t: CaptureTarget): boolean {
   const cur = target.value;
   if (cur === null || cur.kind !== t.kind) return false;
-  if (cur.kind === "prefix" || t.kind === "prefix") return true;
-  return cur.id === t.id && cur.via === t.via && cur.replacing === t.replacing;
+  if (cur.kind === "prefix") return true; // t.kind === "prefix" もここまでに確定
+  if (cur.kind === "navigateKey" && t.kind === "navigateKey")
+    return cur.id === t.id && cur.replacing === t.replacing;
+  if (cur.kind === "binding" && t.kind === "binding")
+    return cur.id === t.id && cur.via === t.via && cur.replacing === t.replacing;
+  return false;
 }
 
 /** 取り込みの部品の案内（対象によって変える）。 */
-function captureHint(t: AssignTarget): string {
+function captureHint(t: CaptureTarget): string {
   if (t.kind === "prefix")
     return "prefix にするキーを押してください（ctrl+英字など。Esc で取り消し）";
+  if (t.kind === "navigateKey")
+    return "navigate モードの中で押すキーを押してください（Esc で取り消し）";
   if (actionDef(t.id)?.indexed === true)
     return "1〜9 の数字のキーを押してください（修飾キーと一緒でも。Esc で取り消し）";
   if (t.via === "direct") return "ctrl や alt を組み合わせたキーを押してください（Esc で取り消し）";
   return "prefix の後に押すキーを押してください（Esc で取り消し）";
 }
 
-function startCapture(t: AssignTarget, ev: Event): void {
+function startCapture(t: CaptureTarget, ev: Event): void {
   trigger = ev.currentTarget instanceof HTMLElement ? ev.currentTarget : null;
   target.value = t;
   message.value = "";
@@ -165,11 +214,22 @@ function endCapture(
 }
 
 /** 確定した割り当てを store へ渡し、終わったあとにフォーカスを戻す先を返す。 */
-function apply(t: AssignTarget, binding: string): (() => HTMLElement | null) | undefined {
+function apply(t: CaptureTarget, binding: string): (() => HTMLElement | null) | undefined {
   if (t.kind === "prefix") {
     settings.setKeyPrefix(binding);
     message.value = `prefix を ${binding} にしました。`;
     return undefined; // ［変更］は残るので、押したボタンへ戻る
+  }
+  if (t.kind === "navigateKey") {
+    const current = navigateBindingsOf(t.id);
+    const list =
+      t.replacing !== undefined && current.includes(t.replacing)
+        ? current.map((b) => (b === t.replacing ? binding : b))
+        : [...current, binding];
+    settings.setNavigateKeyBindings(t.id, list);
+    message.value = `「${navigateKeyDef(t.id)?.label ?? t.id}」に ${binding} を割り当てました。`;
+    if (t.replacing === undefined) return undefined;
+    return () => findNavigateChangeButton(t.id, binding);
   }
   const current = bindingsOf(t.id);
   const list =
@@ -186,6 +246,12 @@ function apply(t: AssignTarget, binding: string): (() => HTMLElement | null) | u
 function findChangeButton(id: ActionId, binding: string): HTMLElement | null {
   const all = root.value?.querySelectorAll<HTMLElement>("[data-change]") ?? [];
   for (const el of all) if (el.dataset["change"] === `${id}|${binding}`) return el;
+  return null;
+}
+
+function findNavigateChangeButton(id: NavigateKeyId, binding: string): HTMLElement | null {
+  const all = root.value?.querySelectorAll<HTMLElement>("[data-nav-change]") ?? [];
+  for (const el of all) if (el.dataset["navChange"] === `${id}|${binding}`) return el;
   return null;
 }
 
@@ -218,11 +284,10 @@ function onCaptureKeydown(ev: KeyboardEvent): void {
     endCapture(undefined, { holdCancel: true });
     return;
   }
-  const result = validateAssignment(
-    settings.keymap,
-    t,
-    keyInputOf(ev as unknown as KeyboardEventLike),
-  );
+  const result: AssignResult =
+    t.kind === "navigateKey"
+      ? validateNavigateAssignment(settings.navigateKeymap, t, keyInputOf(ev as unknown as KeyboardEventLike))
+      : validateAssignment(settings.keymap, t, keyInputOf(ev as unknown as KeyboardEventLike));
   if (!result.ok) {
     if (result.reason !== "") message.value = result.reason;
     if (result.ignore === true) return; // 修飾キー単体・IME・繰り返し：待ち続ける
@@ -269,11 +334,31 @@ function removeBinding(id: ActionId, binding: string, ev: Event): void {
   });
 }
 
+/** navigate 6操作版の `removeBinding`（20260923-navigate-mode-keys）。フォーカスは同じ行の次の部品
+ *  （無ければ単一の［追加］）へ——navigate は prefix/direct の区別が無いので追加ボタンは1つだけ。 */
+function removeNavigateBinding(id: NavigateKeyId, binding: string, ev: Event): void {
+  const current = navigateBindingsOf(id);
+  const index = current.indexOf(binding);
+  const row = (ev.currentTarget as HTMLElement | null)?.closest("details") ?? null;
+  settings.setNavigateKeyBindings(
+    id,
+    current.filter((b) => b !== binding),
+  );
+  message.value = `「${navigateKeyDef(id)?.label ?? id}」から ${binding} を外しました。`;
+  void nextTick(() => {
+    const changes = row?.querySelectorAll<HTMLElement>("[data-nav-change]") ?? [];
+    (changes[index] ?? row?.querySelector<HTMLElement>("[data-nav-add]"))?.focus();
+  });
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // 既定へ戻す（AC9）・おすすめの直接のキー（AC10）
 // ---------------------------------------------------------------------------------------------------------------------
 
 const isOverridden = (id: ActionId): boolean => settings.keyPrefs.bindings[id] !== undefined;
+/** navigate 6操作版の `isOverridden`。 */
+const isNavigateOverridden = (id: NavigateKeyId): boolean =>
+  settings.keyPrefs.navigateKeys[id] !== undefined;
 
 /** 足せなかった・戻せなかった理由を 1 つの節にする。理由が**そのキーで始まる**ときはそのまま（キーが二重に出ない）、そうでなければキーを添える。 */
 function describeSkip(key: string, reason: string): string {
@@ -297,6 +382,23 @@ function resetAction(id: ActionId, ev: Event): void {
       ? `「${label}」を既定へ戻しました。`
       : `「${label}」の上書きを外しました。戻せなかった既定のキー：${plan.skipped.map((k) => describeSkip(k.binding, k.reason)).join("、")}。`;
   void nextTick(() => row?.querySelector<HTMLElement>("[data-add='prefix']")?.focus());
+}
+
+/** navigate 6操作版の `resetAction`。フォーカスは同じ行の単一の［追加］へ。 */
+function resetNavigateKeyAction(id: NavigateKeyId, ev: Event): void {
+  const row = (ev.currentTarget as HTMLElement | null)?.closest("details") ?? null;
+  const plan = planNavigateReset(settings.navigateKeymap, settings.keyPrefs, { kind: "navigateKey", id });
+  if (!plan.ok) {
+    message.value = plan.reason;
+    return;
+  }
+  settings.replaceKeyPrefs(plan.prefs);
+  const label = navigateKeyDef(id)?.label ?? id;
+  message.value =
+    plan.skipped.length === 0
+      ? `「${label}」を既定へ戻しました。`
+      : `「${label}」の上書きを外しました。戻せなかった既定のキー：${plan.skipped.map((k) => describeSkip(k.binding, k.reason)).join("、")}。`;
+  void nextTick(() => row?.querySelector<HTMLElement>("[data-nav-add]")?.focus());
 }
 
 /** prefix を既定へ戻す。既定の prefix が別の割り当てに使われていれば戻さず、理由を出す。フォーカスは［変更］へ。 */
@@ -505,6 +607,85 @@ watch(
       </ul>
     </div>
 
+    <div
+      v-if="navigateKeysFiltered.length > 0"
+      class="keys-group"
+      role="group"
+      aria-label="navigate モードの移動"
+    >
+      <h4 class="keys-group-name">navigate モードの移動</h4>
+      <p class="settings-note keys-navigate-note">
+        navigate モード{{ navigateModeHint }}の中だけで効く、prefix なしの素のキーです。esc・enter・
+        tab・左右の矢印・数字の 1〜9 は予約されていて割り当てられません（← / → は常に pane の左右移動に
+        使われます）。
+      </p>
+      <ul class="keys-list">
+        <li v-for="def in navigateKeysFiltered" :key="def.id" class="keys-item">
+          <details class="keys-details" :data-navigate-key="def.id">
+            <summary class="keys-summary">
+              <span class="keys-action-label">{{ def.label }}</span>
+              <span
+                class="keys-bindings"
+                :class="{ 'keys-none': navigateBindingsOf(def.id).length === 0 }"
+                >{{ navigateBindingsText(def.id) }}</span
+              >
+            </summary>
+            <div class="keys-editor">
+              <ul class="keys-chips">
+                <li v-for="b in navigateBindingsOf(def.id)" :key="b" class="keys-chip">
+                  <code class="keys-binding">{{ displayFor(b) }}</code>
+                  <button
+                    type="button"
+                    class="keys-btn"
+                    :data-nav-change="`${def.id}|${b}`"
+                    :aria-label="`「${def.label}」の ${displayFor(b)} を変更`"
+                    @click="startCapture(navigateChangeTarget(def.id, b), $event)"
+                  >
+                    変更
+                  </button>
+                  <button
+                    type="button"
+                    class="keys-btn"
+                    :aria-label="`「${def.label}」の ${displayFor(b)} を削除`"
+                    @click="removeNavigateBinding(def.id, b, $event)"
+                  >
+                    削除
+                  </button>
+                  <button v-if="isCapturing(navigateChangeTarget(def.id, b))" v-bind="captureAttrs">
+                    {{ captureHint(navigateChangeTarget(def.id, b)) }}
+                  </button>
+                </li>
+              </ul>
+              <div class="keys-add">
+                <button
+                  type="button"
+                  class="keys-btn"
+                  data-nav-add
+                  :aria-label="`追加（「${def.label}」）`"
+                  @click="startCapture(navigateAddTarget(def.id), $event)"
+                >
+                  追加
+                </button>
+              </div>
+              <button
+                v-if="isNavigateOverridden(def.id)"
+                type="button"
+                class="keys-btn keys-reset"
+                data-reset-navigate-key
+                :aria-label="`「${def.label}」を既定に戻す`"
+                @click="resetNavigateKeyAction(def.id, $event)"
+              >
+                既定に戻す
+              </button>
+              <button v-if="isCapturing(navigateAddTarget(def.id))" v-bind="captureAttrs">
+                {{ captureHint(navigateAddTarget(def.id)) }}
+              </button>
+            </div>
+          </details>
+        </li>
+      </ul>
+    </div>
+
     <div class="keys-bulk">
       <label class="keys-preset-label" for="keys-preset-select">プリセット</label>
       <select id="keys-preset-select" v-model="selectedPresetId" class="keys-select">
@@ -593,6 +774,9 @@ watch(
 }
 .keys-lead {
   margin-bottom: 0.6em;
+}
+.keys-navigate-note {
+  margin-bottom: 0.5em;
 }
 .keys-prefix {
   display: flex;
