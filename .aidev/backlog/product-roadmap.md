@@ -113,6 +113,16 @@ parent: 20260918-web-terminal-multiplexer
 - [x] workspace の既定の名前をリポジトリ名（git でなければフォルダ名）から自動で付ける: 今はどこで開いても一律に「1」で、別のリポジトリで開いた workspace がサイドバーで見分けられない。herdr は repo 名か cwd のフォルダ名を自動の名前にし（src/workspace.rs の display_name・automatic_workspace_label。名前を変えた後は変えた名前のまま）、cwd が変われば追従する。worktree を開く経路が label を明示しているのはこの穴への個別の手当て（出典: .aidev/works/20260921-new-terminal-cwd/review.md）
   → 着地: 20260921-workspace-auto-label（feature/workspace-auto-label）。名前を付けていない workspace を、開いた場所のリポジトリの根のフォルダ名（git の外ならフォルダ名・ホームなら `~`）で呼ぶ。規則は `packages/server/src/session/workspaceLabel.ts`（herdr の `git_repo_root` 等を移植。git のコマンドは使わない）、自動か付けたものかは `Workspace.autoLabel`。名前を空にして確定すると自動に戻る（herdr に無い）。`cd` への追従は別の項目に起こした。E2E `workspace-auto-label.spec.ts`（ほかのブラウザが受けた `workspace.created` の名前が最初から根の名前）
 - [ ] workspace の名前と git の情報を、最初の pane のいまの場所に追従させる: 自動の名前（20260921-workspace-auto-label）とサイドバーの git の情報（GitInfoPoller）はどちらも workspace を開いた場所（Workspace.cwd）から決めていて、cd しても変わらない。herdr は最初の tab の根の pane のいまの場所から名前と git の状態を決め直す（src/workspace.rs の display_name_from_terminals）。名前だけ追従させると git の情報と食い違うので、両方をまとめて扱う（出典: .aidev/works/20260921-workspace-auto-label/requirements.md）
-- [ ] テーマの色の個別の上書き: herdr の `[theme.custom]`（`accent`・`panel_bg`・`sidebar_bg`・状態の色など）と明暗別の `[theme.custom.light]`/`[theme.custom.dark]`。herdr でも設定ファイルでだけ変えられる。本製品には利用者が書く設定ファイルが無いので、設定の再読み込み（H25b）と合わせて置き場所から決める（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
+- [x] テーマの色の個別の上書き: herdr の `[theme.custom]`（`accent`・`panel_bg`・`sidebar_bg`・状態の色など）と明暗別の `[theme.custom.light]`/`[theme.custom.dark]`。herdr でも設定ファイルでだけ変えられる。~~本製品には利用者が書く設定ファイルが無いので、設定の再読み込み（H25b）と合わせて置き場所から決める~~（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
+  → 着地: 20260922-theme-custom-overrides（feature/theme-custom-overrides）。「置き場所」は設定の再読み込み（H25b）を待たず、既存の節「テーマ」に
+  上級者向けの折りたたみとして決着した（本製品の設定は元々すべて即時反映・保存で、herdr の「再読み込み」に相当する操作はどの設定にも無い）。
+  herdr の 19 トークンではなく、本製品が実際に使う 19 個の CSS 変数（`packages/web/src/theme/uiTokens.ts` の `CSS_VARS`）を対象にし、
+  「明るいとき」「暗いとき」の 2 層で上書きできる（`packages/web/src/theme/themeOverrides.ts`）。上書きは選んだテーマの計算結果（コントラスト
+  調整後）の上にそのまま当たり（自動調整はしない）、`ThemeController`（`applyOverrides`）・起動用の控え（`writeBoot`）の両方に反映する。
+  色ごと・すべてまとめて既定に戻せる（すべては確認あり）。保存は既定との差だけ（`wtm.prefs.v1` の `themeOverrides`）。
+  実測: 単体（全パッケージ）2181 本・E2E 一式 120 本（うち `theme-settings.spec.ts` 12 本）・smoke pass。回帰テストは
+  結線（`ThemeController` の watch・store の返り値）を外して落ちることを確かめ、生出力を
+  `.aidev/works/20260922-theme-custom-overrides/test-result.md` に貼った。独立 review 2 ラウンド（must 0・should 1・
+  nit 3 を解消）。
 - [ ] 明暗の変化を端末の中のアプリへ知らせる: DSR 996（`CSI ? 996 n` → `CSI ? 997 ; 1|2 n`）への応答と mode 2031 の通知（herdr の `src/terminal_theme.rs` の `HostAppearance::color_scheme_report`）。サーバの Mirror が、その pane の tab の大きさを決めているブラウザのテーマの明暗で答え、テーマや OS の明暗が変わったら通知する。いまは応えていない（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
 - [ ] 端末の選択の背景を見えるようにする: 上流の配色の選択の背景と端末の背景の比が低いテーマがあり（one-light 1.11・solarized-light 1.14・solarized 1.15・rose-pine-dawn 1.27・one-dark 1.31）、copy モードやマウスで選んだ範囲がほとんど見えない。`finalizePalette`（packages/protocol/src/theme.ts）に「選択の背景を端末の背景から寄せる」規則を足す案。20260921-theme-settings では「上流の値のまま、選んだ文字とカーソルだけ直す」（decisions D5）の内側として見送った（出典: .aidev/works/20260921-theme-settings/review.md）

@@ -242,3 +242,110 @@ describe("resend・控えの書き込みの失敗", () => {
     expect(() => make({ storage: null }).controller.start()).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-theme-custom-overrides：色の個別の上書き（AC2・AC3・AC4・AC9）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("色の上書き", () => {
+  it("いま当たっているテーマの colorScheme に合う層だけが当たる（明るいテーマなら明るいときの上書き）", () => {
+    writePrefs({ theme: "one-light" }); // colorScheme: light
+    const { settings, controller } = make();
+    settings.setThemeOverride("light", "--wtm-accent", "#a6e3a1");
+    settings.setThemeOverride("dark", "--wtm-accent", "#89b4fa"); // 効かないはず（暗いときの上書き）
+    controller.start();
+    expect(root.style.getPropertyValue("--wtm-accent")).toBe("#a6e3a1");
+  });
+
+  it("themeAuto の真偽ではなく colorScheme で選ぶ：auto が切のまま明るいテーマ 1 つを固定していても、明るいときの上書きが効く（AC3 の逸脱）", () => {
+    writePrefs({ theme: "one-light", themeAuto: false });
+    const { settings, controller } = make();
+    settings.setThemeOverride("light", "--wtm-bg", "#eff1f5");
+    controller.start();
+    expect(root.style.getPropertyValue("--wtm-bg")).toBe("#eff1f5");
+  });
+
+  it("上書きは、コントラスト調整済みの計算結果の上にそのまま当たる（AC2。再計算しない）", () => {
+    writePrefs({ theme: "dracula" });
+    const { settings, controller } = make();
+    const before = root.style.getPropertyValue("--wtm-menu-bg");
+    expect(before).not.toBe("#000000"); // 上書き前は既定の値
+    settings.setThemeOverride("dark", "--wtm-menu-bg", "#000000");
+    controller.start();
+    expect(root.style.getPropertyValue("--wtm-menu-bg")).toBe("#000000");
+    // 上書きしていない変数は既定の値のまま（コントラスト調整の結果を維持）。
+    const t = uiTokens("dracula");
+    expect(root.style.getPropertyValue("--wtm-accent")).toBe(t.vars["--wtm-accent"]);
+  });
+
+  it("apply() の『同じ名前なら省く』最適化は壊れない：テーマ名を変えずに上書きだけ変えても、applyOverrides() 経由で再適用される（研究 F5 の回帰）", async () => {
+    writePrefs({ theme: "dracula" });
+    const { settings, controller } = make();
+    controller.start();
+    expect(sent).toEqual(["dracula"]); // 起動で 1 回送る
+    settings.setThemeOverride("dark", "--wtm-accent", "#ff0000");
+    await nextTick();
+    expect(root.style.getPropertyValue("--wtm-accent")).toBe("#ff0000");
+    // テーマ名は変わっていないので、端末の色・サーバへ送る名前は増えない（上書きは画面の枠だけに効く）。
+    expect(sent).toEqual(["dracula"]);
+    expect(terminalThemes).toEqual([TERMINAL_PALETTES["dracula"]]);
+  });
+
+  it("applyOverrides() は start() の前（applied が null）では何もしない", () => {
+    const { settings, controller } = make();
+    settings.setThemeOverride("dark", "--wtm-accent", "#ff0000");
+    expect(() => controller.applyOverrides()).not.toThrow();
+    expect(root.style.getPropertyValue("--wtm-accent")).toBe("");
+  });
+
+  it("テーマを替えると、新しいテーマの colorScheme に合う層に切り替わる", async () => {
+    writePrefs({ theme: "dracula" }); // dark
+    const { settings, controller } = make();
+    settings.setThemeOverride("dark", "--wtm-accent", "#da0000");
+    settings.setThemeOverride("light", "--wtm-accent", "#11a000");
+    controller.start();
+    expect(root.style.getPropertyValue("--wtm-accent")).toBe("#da0000");
+    settings.setTheme("one-light"); // light
+    await nextTick(); // effectiveTheme の変化を追う watch は非同期
+    expect(root.style.getPropertyValue("--wtm-accent")).toBe("#11a000");
+  });
+
+  it("上書きが無ければ、従来どおりの値になる（回帰）", () => {
+    writePrefs({ theme: "nord" });
+    const { controller } = make();
+    controller.start();
+    const t = uiTokens("nord");
+    for (const key of Object.keys(t.vars) as (keyof typeof t.vars)[])
+      expect(root.style.getPropertyValue(key)).toBe(t.vars[key]);
+  });
+
+  it("控え（writeBoot）にも上書きが入る", () => {
+    writePrefs({
+      theme: "dracula",
+      themeOverrides: { dark: { "--wtm-accent": "#ff00ff" } },
+    });
+    const { controller, storage } = make();
+    controller.start();
+    expect(storage.boot()?.fixed.vars["--wtm-accent"]).toBe("#ff00ff");
+  });
+
+  it("上書きを変えると、控えも書き直される（開き直しでも一瞬既定の色が出ないよう。AC9）", async () => {
+    writePrefs({ theme: "dracula" });
+    const { settings, controller, storage } = make();
+    controller.start();
+    expect(storage.boot()?.fixed.vars["--wtm-accent"]).not.toBe("#123456");
+    settings.setThemeOverride("dark", "--wtm-accent", "#123456");
+    await nextTick(); // themeOverrides の変化を追う watch は非同期
+    expect(storage.boot()?.fixed.vars["--wtm-accent"]).toBe("#123456");
+  });
+
+  it("控えの上書きも保存された設定から作る——同じブラウザの別のタブが上書きを変えていても（このタブの store は古いまま）、このタブで書き直す控えはそれに揃う", async () => {
+    writePrefs({ theme: "dracula" });
+    const { settings, controller, storage } = make();
+    controller.start();
+    writePrefs({ themeOverrides: { dark: { "--wtm-accent": "#1a2b3c" } } }); // 別のタブが保存した（このタブの store は追従前）
+    settings.setThemeDark("vesper"); // このタブで何か別の設定を変え、writeBoot を起こす
+    await nextTick();
+    expect(storage.boot()?.fixed.vars["--wtm-accent"]).toBe("#1a2b3c");
+  });
+});

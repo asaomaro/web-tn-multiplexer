@@ -498,3 +498,93 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
     expect(readPrefs()).not.toHaveProperty("keys");
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-theme-custom-overrides：色の個別の上書き（AC6・AC7・AC8）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("useSettingsStore — 色の個別の上書き（AC6・AC7・AC8）", () => {
+  it("何も保存されていなければ上書き無し", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.themeOverrides).toEqual({ light: {}, dark: {} });
+  });
+
+  it("setThemeOverride で反映・保存する。既定との差だけを持つ", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#a6e3a1");
+    expect(store.themeOverrides).toEqual({ light: { "--wtm-accent": "#a6e3a1" }, dark: {} });
+    expect(readPrefs()["themeOverrides"]).toEqual({ light: { "--wtm-accent": "#a6e3a1" } });
+    const again = useSettingsStore(createPinia());
+    expect(again.themeOverrides).toEqual({ light: { "--wtm-accent": "#a6e3a1" }, dark: {} });
+  });
+
+  it("読めない値（構文が通らない色）は反映せず捨てる（二重の守り。setThemeOverride は妥当な値を渡す前提だが、直に replaceThemeOverrides を呼ぶ経路もある）", () => {
+    const store = useSettingsStore(pinia);
+    store.replaceThemeOverrides({ light: { "--wtm-accent": "notacolor" }, dark: {} });
+    expect(store.themeOverrides).toEqual({ light: {}, dark: {} });
+    expect(readPrefs()).not.toHaveProperty("themeOverrides");
+  });
+
+  it("resetThemeOverride はその 1 項目だけを外す（ほかは残る。AC6）", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    store.setThemeOverride("light", "--wtm-bg", "#000");
+    store.resetThemeOverride("light", "--wtm-accent");
+    expect(store.themeOverrides).toEqual({ light: { "--wtm-bg": "#000" }, dark: {} });
+  });
+
+  it("resetAllThemeOverrides はすべて消し、themeOverrides ごと保存から消える（AC7）", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    store.setThemeOverride("dark", "--wtm-bg", "#000");
+    store.resetAllThemeOverrides();
+    expect(store.themeOverrides).toEqual({ light: {}, dark: {} });
+    expect(readPrefs()).not.toHaveProperty("themeOverrides");
+  });
+
+  it("同じ内容を渡し直しても書かない（keys と同じ「二重の守り」の形）", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    const setItem = vi.spyOn(localStorage, "setItem");
+    try {
+      store.setThemeOverride("light", "--wtm-accent", "#fff");
+      expect(setItem).not.toHaveBeenCalled();
+      store.setThemeOverride("light", "--wtm-accent", "#000"); // 変えれば書かれる
+      expect(setItem).toHaveBeenCalledTimes(1);
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it("上書きを保存しても他の好み（テーマ・キー）は消えない", () => {
+    writePrefs({ theme: "nord" });
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("ctrl+a");
+    store.setThemeOverride("dark", "--wtm-accent", "#89b4fa");
+    expect(readPrefs()).toMatchObject({
+      theme: "nord",
+      keys: { prefix: "ctrl+a" },
+      themeOverrides: { dark: { "--wtm-accent": "#89b4fa" } },
+    });
+  });
+
+  it("別のウィンドウで上書きが変わったら（storage イベント）追従し、古い状態から別の変更をしても先の変更を上書きしない", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    // 別のウィンドウが暗いときの上書きを足して保存した（自分の書き込みでは storage は発火しない。ここでは書いてから発火させる）。
+    writePrefs({
+      themeOverrides: { light: { "--wtm-accent": "#fff" }, dark: { "--wtm-bg": "#000" } },
+    });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.themeOverrides).toEqual({ light: { "--wtm-accent": "#fff" }, dark: { "--wtm-bg": "#000" } });
+    const snapshot = store.themeOverrides;
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" })); // 変わっていなければ表を作り直さない
+    expect(store.themeOverrides).toBe(snapshot);
+    // このウィンドウで別の CSS 変数を変えても、先に保存された分は残る。
+    store.setThemeOverride("light", "--wtm-menu-bg", "#111");
+    expect(readPrefs()["themeOverrides"]).toEqual({
+      light: { "--wtm-accent": "#fff", "--wtm-menu-bg": "#111" },
+      dark: { "--wtm-bg": "#000" },
+    });
+  });
+});
