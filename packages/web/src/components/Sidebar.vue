@@ -3,6 +3,8 @@ import { computed, inject, ref, watch } from "vue";
 import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
 import { useSeenStore, aggregate, displayStateFor, STATE_PRIORITY } from "../store/seen.js";
+import { orderedAgentPaneIds } from "../store/agentOrder.js";
+import { orderedWorkspaceIds } from "../store/workspaceOrder.js";
 import { type AgentSort, SIDEBAR_WIDTH, type WorkspaceSort, useViewStore } from "../store/view.js";
 import StateIcon from "./StateIcon.vue";
 
@@ -26,17 +28,19 @@ let lastDividerClick = 0;
 const WORKSPACE_SORT_LABEL: Record<WorkspaceSort, string> = { opened: "開いた順", name: "名前順" };
 
 const spaces = computed(() => {
-  const rows = [...session.workspaces.values()].map((ws) => {
-    const states = session.panesInWorkspace(ws.id).map((p) => displayStateFor(p.agent, seen.getSeenSeq(p.agent?.instanceId ?? "", p.agent?.serverSeenSeq ?? 0)));
-    const showGit = !!ws.git && (ws.git.ahead > 0 || ws.git.behind > 0);
-    // いま表示している workspace か（`PaneFrame` の `selected` と同じ考え方で、判定は 1 箇所に置く）。
-    const isCurrent = ws.id === view.workspaceId;
-    return { workspace: ws, state: aggregate(states) as keyof typeof STATE_PRIORITY | null, showGit, isCurrent };
-  });
-  // `opened`（既定）は並べ替えない——サーバから届いた順（`session.workspaces` の反復順）のまま（AC3）。
-  if (view.workspaceSort === "opened") return rows;
-  // `name`：workspace のラベルの文字列順（AC2）。`sort` は安定なので、同点（同名）なら `opened` の並びが残る。
-  return [...rows].sort((a, b) => a.workspace.label.localeCompare(b.workspace.label));
+  const workspaces = [...session.workspaces.values()];
+  const rowsById = new Map(
+    workspaces.map((ws) => {
+      const states = session.panesInWorkspace(ws.id).map((p) => displayStateFor(p.agent, seen.getSeenSeq(p.agent?.instanceId ?? "", p.agent?.serverSeenSeq ?? 0)));
+      const showGit = !!ws.git && (ws.git.ahead > 0 || ws.git.behind > 0);
+      // いま表示している workspace か（`PaneFrame` の `selected` と同じ考え方で、判定は 1 箇所に置く）。
+      const isCurrent = ws.id === view.workspaceId;
+      return [ws.id, { workspace: ws, state: aggregate(states) as keyof typeof STATE_PRIORITY | null, showGit, isCurrent }] as const;
+    }),
+  );
+  // 並び順は `orderedWorkspaceIds`（`ActionDispatcher` の `previous_workspace`/`next_workspace` と共有。
+  // decisions D4）——表示順と操作対象順を構造的に一致させる。
+  return orderedWorkspaceIds(workspaces, view.workspaceSort).map((id) => rowsById.get(id)!);
 });
 
 /** 全体のメニューが開いているか（`PaneFrame` の枠のボタンと同じく `aria-expanded` で伝える）。 */
@@ -55,14 +59,11 @@ const agents = computed(() => {
       const state = displayStateFor(agent, seen.getSeenSeq(agent.instanceId, agent.serverSeenSeq));
       return { pane: p, tab, workspace: ws, agent, state };
     });
-  // `grouped` は並べ替えない——サーバが返す順（workspace 順 → tab 順 → pane 順）がそのままグループになる（herdr と同じ）。
-  if (view.agentSort === "grouped") return rows;
-  // `priority`：手を動かす必要がある順。同点なら状態が最近変わったものを上に。
-  // `sort` は安定なので、両方同点なら `grouped` の並びが残る。
-  return [...rows].sort((a, b) => {
-    const byState = STATE_PRIORITY[b.state ?? "unknown"] - STATE_PRIORITY[a.state ?? "unknown"];
-    return byState !== 0 ? byState : b.agent.since - a.agent.since;
-  });
+  const rowsByPaneId = new Map(rows.map((r) => [r.pane.id, r]));
+  // 並び順は `orderedAgentPaneIds`（`ActionDispatcher` の `previous_agent`/`next_agent`/`focus_agent` と
+  // 共有。decisions D4）——表示順と操作対象順を構造的に一致させる。
+  const entries = rows.map((r) => ({ paneId: r.pane.id, state: r.state, since: r.agent.since }));
+  return orderedAgentPaneIds(entries, view.agentSort).map((id) => rowsByPaneId.get(id)!);
 });
 
 /** サイドバーでの選択（M1・AC-I4・AC7）。design「フォーカス系の方式」：自分の表示を変え、サーバの

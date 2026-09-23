@@ -1,5 +1,5 @@
 import type { MethodName, ParamsOf, ResultOf } from "@wtm/protocol";
-import type { Pane, Tab, Workspace } from "@wtm/protocol";
+import type { AgentInfo, Pane, Tab, Workspace } from "@wtm/protocol";
 import { createPinia, type Pinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyInputController } from "../keys/KeyInputController.js";
@@ -91,6 +91,9 @@ function makeTab(id: string, workspaceId: string, focusedPaneId = "p1"): Tab {
 }
 function makePane(id: string, tabId: string, busy = false): Pane {
   return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy, title: "", rightClick: "herdr", agent: null, agentSession: null };
+}
+function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
+  return { instanceId: "a1", kind: "claude", label: "Claude Code", state: "working", completionSeq: 0, serverSeenSeq: 0, verified: true, since: 0, ...overrides };
 }
 
 async function flush(): Promise<void> {
@@ -1240,5 +1243,216 @@ describe("ActionDispatcher — workspace の名前変更と自動の名前", () 
     const named = open(false);
     named.dispatcher.confirmRenameWorkspace("my-repo");
     expect(named.conn.requests).toEqual([["workspace.rename", { workspaceId: "w1", label: "my-repo" }]]);
+  });
+});
+
+// 20260923-missing-keybinding-actions（herdr にあって本製品に操作自体が無かったもの）。
+describe("ActionDispatcher — workspaceDelta（previous_workspace/next_workspace）", () => {
+  it("workspace の一覧を順に回る（端で反対へ）。workspace.focus を送る", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted({ ...makeWorkspace("w1", ["t1"]), activeTabId: "t1" });
+    session.workspaceUpserted({ ...makeWorkspace("w2", ["t2"]), activeTabId: "t2" });
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.tabUpserted(makeTab("t2", "w2", "p2"));
+    view.setView("w1", "t1");
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "workspaceDelta", delta: 1 });
+    expect(view.workspaceId).toBe("w2");
+    expect(view.focusedPaneId).toBe("p2");
+    expect(conn.requests).toEqual([["workspace.focus", { workspaceId: "w2" }]]);
+
+    dispatcher.run({ type: "workspaceDelta", delta: 1 }); // 端から反対へ
+    expect(view.workspaceId).toBe("w1");
+
+    dispatcher.run({ type: "workspaceDelta", delta: -1 }); // 前へ（反対へ回る）
+    expect(view.workspaceId).toBe("w2");
+  });
+
+  it("workspace が1個以下なら何もしない（AC4）", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted({ ...makeWorkspace("w1", ["t1"]), activeTabId: "t1" });
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    view.setView("w1", "t1");
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "workspaceDelta", delta: 1 });
+    expect(view.workspaceId).toBe("w1");
+    expect(conn.requests).toEqual([]);
+  });
+});
+
+describe("ActionDispatcher — lastPane（last_pane。1スロットのトグル）", () => {
+  it("直前の pane（workspace/tab をまたいで）へ戻り、押すたびに入れ替わる（トグル。AC1・AC2）", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w2", ["t2"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.tabUpserted(makeTab("t2", "w2", "p2"));
+    session.paneUpserted(makePane("p1", "t1"));
+    session.paneUpserted(makePane("p2", "t2"));
+    view.setView("w1", "t1");
+    view.focusPane("p1");
+    view.setView("w2", "t2");
+    view.focusPane("p2"); // p1 → p2 の移動で lastFocusedPaneId が p1 になる
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "lastPane" });
+    expect(view.workspaceId).toBe("w1");
+    expect(view.tabId).toBe("t1");
+    expect(view.focusedPaneId).toBe("p1");
+    expect(conn.requests).toEqual([["pane.focus", { paneId: "p1" }]]);
+
+    dispatcher.run({ type: "lastPane" }); // もう一度でトグルして戻る
+    expect(view.workspaceId).toBe("w2");
+    expect(view.focusedPaneId).toBe("p2");
+  });
+
+  it("直前の pane が既に閉じていれば何もしない（AC2）", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t2"]));
+    session.tabUpserted(makeTab("t2", "w1", "p2"));
+    session.paneUpserted(makePane("p2", "t2")); // p1（直前の pane）は登録しない＝既に閉じている想定
+    view.setView("w1", "t2");
+    view.focusPane("p1");
+    view.focusPane("p2"); // lastFocusedPaneId が p1 になる
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "lastPane" });
+    expect(view.focusedPaneId).toBe("p2"); // 動かない（p1 は session.panes に無い）
+    expect(conn.requests).toEqual([]);
+  });
+
+  it("直前の pane が今の focus と同じなら何もしない（AC2）", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.focusPane("p1"); // lastFocusedPaneId はまだ null（最初の focus）
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "lastPane" });
+    expect(view.focusedPaneId).toBe("p1"); // 動かない
+    expect(conn.requests).toEqual([]);
+  });
+});
+
+describe("ActionDispatcher — moveTab（move_tab_previous/move_tab_next）", () => {
+  it("表示中の tab を対象に tab.move を送る", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    view.setView("w1", "t1");
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "moveTab", direction: "next" });
+    expect(conn.requests).toEqual([["tab.move", { tabId: "t1", direction: "next" }]]);
+  });
+
+  it("表示中の tab が無ければ何もしない", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.run({ type: "moveTab", direction: "previous" });
+    expect(conn.requests).toEqual([]);
+  });
+});
+
+describe("ActionDispatcher — agentDelta/focusAgentIndex（previous_agent/next_agent/focus_agent）", () => {
+  /** agent が検出された3つの pane（別々の workspace/tab）を用意する（herdr と同じく workspace/tab をまたぐ対象。research F3）。 */
+  function setupAgents(session: ReturnType<typeof useSessionStore>): void {
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w2", ["t2"]));
+    session.workspaceUpserted(makeWorkspace("w3", ["t3"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.tabUpserted(makeTab("t2", "w2", "p2"));
+    session.tabUpserted(makeTab("t3", "w3", "p3"));
+    session.paneUpserted({ ...makePane("p1", "t1"), agent: makeAgent({ instanceId: "a1" }) });
+    session.paneUpserted({ ...makePane("p2", "t2"), agent: makeAgent({ instanceId: "a2" }) });
+    session.paneUpserted({ ...makePane("p3", "t3"), agent: makeAgent({ instanceId: "a3" }) });
+  }
+
+  it("agentDelta：agent の一覧（grouped＝サーバ順）を巡回し、workspace/tab をまたいでフォーカスする（AC7）", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    setupAgents(session);
+    view.setView("w1", "t1");
+    view.focusPane("p1");
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "agentDelta", delta: 1 });
+    expect(view.workspaceId).toBe("w2");
+    expect(view.focusedPaneId).toBe("p2");
+    expect(conn.requests).toEqual([["pane.focus", { paneId: "p2" }]]);
+
+    dispatcher.run({ type: "agentDelta", delta: 1 });
+    expect(view.focusedPaneId).toBe("p3");
+
+    dispatcher.run({ type: "agentDelta", delta: 1 }); // 端から反対へ
+    expect(view.focusedPaneId).toBe("p1");
+  });
+
+  it("agentDelta：現在の focus が一覧に無いとき、next は先頭・previous は末尾（herdr と同じ。research F3）", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    setupAgents(session);
+    view.focusPane("p-not-an-agent"); // agent の一覧に無い pane
+
+    const nextDispatcher = makeDispatcher(conn).dispatcher;
+    nextDispatcher.run({ type: "agentDelta", delta: 1 });
+    expect(view.focusedPaneId).toBe("p1"); // 先頭
+
+    pinia = createPinia();
+    const conn2 = makeConnection();
+    const session2 = useSessionStore(pinia);
+    const view2 = useViewStore(pinia);
+    setupAgents(session2);
+    view2.focusPane("p-not-an-agent");
+    makeDispatcher(conn2).dispatcher.run({ type: "agentDelta", delta: -1 });
+    expect(view2.focusedPaneId).toBe("p3"); // 末尾
+  });
+
+  it("agentDelta：agent が検出された pane が1つも無ければ何もしない（AC7a）", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.focusPane("p1");
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.run({ type: "agentDelta", delta: 1 });
+    expect(view.focusedPaneId).toBe("p1"); // 動かない
+    expect(conn.requests).toEqual([]);
+  });
+
+  it("focusAgentIndex：0始まりの索引で直接ジャンプする", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    setupAgents(session);
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "focusAgentIndex", index: 2 });
+    expect(view.workspaceId).toBe("w3");
+    expect(view.focusedPaneId).toBe("p3");
+    expect(conn.requests).toEqual([["pane.focus", { paneId: "p3" }]]);
+  });
+
+  it("focusAgentIndex：範囲外の索引は何もしない（AC7b）", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    setupAgents(session);
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "focusAgentIndex", index: 9 });
+    expect(view.focusedPaneId).toBeNull();
+    expect(conn.requests).toEqual([]);
   });
 });

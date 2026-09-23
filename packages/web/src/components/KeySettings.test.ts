@@ -66,14 +66,14 @@ const moveHereBtn = (): HTMLElement | null =>
   document.querySelector<HTMLElement>("[data-move-here]");
 
 describe("KeySettings — 一覧（AC1）", () => {
-  it("prefix と、3 群 35 個の操作＋navigate 6操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
+  it("prefix と、3 群 47 個の操作＋navigate 6操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
     const { settings } = await mountKeys();
     expect(document.querySelector("h3")!.textContent).toBe("キー");
     expect(document.querySelector(".keys-prefix .keys-binding")!.textContent).toBe("ctrl+b");
     expect(
       Array.from(document.querySelectorAll(".keys-group-name")).map((h) => h.textContent),
     ).toEqual(["全体", "workspace / tab", "pane", "navigate モードの移動"]);
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(41); // 35 + navigate 6
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(53); // 47 + navigate 6
     expect(summaryText("split_vertical")).toBe("prefix+v");
     expect(summaryText("switch_tab")).toBe("prefix+1..9");
     expect(summaryText("cycle_pane_previous")).toBe("prefix+shift+tab");
@@ -105,6 +105,41 @@ describe("KeySettings — 一覧（AC1）", () => {
     expect(addBtn("goto", "direct").getAttribute("aria-label")).toBe(
       "追加：直接（「goto（workspace・tab・pane から探す）」）",
     );
+  });
+});
+
+// 20260923-missing-keybinding-actions（AC8）。`bindings.ts` へ登録するだけで KeySettings.vue が
+// 汎用に拾うことは design で確認済み（新規実装なし）——ここでは実際にその12操作のうち代表1つで
+// 「なし」表示・追加・削除・既定に戻す（defaults: [] なので「なし」に戻る）を通しで確かめる。
+describe("KeySettings — herdr にあって本製品に操作自体が無かった12操作（AC8）", () => {
+  it("既定は「なし」として現れ、追加・削除・既定に戻す（[]へ）ができる", async () => {
+    const { settings } = await mountKeys();
+    expect(summaryText("last_pane")).toBe("なし");
+    expect(resetActionBtn("last_pane")).toBeNull(); // 既定（[]）のままなので出ない
+
+    addBtn("last_pane", "prefix").focus();
+    addBtn("last_pane", "prefix").click();
+    await settle();
+    press(capture()!, "y");
+    await settle();
+    expect(settings.keymap.bindingsOf("last_pane")).toEqual(["prefix+y"]);
+    expect(summaryText("last_pane")).toBe("prefix+y");
+    expect(resetActionBtn("last_pane")).not.toBeNull(); // 既定（[]）から変わったので出る
+
+    resetActionBtn("last_pane")!.click();
+    await settle();
+    expect(settings.keymap.bindingsOf("last_pane")).toEqual([]);
+    expect(summaryText("last_pane")).toBe("なし"); // 既定へ戻すと「なし」（defaults: []）
+  });
+
+  it("focus_agent は範囲キー（1..9）を割り当てられる（switch_tab と同じ indexed 操作）", async () => {
+    const { settings } = await mountKeys();
+    addBtn("focus_agent", "prefix").click();
+    await settle();
+    press(capture()!, "3", { altKey: true }); // 数字のキー1つでその修飾の組の範囲になる
+    await settle();
+    expect(settings.keymap.bindingsOf("focus_agent")).toEqual(["prefix+alt+1..9"]);
+    expect(settings.keymap.prefixMap.get("alt+7")).toEqual({ type: "focusAgentIndex", index: 6 });
   });
 });
 
@@ -783,7 +818,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
   it("最初から表示され（開閉の概念を持たない）、操作名の一部で一致する操作だけが残る（AC1・AC-I1）", async () => {
     await mountKeys();
     expect(filterInput()).not.toBeNull();
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(41);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(53);
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     expect(row("zoom")).not.toBeNull();
@@ -807,7 +842,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     await typeFilter("");
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(41);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(53);
   });
 
   it("絞り込み中もフォーカスが入力欄に残る（入力のたびに奪われない。AC-I4）", async () => {

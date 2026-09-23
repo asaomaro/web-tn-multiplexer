@@ -99,7 +99,7 @@ export function resolveKeymap(prefs: KeyPrefs): { keymap: ResolvedKeymap; proble
     if (b.range !== (def.indexed === true)) {
       if (source === "user") {
         const why = b.range
-          ? "範囲 1..9 は tab の番号選択だけに使えます"
+          ? "範囲 1..9 は、switch_tab・focus_agent のような範囲対応の操作にしか使えません"
           : "この操作は範囲 1..9 の形だけを割り当てられます";
         problems.push(`${id}: 「${raw}」を落としました（${why}）`);
       }

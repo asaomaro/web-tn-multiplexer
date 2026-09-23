@@ -333,6 +333,16 @@ export class SessionService {
     this.persist.touch();
   }
 
+  /** `tab.move`（20260923-missing-keybinding-actions）。tabIds.length<=1 等で無変化なら `model.moveTab` が
+   * `null` を返し、`workspace.updated` を発行しない（design「エラー処理 / 異常系」）。 */
+  moveTab(id: TabId, direction: "previous" | "next"): void {
+    const updated = this.model.moveTab(id, direction);
+    if (updated) {
+      this.bus.publish({ event: "workspace.updated", data: { workspace: updated } });
+      this.persist.touch();
+    }
+  }
+
   async closeTab(id: TabId): Promise<void> {
     const workspaceId = this.requireTab(id).workspaceId; // tab が消える前に控える（下の workspace.updated 用。D88）
     const result = this.model.closeTab(id);

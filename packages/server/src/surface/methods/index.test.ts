@@ -230,6 +230,26 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
     expect(ctx.session.getTab(tab.id)).toBeDefined();
   });
 
+  it("tab.move reorders tabIds and emits workspace.updated; a second tab is required (20260923-missing-keybinding-actions)", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const wsResult = await ctx.surface.invoke(c, "workspace.create", { cwd: "/home/u", label: "api" });
+    if (!wsResult.ok) throw new Error("unreachable");
+    const { workspace, tab: firstTab } = wsResult.result as { workspace: { id: string }; tab: { id: string } };
+    const tabResult = await ctx.surface.invoke(c, "tab.create", { workspaceId: workspace.id, label: "second" });
+    if (!tabResult.ok) throw new Error("unreachable");
+    const { tab: secondTab } = tabResult.result as { tab: { id: string } };
+
+    const moveResult = await ctx.surface.invoke(c, "tab.move", { tabId: firstTab.id, direction: "next" });
+    expect(moveResult).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().workspaces.find((w) => w.id === workspace.id)?.tabIds).toEqual([secondTab.id, firstTab.id]);
+  });
+
+  it("tab.move on an unknown tab returns not_found", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const result = await ctx.surface.invoke(c, "tab.move", { tabId: "t999", direction: "next" });
+    expect(result).toEqual({ ok: false, error: { code: "not_found", message: expect.stringContaining("t999") } });
+  });
+
   it("pane.focus on an unknown pane returns not_found", async () => {
     const c = { clientId, sink: fakeSink(clientId) };
     const result = await ctx.surface.invoke(c, "pane.focus", { paneId: "p999" });

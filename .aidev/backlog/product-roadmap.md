@@ -43,11 +43,14 @@ parent: 20260918-web-terminal-multiplexer
   既定は現行固定値と1:1・予約キー（`esc`/`enter`/`tab`/`shift+tab`/`left`/`right`/`ctrl+shift+v`/修飾無し`1`〜`9`）は割り当て不可・`ArrowLeft`/`ArrowRight`は表の外の固定フォールバックとして pane 左右移動を維持（decisions D3）。
   実測: 単体（`packages/web`）1734 本・リポジトリ全体 2569 本・smoke pass（2本）。独立点検（doccheck×3・taskcheck 22タスク+cross）は合計 must 1・should 8・nit 9（いずれも解消）。review は3ラウンド（must 2・should 2・nit 1、いずれも解消）。
   review で見つかった2件の不具合（修飾付き矢印キーの幽霊バインディング・`ctrl+shift+v` の予約漏れ）は回帰テストを追加し、修正前のコードに戻して落ちることを確認してから元に戻した（regression-negative-control。test-result.md 参照）。
-- [ ] herdr にあって本製品に操作自体が無いものを足して割り当てられるようにする: **既定なし**の操作——前後の workspace への移動（`previous_workspace`・`next_workspace`）・直前の pane（`last_pane`）・
+- [x] herdr にあって本製品に操作自体が無いものを足して割り当てられるようにする: **既定なし**の操作——前後の workspace への移動（`previous_workspace`・`next_workspace`）・直前の pane（`last_pane`）・
   tab の並べ替え（`move_tab_previous/next`）・pane の resize の直接のキー（`resize_pane_*`。`resizeBy` の操作は既にある）・agent への移動（`previous_agent`・`next_agent`・`focus_agent`）。
   **既定を持つ**操作——scrollback を `$EDITOR` で開く（`edit_scrollback`＝herdr の既定 `prefix+e`）・設定の再読み込み（`reload_config`＝`prefix+shift+r`）は、いま「後続」の案内としてそのキーを使っている
   （`packages/web/src/keys/keymap.ts` の `NOT_YET_BINDINGS`）ので、実装したら**その案内を置き換える**。**実装の本体は別の行**（`edit_scrollback` は「端末機能の拡張」・`reload_config` は「外観と設定の残り」の設定の再読み込み）で、
   この行は「キーの割り当てに載せる分」だけ（同じ機能を 2 行で掴まない）。操作を足す work であって、割り当てを変える work ではない（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
+  実装: `.aidev/works/20260923-missing-keybinding-actions/`（12個の `ActionId` を `packages/web/src/keys/bindings.ts` の `ACTIONS` へ登録、`defaults: []`）。
+  実測: 単体テスト 2608 本 green（protocol 58・server 657・web 1760・cli 133）・smoke pass（2本）。独立点検（cross）1件（対応済み）。review 指摘 0 件（test-result.md・review.md 参照）。
+  `docs/herdr-parity.md` H26d に対応表を追加済み。
 - [ ] 独自コマンドのキー: herdr の `[[keys.command]]`（`type` が `popup`・`pane`・`shell`・`plugin_action`）。サーバで任意のコマンドを走らせる仕組みと、その権限の設計が要る。`docs/herdr-parity.md` の H12（ポップアップ端末・独自コマンドのキー割り当て）（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
 - [ ] サイドバー・tab バーのボタン（`@keydown.stop`）や pane の枠にフォーカスがある間も、prefix・直接のキーを効かせる: いまはそのボタンにフォーカスが残ると、端末をクリックするまで届かない（prefix でも同じ既存の挙動）。
   ボタンの Enter/Space と入力欄への入力を守ったまま、修飾キー付き・prefix のキーだけを window へ通す形が要る（出典: .aidev/works/20260921-keybinding-customization/decisions.md D11）

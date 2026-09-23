@@ -2,20 +2,37 @@ import { describe, expect, it } from "vitest";
 import { expandRange, formatBinding, parseBinding } from "./chord.js";
 import { ACTIONS, actionDef, actionFor, isActionId } from "./bindings.js";
 
+// 20260923-missing-keybinding-actions で足した12操作は herdr と同じく「既定は割り当てなし」
+// （`defaults: []`。research F1）——このリポジトリで初めて `defaults: []` を持つ操作になる。
+const UNBOUND_BY_DEFAULT_IDS = [
+  "previous_workspace",
+  "next_workspace",
+  "move_tab_previous",
+  "move_tab_next",
+  "previous_agent",
+  "next_agent",
+  "focus_agent",
+  "last_pane",
+  "resize_pane_left",
+  "resize_pane_down",
+  "resize_pane_up",
+  "resize_pane_right",
+];
+
 describe("操作のカタログ（design「操作のカタログ」）", () => {
-  // 20260922-appearance-settings-rest T7 で reload_config（全体）をカタログへ正式登録し、
-  // 34 → 35 個になった（NOT_YET_BINDINGS の案内から昇格。keymap.ts 参照）。
-  it("35 個あり、id は重複しない・表示名は空でない", () => {
-    expect(ACTIONS).toHaveLength(35);
-    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(35);
+  // 20260922-appearance-settings-rest T7 で reload_config（全体）をカタログへ正式登録し 35 個に。
+  // 20260923-missing-keybinding-actions で12個追加し 47 個になった（NOT_YET_BINDINGS の案内から昇格。keymap.ts 参照）。
+  it("47 個あり、id は重複しない・表示名は空でない", () => {
+    expect(ACTIONS).toHaveLength(47);
+    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(47);
     for (const a of ACTIONS) expect(a.label.length, a.id).toBeGreaterThan(0);
   });
 
-  it("群は 全体 5・workspace / tab 12・pane 18（この順に並ぶ）", () => {
+  it("群は 全体 5・workspace / tab 19・pane 23（この順に並ぶ）", () => {
     const groups = ACTIONS.map((a) => a.group);
     expect(groups.filter((g) => g === "全体")).toHaveLength(5);
-    expect(groups.filter((g) => g === "workspace / tab")).toHaveLength(12);
-    expect(groups.filter((g) => g === "pane")).toHaveLength(18);
+    expect(groups.filter((g) => g === "workspace / tab")).toHaveLength(19);
+    expect(groups.filter((g) => g === "pane")).toHaveLength(23);
     // 群ごとにまとまっている（全体 → workspace / tab → pane）
     expect(groups.join(",")).toBe(
       [...groups]
@@ -28,8 +45,13 @@ describe("操作のカタログ（design「操作のカタログ」）", () => {
     );
   });
 
-  it("既定の割り当てはすべて `prefix+…` として読め、範囲になるのは範囲の操作（switch_tab）だけ", () => {
+  it("既定の割り当てはすべて `prefix+…` として読め、範囲になるのは範囲の操作（switch_tab・focus_agent）だけ", () => {
     for (const a of ACTIONS) {
+      // `UNBOUND_BY_DEFAULT_IDS`（12個）は herdr と同じく既定が割り当てなし（`defaults: []`）。
+      if (UNBOUND_BY_DEFAULT_IDS.includes(a.id)) {
+        expect(a.defaults.length, a.id).toBe(0);
+        continue;
+      }
       expect(a.defaults.length, a.id).toBeGreaterThan(0);
       for (const d of a.defaults) {
         const b = parseBinding(d);
@@ -39,7 +61,7 @@ describe("操作のカタログ（design「操作のカタログ」）", () => {
       }
     }
     const indexed = ACTIONS.filter((a) => "indexed" in a && a.indexed);
-    expect(indexed.map((a) => a.id)).toEqual(["switch_tab"]);
+    expect(indexed.map((a) => a.id)).toEqual(["switch_tab", "focus_agent"]);
   });
 
   it("既定の文字列は正規形（読んで書き出すと同じ。保存の「差」の比較に使う）", () => {

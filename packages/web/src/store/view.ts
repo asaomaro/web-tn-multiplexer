@@ -173,6 +173,11 @@ export const useViewStore = defineStore("view", () => {
   const workspaceId = ref<string | null>(null);
   const tabId = ref<string | null>(null);
   const focusedPaneId = ref<string | null>(null);
+  /**
+   * `last_pane`（20260923-missing-keybinding-actions）用の1スロットのトグル（herdr の
+   * `previous_pane_id` と同じ構造。research F2）。`focusPane` の中でだけ更新する（design「振る舞いの詳細」）。
+   */
+  const lastFocusedPaneId = ref<string | null>(null);
 
   const mode = ref<Mode>("terminal");
   const openDialog = ref<string | null>(null);
@@ -240,6 +245,11 @@ export const useViewStore = defineStore("view", () => {
   }
 
   function focusPane(paneId: string | null): void {
+    // `paneId === null`（pane が無くなった）のときは更新しない——「直前」の意味が無くなる遷移なので、
+    // 次に `focusPane(x)` が呼ばれるまで直前の値を保持する（herdr の「1スロットトグル」に近い。design）。
+    if (paneId !== null && focusedPaneId.value !== null && focusedPaneId.value !== paneId) {
+      lastFocusedPaneId.value = focusedPaneId.value;
+    }
     focusedPaneId.value = paneId;
   }
 
@@ -347,6 +357,7 @@ export const useViewStore = defineStore("view", () => {
     workspaceId,
     tabId,
     focusedPaneId,
+    lastFocusedPaneId,
     preDialogFocusPaneId,
     mode,
     openDialog,

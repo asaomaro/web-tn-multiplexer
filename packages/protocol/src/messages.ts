@@ -17,6 +17,9 @@ const splitDirection = z.enum(["right", "down"]);
 const dir = z.enum(["left", "right", "up", "down"]);
 const rightClickTarget = z.enum(["herdr", "pane"]);
 const zoomMode = z.enum(["toggle", "on", "off"]);
+// `tab.move`（20260923-missing-keybinding-actions）の方向。herdr の `insert_index` ではなく、対象 tab と
+// 隣（巡回込み）を入れ替える方向だけを渡す（design「検討した代替案」）。
+const tabMoveDirection = z.enum(["previous", "next"]);
 
 // --- client -----------------------------------------------------------
 
@@ -140,6 +143,12 @@ export type TabFocusParams = z.infer<typeof TabFocusParams>;
 
 export const TabCloseParams = z.object({ tabId });
 export type TabCloseParams = z.infer<typeof TabCloseParams>;
+
+// `tab.move`（20260923-missing-keybinding-actions。herdr の move_tab_previous/move_tab_next 相当）：
+// 対象 tab を同じ workspace 内で隣（巡回込み）と入れ替える。結果は `workspace.updated` で配る
+// （`tab.rename`/`tab.close` と同じ「空の成功応答＋イベントで実体を配る」形）。
+export const TabMoveParams = z.object({ tabId, direction: tabMoveDirection });
+export type TabMoveParams = z.infer<typeof TabMoveParams>;
 
 // --- pane -------------------------------------------------------------------
 
@@ -272,6 +281,7 @@ export const METHOD_SCHEMAS = {
   "tab.rename": TabRenameParams,
   "tab.focus": TabFocusParams,
   "tab.close": TabCloseParams,
+  "tab.move": TabMoveParams,
   "pane.split": PaneSplitParams,
   "pane.close": PaneCloseParams,
   "pane.focus": PaneFocusParams,
@@ -308,6 +318,7 @@ export interface MethodResultMap {
   "tab.rename": Record<string, never>;
   "tab.focus": Record<string, never>;
   "tab.close": Record<string, never>;
+  "tab.move": Record<string, never>;
   "pane.split": PaneSplitResult;
   "pane.close": Record<string, never>;
   "pane.focus": Record<string, never>;

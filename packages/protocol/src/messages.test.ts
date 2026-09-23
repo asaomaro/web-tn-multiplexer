@@ -5,6 +5,7 @@ import {
   NewCwd,
   PaneSplitParams,
   TabCreateParams,
+  TabMoveParams,
   WorkspaceCreateParams,
   WorkspaceRenameParams,
 } from "./messages.js";
@@ -18,6 +19,12 @@ describe("messages", () => {
 
   it("rejects an out-of-range ratio", () => {
     expect(() => PaneSplitParams.parse({ paneId: "p1", direction: "right", ratio: 1.5 })).toThrow();
+  });
+
+  // 20260923-missing-keybinding-actions（move_tab_previous/move_tab_next 相当）。
+  it("validates tab.move params (direction is previous/next only)", () => {
+    expect(TabMoveParams.parse({ tabId: "t1", direction: "next" })).toEqual({ tabId: "t1", direction: "next" });
+    expect(() => TabMoveParams.parse({ tabId: "t1", direction: "up" })).toThrow();
   });
 
   it("registers a schema for every method the WebSocket table defines", () => {

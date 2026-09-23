@@ -289,7 +289,7 @@ export interface ParsedBinding {
   via: "prefix" | "direct";
   /** 範囲のときは `1` の chord（`alt+1`）。 */
   chord: string;
-  /** `1..9` の範囲か（`switch_tab` だけ）。 */
+  /** `1..9` の範囲か（`switch_tab`・`focus_agent` のような `indexed: true` の操作向け）。 */
   range: boolean;
 }
 

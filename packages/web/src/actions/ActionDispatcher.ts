@@ -6,6 +6,9 @@ import type { InputHold } from "../net/InputGate.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
 import { useAgentIntegrationsStore } from "../store/agentIntegrations.js";
+import { useSeenStore, displayStateFor } from "../store/seen.js";
+import { orderedAgentPaneIds, type AgentOrderEntry } from "../store/agentOrder.js";
+import { orderedWorkspaceIds } from "../store/workspaceOrder.js";
 import {
   buildNewCwd,
   loadNewCwdPath,
@@ -49,6 +52,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   private readonly conn: ConnectionPort;
   private readonly session: ReturnType<typeof useSessionStore>;
   private readonly agentIntegrations: ReturnType<typeof useAgentIntegrationsStore>;
+  private readonly seen: ReturnType<typeof useSeenStore>;
   private readonly view: ReturnType<typeof useViewStore>;
   private readonly settings: ReturnType<typeof useSettingsStore>;
   private readonly registry: TerminalRegistry;
@@ -62,6 +66,7 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     this.notifications = opts.notifications;
     this.session = useSessionStore(opts.pinia);
     this.agentIntegrations = useAgentIntegrationsStore(opts.pinia);
+    this.seen = useSeenStore(opts.pinia);
     this.view = useViewStore(opts.pinia);
     this.settings = useSettingsStore(opts.pinia);
     this.registry = opts.registry;
@@ -182,6 +187,22 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
         return;
       case "renameWorkspace":
         this.beginRenameWorkspace();
+        return;
+      // 20260923-missing-keybinding-actions。
+      case "workspaceDelta":
+        this.workspaceDelta(action.delta);
+        return;
+      case "lastPane":
+        this.lastPane();
+        return;
+      case "moveTab":
+        this.moveTab(action.direction);
+        return;
+      case "agentDelta":
+        this.agentDelta(action.delta);
+        return;
+      case "focusAgentIndex":
+        this.focusAgentIndex(action.index);
         return;
     }
   }
@@ -555,6 +576,14 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     const workspaceId = this.view.navigateSelection;
     this.view.setNavigateSelection(null);
     if (!workspaceId) return;
+    this.focusWorkspaceById(workspaceId);
+  }
+
+  /**
+   * 共有 private ヘルパー（20260923-missing-keybinding-actions。design「振る舞いの詳細」）。
+   * `activateNavigateSelection` から抽出。`previous_workspace`/`next_workspace`（`workspaceDelta`）とも共有する。
+   */
+  private focusWorkspaceById(workspaceId: string): void {
     const ws = this.session.workspaces.get(workspaceId);
     if (ws) {
       this.view.setView(ws.id, ws.activeTabId);
@@ -564,10 +593,75 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     void this.conn.request("workspace.focus", { workspaceId }).catch(() => undefined);
   }
 
+  /**
+   * 共有 private ヘルパー（20260923-missing-keybinding-actions）。`Sidebar.vue` の `focusPane` と同じ形
+   * （`session.panes`→`tabId`→`session.tabs`→`workspaceId` を辿って `setView`→`focusPane`→request）。
+   * `last_pane`/`previous_agent`/`next_agent`/`focus_agent` の4箇所で共有する。
+   */
+  private focusPaneAcrossViews(paneId: string): void {
+    const pane = this.session.panes.get(paneId);
+    if (!pane) return;
+    const tab = this.session.tabs.get(pane.tabId);
+    if (!tab) return;
+    this.view.setView(tab.workspaceId, tab.id);
+    this.view.focusPane(paneId);
+    void this.conn.request("pane.focus", { paneId }).catch(() => undefined);
+  }
+
   private resizeBy(dir: Dir, amount: number): void {
     const paneId = this.view.focusedPaneId;
     if (!paneId) return;
     void this.conn.request("pane.resize", { paneId, direction: dir, amount }).catch(() => undefined);
+  }
+
+  // --- 20260923-missing-keybinding-actions（herdr にあって本製品に操作自体が無かったもの） -------------
+
+  private workspaceDelta(delta: 1 | -1): void {
+    const ids = orderedWorkspaceIds([...this.session.workspaces.values()], this.view.workspaceSort);
+    if (ids.length <= 1) return; // AC4
+    const current = this.view.workspaceId ? ids.indexOf(this.view.workspaceId) : -1;
+    const next = ids[(current === -1 ? 0 : current + delta + ids.length) % ids.length];
+    if (next) this.focusWorkspaceById(next);
+  }
+
+  private lastPane(): void {
+    const target = this.view.lastFocusedPaneId;
+    if (target === null || target === this.view.focusedPaneId) return; // AC2 のガード
+    if (!this.session.panes.has(target)) return; // 直前の pane が既に閉じている（AC2）
+    this.focusPaneAcrossViews(target);
+  }
+
+  private moveTab(direction: "previous" | "next"): void {
+    const tab = this.view.tabId ? this.session.tabs.get(this.view.tabId) : undefined;
+    if (!tab) return;
+    // `tabIds` を先読みで並べ替えない（`tabDelta` と違い対象を求めるのに他の tab の情報が要らない。
+    // `workspace.updated` が折り返ってから並びが反映される。design「振る舞いの詳細」）。
+    void this.conn.request("tab.move", { tabId: tab.id, direction }).catch(() => undefined);
+  }
+
+  /** `previous_agent`/`next_agent`/`focus_agent` が共有する対象の組み立て（design「振る舞いの詳細」）。 */
+  private agentOrderEntries(): AgentOrderEntry[] {
+    return [...this.session.panes.values()]
+      .filter((p) => p.agent !== null)
+      .map((p) => {
+        const agent = p.agent!;
+        return { paneId: p.id, state: displayStateFor(agent, this.seen.getSeenSeq(agent.instanceId, agent.serverSeenSeq)), since: agent.since };
+      });
+  }
+
+  private agentDelta(delta: 1 | -1): void {
+    const ids = orderedAgentPaneIds(this.agentOrderEntries(), this.view.agentSort);
+    if (ids.length === 0) return; // AC7a
+    const current = ids.indexOf(this.view.focusedPaneId ?? "");
+    const next = current === -1 ? (delta === 1 ? ids[0] : ids[ids.length - 1]) : ids[(current + delta + ids.length) % ids.length];
+    if (next) this.focusPaneAcrossViews(next);
+  }
+
+  private focusAgentIndex(index: number): void {
+    const ids = orderedAgentPaneIds(this.agentOrderEntries(), this.view.agentSort);
+    const target = ids[index];
+    if (target === undefined) return; // AC7b
+    this.focusPaneAcrossViews(target);
   }
 
   /** `CopyTarget.apply()` の結果を見て、実際に抜けるかを決める（D63。`Esc` の `clearOrExit` はここで判断する）。 */

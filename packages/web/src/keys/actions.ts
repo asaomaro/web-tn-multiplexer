@@ -73,4 +73,10 @@ export type Action =
   | { type: "reloadConfig" } // prefix+shift+r（20260922-appearance-settings-rest の herdr `reload_config` 相当）
   | { type: "navigate"; op: "up" | "down" | "paneDir" | "activate" | "cancel"; dir?: Dir }
   | { type: "resizeBy"; dir: Dir; amount: number }
-  | { type: "copy"; cmd: CopyCommand };
+  | { type: "copy"; cmd: CopyCommand }
+  // 20260923-missing-keybinding-actions（herdr にあって本製品に操作自体が無かったもの）。
+  | { type: "workspaceDelta"; delta: 1 | -1 } // previous_workspace / next_workspace
+  | { type: "lastPane" } // last_pane
+  | { type: "moveTab"; direction: "previous" | "next" } // move_tab_previous / move_tab_next
+  | { type: "agentDelta"; delta: 1 | -1 } // previous_agent / next_agent
+  | { type: "focusAgentIndex"; index: number }; // focus_agent（1-9 → 0-8 に変換済みで渡す）

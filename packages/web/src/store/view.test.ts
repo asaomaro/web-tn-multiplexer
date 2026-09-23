@@ -212,6 +212,39 @@ describe("useViewStore — setView / focusPane", () => {
     store.focusPane(null);
     expect(store.focusedPaneId).toBeNull();
   });
+
+  // 20260923-missing-keybinding-actions（last_pane。herdr の「1スロットトグル」。research F2）。
+  it("focusPane は直前の focusedPaneId を lastFocusedPaneId に積む（トグル）", () => {
+    const store = useViewStore(pinia);
+    expect(store.lastFocusedPaneId).toBeNull(); // 初期状態
+
+    store.focusPane("p1"); // 最初の focus（直前が null なので lastFocusedPaneId は動かない）
+    expect(store.lastFocusedPaneId).toBeNull();
+
+    store.focusPane("p2");
+    expect(store.lastFocusedPaneId).toBe("p1"); // p1 → p2 の移動で「直前」が p1 になる
+
+    store.focusPane("p1"); // トグルで p1 に戻る
+    expect(store.lastFocusedPaneId).toBe("p2"); // 「直前」も p2 に入れ替わる
+  });
+
+  it("focusPane は同じ pane への再フォーカスでは lastFocusedPaneId を動かさない", () => {
+    const store = useViewStore(pinia);
+    store.focusPane("p1");
+    store.focusPane("p2");
+    expect(store.lastFocusedPaneId).toBe("p1");
+    store.focusPane("p2"); // 同じ pane への無変化の書き戻し
+    expect(store.lastFocusedPaneId).toBe("p1"); // 変わらない
+  });
+
+  it("focusPane(null) は lastFocusedPaneId を動かさない（意味の無い「直前」を作らない）", () => {
+    const store = useViewStore(pinia);
+    store.focusPane("p1");
+    store.focusPane("p2");
+    expect(store.lastFocusedPaneId).toBe("p1");
+    store.focusPane(null);
+    expect(store.lastFocusedPaneId).toBe("p1"); // p2 が消えても直前の記録は保持される
+  });
 });
 
 describe("useViewStore — モード・ダイアログ・接続状態", () => {
