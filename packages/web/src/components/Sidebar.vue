@@ -3,7 +3,7 @@ import { computed, inject, ref, watch } from "vue";
 import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
 import { useSeenStore, aggregate, displayStateFor, STATE_PRIORITY } from "../store/seen.js";
-import { type AgentSort, SIDEBAR_WIDTH, useViewStore } from "../store/view.js";
+import { type AgentSort, SIDEBAR_WIDTH, type WorkspaceSort, useViewStore } from "../store/view.js";
 import StateIcon from "./StateIcon.vue";
 
 /**
@@ -22,15 +22,22 @@ let dragStartX = 0;
 let dragStartWidth = 0;
 let lastDividerClick = 0;
 
-const spaces = computed(() =>
-  [...session.workspaces.values()].map((ws) => {
+/** 並び順の表示名（20260922-appearance-settings-rest。`AGENT_SORT_LABEL` と同じパターン）。 */
+const WORKSPACE_SORT_LABEL: Record<WorkspaceSort, string> = { opened: "開いた順", name: "名前順" };
+
+const spaces = computed(() => {
+  const rows = [...session.workspaces.values()].map((ws) => {
     const states = session.panesInWorkspace(ws.id).map((p) => displayStateFor(p.agent, seen.getSeenSeq(p.agent?.instanceId ?? "", p.agent?.serverSeenSeq ?? 0)));
     const showGit = !!ws.git && (ws.git.ahead > 0 || ws.git.behind > 0);
     // いま表示している workspace か（`PaneFrame` の `selected` と同じ考え方で、判定は 1 箇所に置く）。
     const isCurrent = ws.id === view.workspaceId;
     return { workspace: ws, state: aggregate(states) as keyof typeof STATE_PRIORITY | null, showGit, isCurrent };
-  }),
-);
+  });
+  // `opened`（既定）は並べ替えない——サーバから届いた順（`session.workspaces` の反復順）のまま（AC3）。
+  if (view.workspaceSort === "opened") return rows;
+  // `name`：workspace のラベルの文字列順（AC2）。`sort` は安定なので、同点（同名）なら `opened` の並びが残る。
+  return [...rows].sort((a, b) => a.workspace.label.localeCompare(b.workspace.label));
+});
 
 /** 全体のメニューが開いているか（`PaneFrame` の枠のボタンと同じく `aria-expanded` で伝える）。 */
 const globalMenuOpen = computed(() => view.contextMenu?.target.kind === "global");
@@ -146,6 +153,12 @@ watch(
 <template>
   <nav ref="el" class="sidebar" :class="{ 'sidebar-collapsed': view.sidebarCollapsed }" :style="view.sidebarCollapsed ? {} : { width: `${view.sidebarWidth}px` }">
     <section class="sidebar-spaces" aria-label="spaces">
+      <div v-if="!view.sidebarCollapsed" class="sidebar-section-header">
+        <span class="sidebar-section-title">spaces</span>
+        <button type="button" class="sidebar-btn sidebar-sort-btn" :aria-label="`並び順: ${WORKSPACE_SORT_LABEL[view.workspaceSort]}（押すと切り替え）`" @click="view.toggleWorkspaceSort()" @keydown.stop>
+          {{ WORKSPACE_SORT_LABEL[view.workspaceSort] }}
+        </button>
+      </div>
       <div
         v-for="{ workspace, state, showGit, isCurrent } in spaces"
         :key="workspace.id"

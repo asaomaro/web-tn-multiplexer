@@ -13,7 +13,25 @@ import {
 } from "../keys/keyPrefs.js";
 import { resolveKeymap, type ResolvedKeymap } from "../keys/keymap.js";
 import { loadThemePrefs, resolveTheme } from "../theme/themes.js";
+import {
+  emptyThemeOverrides,
+  loadThemeOverrides,
+  serializeThemeOverrides,
+  withOverride,
+  withoutOverride,
+  type ThemeOverrideBucket,
+  type ThemeOverrides,
+} from "../theme/themeOverrides.js";
+import type { CssVar } from "../theme/uiTokens.js";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
+import {
+  loadTabBarPosition,
+  loadTabBarRightEntries,
+  loadTabBarRightSeparator,
+  MAX_TAB_BAR_RIGHT_ENTRIES,
+  type TabBarPosition,
+  type TabBarRightEntry,
+} from "../tabbar/tabBarRight.js";
 import { readPrefs, writePrefs } from "./view.js";
 
 /**
@@ -38,6 +56,42 @@ export function loadStatusSymbols(raw: unknown): boolean {
  * design「US4」）。**既定は無効**——実験的 API・Chromium 系限定のため（AC11）。
  */
 export function loadKeyboardLockInFullscreen(raw: unknown): boolean {
+  return typeof raw === "boolean" ? raw : false;
+}
+
+/**
+ * pane の枠・隙間の太さ（20260922-appearance-settings-rest）。既定は今までと同じ見た目
+ * （`"default"`＝4px 相当）。値そのもの（px 数）は `PaneFrame.vue`/`Splitter.vue` が読む
+ * CSS 変数 `--wtm-pane-gap` へ配る側（`App.vue`）が持つ。
+ */
+export type PaneFrameThickness = "thin" | "default" | "thick";
+export const PANE_FRAME_THICKNESS_PX: Record<PaneFrameThickness, number> = {
+  thin: 2,
+  default: 4,
+  thick: 6,
+};
+// `PANE_FRAME_THICKNESS_PX` から導く（許容値の一覧をここで別に持たない。増減しても1箇所で揃う）。
+const PANE_FRAME_THICKNESSES = Object.keys(PANE_FRAME_THICKNESS_PX) as PaneFrameThickness[];
+
+/** 保存された太さを読む。3つのどれかでなければ既定の `"default"`。 */
+export function loadPaneFrameThickness(raw: unknown): PaneFrameThickness {
+  return PANE_FRAME_THICKNESSES.includes(raw as PaneFrameThickness)
+    ? (raw as PaneFrameThickness)
+    : "default";
+}
+
+/** pane にエージェント名を可視で出すか（20260922-appearance-settings-rest）。既定は無効
+ *  （常時表示すると既存の見た目が変わるため。opt-in）。 */
+export function loadPaneAgentNameVisible(raw: unknown): boolean {
+  return typeof raw === "boolean" ? raw : false;
+}
+
+/**
+ * pane 領域の外周の枠（20260922-tabbar-pane-appearance。herdr の `ui.pane_outer_borders` 相当。PR #12 から
+ * 取り込み）。既定は今までと同じ見た目＝「無し」——外周の枠は本製品にこれまで無かった装飾なので、
+ * `paneFrameThickness`（既存の各 pane 内側の枠）と違い「入れると変わる」opt-in にする。
+ */
+export function loadPaneOuterBorders(raw: unknown): boolean {
   return typeof raw === "boolean" ? raw : false;
 }
 
@@ -84,6 +138,20 @@ export const useSettingsStore = defineStore("settings", () => {
   const statusSymbols = ref(loadStatusSymbols(initial["statusSymbols"]));
   /** 全画面のときブラウザ予約キーも Keyboard Lock で受け取るか（`KeyboardLockController` が読む）。 */
   const keyboardLockInFullscreen = ref(loadKeyboardLockInFullscreen(initial["keyboardLockInFullscreen"]));
+  /** pane の枠・隙間の太さ（`App.vue` が CSS 変数へ配る）。 */
+  const paneFrameThickness = ref(loadPaneFrameThickness(initial["paneFrameThickness"]));
+  /** pane にエージェント名を可視で出すか（`PaneFrame.vue` が読む）。 */
+  const paneAgentNameVisible = ref(loadPaneAgentNameVisible(initial["paneAgentNameVisible"]));
+  /**
+   * tab バーの位置・右端のエントリ・pane 領域の外周の枠（20260922-tabbar-pane-appearance。herdr の
+   * `ui.tab_bar_position`/`ui.tab_bar_right`/`ui.pane_outer_borders` 相当。PR #12 から取り込み。
+   * `paneFrameThickness`/`paneAgentNameVisible`〔20260922-appearance-settings-rest〕とは別の設定で、
+   * 両立する——前者は各 pane の内側の枠・後者は pane 領域全体の外周）。
+   */
+  const tabBarPosition = ref<TabBarPosition>(loadTabBarPosition(initial["tabBarPosition"]));
+  const tabBarRight = ref<TabBarRightEntry[]>(loadTabBarRightEntries(initial["tabBarRight"]));
+  const tabBarRightSeparator = ref(loadTabBarRightSeparator(initial["tabBarRightSeparator"]));
+  const paneOuterBorders = ref(loadPaneOuterBorders(initial["paneOuterBorders"]));
   /** このブラウザの scrollback の設定。使う行数は `term/scrollback.ts` の `effectiveScrollback` が決める。 */
   const scrollback = ref<ScrollbackPref>(loadScrollbackPref(initial["scrollback"]));
   /** 新しい workspace・tab・分割を開く場所の方針と、「指定した場所」のパス（方針が `path` のときだけ使う）。 */
@@ -118,6 +186,84 @@ export const useSettingsStore = defineStore("settings", () => {
   function setKeyboardLockInFullscreen(v: boolean): void {
     keyboardLockInFullscreen.value = v;
     writePrefs({ keyboardLockInFullscreen: v });
+  }
+
+  /** 反映と保存を同時に行う（確定ダイアログを挟まない。AC-I2）。 */
+  function setPaneFrameThickness(v: PaneFrameThickness): void {
+    paneFrameThickness.value = v;
+    writePrefs({ paneFrameThickness: v });
+  }
+
+  /** 反映と保存を同時に行う（確定ダイアログを挟まない。AC-I2）。 */
+  function setPaneAgentNameVisible(v: boolean): void {
+    paneAgentNameVisible.value = v;
+    writePrefs({ paneAgentNameVisible: v });
+  }
+
+  /** 反映と保存を同時に行う（PR #12 から取り込み）。 */
+  function setTabBarPosition(v: TabBarPosition): void {
+    tabBarPosition.value = v;
+    writePrefs({ tabBarPosition: v });
+  }
+
+  /**
+   * `tabBarRight` を丸ごと差し替える。`loadTabBarRightEntries` を通して正規化・上限の切り詰めをしてから、
+   * 状態にも保存にも同じ内容が既にあれば何もしない（`replaceKeyPrefs` と同じ二重の比較。PR #12 から取り込み）。
+   * `add`/`remove`/`move`/`update` の各操作からもこれを経由する。
+   */
+  function setTabBarRight(entries: readonly TabBarRightEntry[]): void {
+    const normalized = loadTabBarRightEntries(entries);
+    const serialized = JSON.stringify(normalized);
+    const sameState = serialized === JSON.stringify(tabBarRight.value);
+    const sameStored = serialized === JSON.stringify(readPrefs()["tabBarRight"] ?? []);
+    if (sameState && sameStored) return;
+    if (!sameState) tabBarRight.value = normalized;
+    writePrefs({ tabBarRight: normalized });
+  }
+
+  /** 末尾に既定値のエントリを追加する（上限に達していたら何もしない）。 */
+  function addTabBarRightEntry(kind: TabBarRightEntry["kind"]): void {
+    if (tabBarRight.value.length >= MAX_TAB_BAR_RIGHT_ENTRIES) return;
+    const entry: TabBarRightEntry =
+      kind === "datetime" ? { kind, format: "time" } : kind === "text" ? { kind, text: "" } : { kind };
+    setTabBarRight([...tabBarRight.value, entry]);
+  }
+
+  /** 指定した位置のエントリを消す。 */
+  function removeTabBarRightEntry(index: number): void {
+    setTabBarRight(tabBarRight.value.filter((_, i) => i !== index));
+  }
+
+  /** 指定した位置のエントリを 1 つ隣と入れ替える。端では何もしない。 */
+  function moveTabBarRightEntry(index: number, direction: -1 | 1): void {
+    const next = index + direction;
+    if (index < 0 || index >= tabBarRight.value.length || next < 0 || next >= tabBarRight.value.length) return;
+    const reordered = [...tabBarRight.value];
+    const moved = reordered[index]!;
+    reordered[index] = reordered[next]!;
+    reordered[next] = moved;
+    setTabBarRight(reordered);
+  }
+
+  /** 指定した位置のエントリを差し替える（datetime の書式・text の文字列の変更）。 */
+  function updateTabBarRightEntry(index: number, entry: TabBarRightEntry): void {
+    if (index < 0 || index >= tabBarRight.value.length) return;
+    const next = [...tabBarRight.value];
+    next[index] = entry;
+    setTabBarRight(next);
+  }
+
+  /** 反映と保存を同時に行う。 */
+  function setTabBarRightSeparator(v: string): void {
+    const normalized = loadTabBarRightSeparator(v);
+    tabBarRightSeparator.value = normalized;
+    writePrefs({ tabBarRightSeparator: normalized });
+  }
+
+  /** 反映と保存を同時に行う。 */
+  function setPaneOuterBorders(v: boolean): void {
+    paneOuterBorders.value = v;
+    writePrefs({ paneOuterBorders: v });
   }
 
   /** 反映と保存を同時に行う。**効くのはその後に作る端末から**（既に開いている pane は変えない。AC9）。 */
@@ -195,8 +341,14 @@ export const useSettingsStore = defineStore("settings", () => {
   }
 
   /**
+   * 色の個別の上書き（20260922-theme-custom-overrides。design「store」・herdr の `[theme.custom]` 相当）。**既定との差だけ**を持つ
+   * （`theme/themeOverrides.ts`）。読み込みは値ごとに落とす（AC8）。ブラウザごと（テーマの設定と同じ）。
+   */
+  const themeOverrides = ref<ThemeOverrides>(loadThemeOverrides(initial["themeOverrides"]));
+
+  /**
    * 同じブラウザの別のウィンドウ・タブで割り当てが変わったら追従する。`writePrefs` は書くたびに保存された全体を読んで項目だけ差し替えるので、ほかの設定は先の変更を消さないが、
-   * `keys` は 1 つのまとまりをメモリの状態から丸ごと書く——追従しないと、古い状態から別の変更をしたとき、先に保存された変更を上書きしてしまう。
+   * `keys`／`themeOverrides` は 1 つのまとまりをメモリの状態から丸ごと書く——追従しないと、古い状態から別の変更をしたとき、先に保存された変更を上書きしてしまう。
    * `storage` は**ほかの**ウィンドウの書き込みでだけ発火する（自分の書き込みでは来ない）。
    */
   window.addEventListener("storage", () => {
@@ -206,7 +358,63 @@ export const useSettingsStore = defineStore("settings", () => {
       JSON.stringify(serializeKeyPrefs(keyPrefs.value) ?? null)
     )
       keyPrefs.value = fresh;
+    // 20260922-theme-custom-overrides：色の上書きも同じ理由で追従する（同じ listener の中でまとめて見る。listener を増やさない）。
+    const freshOverrides = loadThemeOverrides(readPrefs()["themeOverrides"]);
+    if (
+      JSON.stringify(serializeThemeOverrides(freshOverrides) ?? null) !==
+      JSON.stringify(serializeThemeOverrides(themeOverrides.value) ?? null)
+    )
+      themeOverrides.value = freshOverrides;
   });
+
+  /**
+   * 同じブラウザの別のウィンドウ・タブでの変更に追従する（PR #12 から取り込み）。この 4 項目はどれも
+   * 単純な値の「常に書く」形なので、保存値を読み直して違えば置き換えるだけでよい。
+   */
+  window.addEventListener("storage", () => {
+    const prefs = readPrefs();
+    const nextPosition = loadTabBarPosition(prefs["tabBarPosition"]);
+    if (nextPosition !== tabBarPosition.value) tabBarPosition.value = nextPosition;
+    const nextRight = loadTabBarRightEntries(prefs["tabBarRight"]);
+    if (JSON.stringify(nextRight) !== JSON.stringify(tabBarRight.value)) tabBarRight.value = nextRight;
+    const nextSeparator = loadTabBarRightSeparator(prefs["tabBarRightSeparator"]);
+    if (nextSeparator !== tabBarRightSeparator.value) tabBarRightSeparator.value = nextSeparator;
+    const nextOuter = loadPaneOuterBorders(prefs["paneOuterBorders"]);
+    if (nextOuter !== paneOuterBorders.value) paneOuterBorders.value = nextOuter;
+  });
+
+  /**
+   * 差し替えて保存する。`replaceKeyPrefs`（上の「キーの割り当て」節）と同じ形：読み直して正規化し、二重の守り（読めない値は
+   * 反映せず捨てる）、状態も保存も同じなら何もしない、保存が状態と違うときは保存だけを直す、差が無くなれば `themeOverrides`
+   * ごと消す。
+   */
+  function replaceThemeOverrides(next: ThemeOverrides): void {
+    const normalized = loadThemeOverrides(serializeThemeOverrides(next));
+    const serialized = serializeThemeOverrides(normalized);
+    const sameState =
+      JSON.stringify(serialized ?? null) ===
+      JSON.stringify(serializeThemeOverrides(themeOverrides.value) ?? null);
+    const sameStored =
+      JSON.stringify(serialized ?? null) === JSON.stringify(readPrefs()["themeOverrides"] ?? null);
+    if (sameState && sameStored) return;
+    if (!sameState) themeOverrides.value = normalized;
+    writePrefs({ themeOverrides: serialized });
+  }
+
+  /** ある CSS 変数の、明るいとき／暗いときどちらかの上書きを差し替える。 */
+  function setThemeOverride(bucket: ThemeOverrideBucket, key: CssVar, value: string): void {
+    replaceThemeOverrides(withOverride(themeOverrides.value, bucket, key, value));
+  }
+
+  /** ある CSS 変数の、明るいとき／暗いときどちらかの上書きを外す（既定へ戻す。AC6）。 */
+  function resetThemeOverride(bucket: ThemeOverrideBucket, key: CssVar): void {
+    replaceThemeOverrides(withoutOverride(themeOverrides.value, bucket, key));
+  }
+
+  /** すべての上書きを既定へ戻す（AC7。`themeOverrides` を消す）。 */
+  function resetAllThemeOverrides(): void {
+    replaceThemeOverrides(emptyThemeOverrides());
+  }
 
   /** prefix を変える（chord。null は既定へ）。反映と保存を同時に行う（確定ボタンを置かない。AC8）。 */
   function setKeyPrefix(chord: string | null): void {
@@ -236,6 +444,12 @@ export const useSettingsStore = defineStore("settings", () => {
   return {
     statusSymbols,
     keyboardLockInFullscreen,
+    paneFrameThickness,
+    paneAgentNameVisible,
+    tabBarPosition,
+    tabBarRight,
+    tabBarRightSeparator,
+    paneOuterBorders,
     scrollback,
     newCwdPolicy,
     newCwdPath,
@@ -247,8 +461,19 @@ export const useSettingsStore = defineStore("settings", () => {
     effectiveTheme,
     keyPrefs,
     keymap,
+    themeOverrides,
     setStatusSymbols,
     setKeyboardLockInFullscreen,
+    setPaneFrameThickness,
+    setPaneAgentNameVisible,
+    setTabBarPosition,
+    setTabBarRight,
+    addTabBarRightEntry,
+    removeTabBarRightEntry,
+    moveTabBarRightEntry,
+    updateTabBarRightEntry,
+    setTabBarRightSeparator,
+    setPaneOuterBorders,
     setScrollback,
     setNewCwdPolicy,
     setNewCwdPath,
@@ -262,5 +487,9 @@ export const useSettingsStore = defineStore("settings", () => {
     resetKeyAction,
     resetKeyPrefix,
     resetAllKeys,
+    replaceThemeOverrides,
+    setThemeOverride,
+    resetThemeOverride,
+    resetAllThemeOverrides,
   };
 });

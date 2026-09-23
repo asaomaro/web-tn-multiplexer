@@ -109,7 +109,9 @@ test("prefix を ctrl+a に変えると、新しい prefix で入り、旧い ct
   await expect(prefixIndicator(page)).toHaveCount(0);
 
   // 新しい prefix で入り、次のキーが操作になる（prefix+c＝新しい tab）。
-  const tabs = await page.locator(".tab-bar-item").count();
+  // tab が1個のときは tab バー自体が無い（`.tab-bar-item` の count は 0。20260922-appearance-settings-rest
+  // の自動非表示・AC4）ので、実際の tab 数「1」として扱う（さもないと「0→1」を期待し、実際の「1→2」と食い違う）。
+  const tabs = Math.max(await page.locator(".tab-bar-item").count(), 1);
   await page.keyboard.press("Control+a");
   await expect(prefixIndicator(page)).toBeVisible();
   await page.keyboard.press("c");
@@ -366,9 +368,11 @@ test("おすすめの直接のキー（ctrl+alt）を足すと、prefix なし�
   await expect.poll(() => focusedPaneIndex(page)).toBe(0);
   await page.keyboard.press("Control+Alt+l");
   await expect.poll(() => focusedPaneIndex(page)).toBe(1);
-  // 拡大表示（ctrl+alt+z）も prefix なしで効く。
+  // 拡大表示（ctrl+alt+z）も prefix なしで効く。tab バーの「Z」（`.tab-bar-zoomed`）は tab が
+  // 2個以上ないと出ない（20260922-appearance-settings-rest の自動非表示・AC4）ので、tab バーに
+  // 依存しない印（`.pane-layout-zoomed`。workspace-tab-pane.spec.ts と同じ判定）で見る。
   await page.keyboard.press("Control+Alt+z");
-  await expect(page.locator(".tab-bar-zoomed")).toHaveCount(1);
+  await expect(page.locator(".pane-layout-zoomed")).toHaveCount(1);
 });
 
 test("キー一覧とトーストは現在の割り当てを出す（AC11）", async ({ browser, appServer }) => {

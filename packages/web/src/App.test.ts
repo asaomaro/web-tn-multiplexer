@@ -13,6 +13,7 @@ import { KeyRouter, type KeyRouterClock } from "./keys/KeyRouter.js";
 import { DEFAULT_KEYMAP } from "./keys/keymap.js";
 import type { ConnectionPort } from "./net/ports.js";
 import { useSessionStore } from "./store/session.js";
+import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
 import { MouseBridge } from "./term/MouseBridge.js";
 import { RendererPool, type WebglAddonLike } from "./term/RendererPool.js";
@@ -207,6 +208,37 @@ describe("App — pane の描画", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+// 20260922-appearance-settings-rest T4（design「インターフェース / データ構造」`PaneFrame.vue`／`Splitter.vue` 節）。
+describe("App — pane の枠・隙間の太さの CSS 変数（AC9）", () => {
+  it("`.app-shell` は既定で `--wtm-pane-gap: 4px` を持つ", () => {
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    expect(wrapper.get(".app-shell").attributes("style")).toContain("--wtm-pane-gap: 4px");
+  });
+
+  it("`settings.paneFrameThickness` を変えると、リアクティブに変わる（ページの再読み込み不要）", async () => {
+    const settings = useSettingsStore(pinia);
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    settings.setPaneFrameThickness("thick");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".app-shell").attributes("style")).toContain("--wtm-pane-gap: 6px");
+    settings.setPaneFrameThickness("thin");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".app-shell").attributes("style")).toContain("--wtm-pane-gap: 2px");
+  });
+});
+
+// 20260922-tabbar-pane-appearance（PR #12 から取り込み）。
+describe("App — pane 領域の外周の枠", () => {
+  it("既定では `.app-panes-outer-borders` が付かず、`settings.paneOuterBorders` を有効にすると付く", async () => {
+    const settings = useSettingsStore(pinia);
+    const wrapper = mount(App, makeProvide(makeConnection()));
+    expect(wrapper.get(".app-panes").classes()).not.toContain("app-panes-outer-borders");
+    settings.setPaneOuterBorders(true);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".app-panes").classes()).toContain("app-panes-outer-borders");
   });
 });
 

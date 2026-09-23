@@ -201,9 +201,14 @@ async function blurWindow(page: Page): Promise<void> {
   await page.evaluate(() => Object.defineProperty(document, "hasFocus", { value: () => false, configurable: true }));
 }
 
-/** 新しい tab を作って移る。**移り終えたことをブラウザ側で確かめてから**戻る（競走にしない）。 */
+/**
+ * 新しい tab を作って移る。**移り終えたことをブラウザ側で確かめてから**戻る（競走にしない）。
+ * tab が1個のときは tab バー自体が無い（`.tab-bar-item` の count は 0。20260922-appearance-settings-rest
+ * の自動非表示・AC4）ので、その場合は実際の tab 数「1」として扱う（`Math.max(..., 1)`）——さもないと
+ * 「0 → 1」を期待してしまい、実際に増える「1 → 2」と食い違う。
+ */
 async function openNewTab(page: Page): Promise<void> {
-  const before = await page.locator(".tab-bar-item").count();
+  const before = Math.max(await page.locator(".tab-bar-item").count(), 1);
   await prefixKey(page, "c");
   await page.keyboard.press("Enter"); // 名前は既定のまま
   await expect(page.locator(".tab-bar-item")).toHaveCount(before + 1);

@@ -1,11 +1,12 @@
 import type { MethodName, ParamsOf, ResultOf, Tab, Workspace } from "@wtm/protocol";
 import { mount } from "@vue/test-utils";
 import { createPinia, type Pinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ActionDispatcherKey, ConnectionKey, TerminalRegistryKey } from "../injection.js";
 import type { Action } from "../keys/actions.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 import TabBar from "./TabBar.vue";
 
@@ -42,13 +43,16 @@ function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] 
 function mountTabBar(
   conn: ConnectionPort,
   actions?: { openContextMenu: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn>; newTabInWorkspace?: ReturnType<typeof vi.fn> },
+  registry?: { focus: ReturnType<typeof vi.fn> },
 ) {
   return mount(TabBar, {
+    attachTo: document.body,
     global: {
       plugins: [pinia],
       provide: {
         [ConnectionKey as symbol]: conn,
         [ActionDispatcherKey as symbol]: actions ?? { openContextMenu: vi.fn(), run: vi.fn(), newTabInWorkspace: vi.fn() },
+        ...(registry ? { [TerminalRegistryKey as symbol]: registry } : {}),
       },
     },
   });
@@ -70,8 +74,11 @@ describe("TabBar", () => {
   it("現在の tab に active クラスと aria-selected を付ける", () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    // tab バーの自動非表示（20260922-appearance-settings-rest。AC4）は tab が1個のときだけなので、
+    // この節（tab バーの中身の表示）を確かめるテストはどれも2個以上にする。
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
     session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
     const wrapper = mountTabBar(makeConnection());
     const item = wrapper.get(".tab-bar-item");
@@ -82,8 +89,9 @@ describe("TabBar", () => {
   it("拡大中の tab には Z を出す", () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
     session.tabUpserted(makeTab("t1", "w1", { zoomedPaneId: "p1" }));
+    session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
     const wrapper = mountTabBar(makeConnection());
     expect(wrapper.find(".tab-bar-zoomed").text()).toBe("Z");
@@ -117,8 +125,9 @@ describe("TabBar", () => {
   it("右クリックで tab を対象に openContextMenu を呼ぶ", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
     session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
     const openContextMenu = vi.fn();
     const wrapper = mountTabBar(makeConnection(), { openContextMenu, run: vi.fn() });
@@ -129,8 +138,9 @@ describe("TabBar", () => {
   it("ホイールで tabDelta アクションを送る（D56 の訂正 11）", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
     session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
     const run = vi.fn();
     const wrapper = mountTabBar(makeConnection(), { openContextMenu: vi.fn(), run });
@@ -147,8 +157,9 @@ describe("TabBar — 新しいタブのボタン", () => {
   it("押すと、表示中の workspace を宛先に newTabInWorkspace を呼ぶ（名前入力を開くのは dispatcher の責務）", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
     session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
     const newTabInWorkspace = vi.fn();
     const wrapper = mountTabBar(makeConnection(), { openContextMenu: vi.fn(), run: vi.fn(), newTabInWorkspace });
@@ -178,12 +189,215 @@ describe("TabBar — 新しいタブのボタン", () => {
   it("role=tablist が持つのは tab だけ（＋ はその外）", () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
     session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
     view.setView("w1", "t1");
     const wrapper = mountTabBar(makeConnection());
     const list = wrapper.get('[role="tablist"]');
     expect(list.findAll(".tab-bar-new").length).toBe(0);
-    expect(list.findAll('[role="tab"]').length).toBe(1);
+    expect(list.findAll('[role="tab"]').length).toBe(2);
+  });
+});
+
+// 20260922-appearance-settings-rest T6（design「振る舞いの詳細」US2・US3）。
+describe("TabBar — 自動非表示（AC4〜AC6・AC-I6）", () => {
+  it("tab が1個のときは表示されない（AC4）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.find(".tab-bar").exists()).toBe(false);
+  });
+
+  it("0個では表示（＋の導線）・1個では非表示、2個以上で表示に戻る（AC4・AC5）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", []));
+    view.setView("w1", "");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.find(".tab-bar").exists(), "0個：表示（＋ の導線が要る）").toBe(true);
+
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".tab-bar").exists(), "1個：非表示").toBe(false);
+
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t2", "w1"));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".tab-bar").exists(), "2個：表示に戻る（新規 tab 作成の場合）").toBe(true);
+  });
+
+  it("非表示の間もフォーカスは失われず、選ばれている pane の端末へ戻る（AC-I6）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    view.focusPane("p1");
+    const focus = vi.fn();
+    const wrapper = mountTabBar(makeConnection(), undefined, { focus });
+    (wrapper.get(".tab-bar-new").element as HTMLButtonElement).focus();
+    expect(document.activeElement).toBe(wrapper.get(".tab-bar-new").element);
+
+    // tab を1個に減らす（自動非表示。フォーカスしていた要素が DOM から消える）。
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    view.setView("w1", "t1");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick(); // onBeforeUnmount 内の nextTick 分
+    expect(wrapper.find(".tab-bar").exists()).toBe(false);
+    expect(focus).toHaveBeenCalledWith("p1");
+  });
+
+  it("フォーカスが tab バーの外にあったときは、余計な focus を呼ばない", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const focus = vi.fn();
+    const wrapper = mountTabBar(makeConnection(), undefined, { focus });
+    // 何もフォーカスしない（body のまま）。
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(focus).not.toHaveBeenCalled();
+  });
+});
+
+describe("TabBar — 右端の日時エントリ（AC7・AC8。20260922-tabbar-pane-appearance。PR #12 から取り込み）", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 1, 9, 5, 0));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 既定（`tabBarRight` が空）では右端に何も出ない。設定で日時エントリを足すと出る（旧「現在時刻」を統合）。 */
+  it("既定では右端の帯が無く、日時エントリを足すと HH:mm で出る（AC7）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.find(".tab-bar-right").exists(), "既定は空なので出ない").toBe(false);
+
+    useSettingsStore(pinia).setTabBarRight([{ kind: "datetime", format: "time" }]);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:05");
+    expect(wrapper.get(".tab-bar-right").attributes("aria-hidden")).toBe("true"); // 装飾的な情報
+  });
+
+  it("時間が経つと表示が更新される。ページの再読み込みは要らない（AC8）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    useSettingsStore(pinia).setTabBarRight([{ kind: "datetime", format: "time" }]);
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:05");
+    vi.setSystemTime(new Date(2026, 0, 1, 9, 6, 1));
+    await vi.advanceTimersByTimeAsync(15_000);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:06");
+  });
+
+  it("非表示（tab が1個）の間・日時エントリが無い間はタイマーを持たない。両方そろうと動き出す・どちらか欠けると止まる", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    view.setView("w1", "t1");
+    settings.setTabBarRight([{ kind: "datetime", format: "time" }]);
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    const wrapper = mountTabBar(makeConnection());
+    expect(setSpy, "1個（非表示）で mount：日時エントリがあってもタイマーを持たない").not.toHaveBeenCalled();
+
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t2", "w1"));
+    await wrapper.vm.$nextTick();
+    expect(setSpy, "2個（表示）に増えると動き出す").toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".tab-bar-right").exists()).toBe(true);
+    const clearCountAfterShow = clearSpy.mock.calls.length;
+
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    await wrapper.vm.$nextTick();
+    expect(clearSpy.mock.calls.length, "1個（非表示）に戻ると止める").toBeGreaterThan(clearCountAfterShow);
+    expect(setSpy, "動いていたタイマーは1つだけのまま（増やし直さない）").toHaveBeenCalledTimes(1);
+
+    wrapper.unmount();
+    setSpy.mockRestore();
+    clearSpy.mockRestore();
+  });
+
+  it("日時エントリを外すと、表示中でもタイマーを止める", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    settings.setTabBarRight([{ kind: "datetime", format: "time" }]);
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-right").text()).toBe("09:05");
+    const clearCountBefore = clearSpy.mock.calls.length;
+
+    settings.setTabBarRight([]);
+    await wrapper.vm.$nextTick();
+    expect(clearSpy.mock.calls.length).toBeGreaterThan(clearCountBefore);
+    expect(wrapper.find(".tab-bar-right").exists()).toBe(false);
+
+    wrapper.unmount();
+    clearSpy.mockRestore();
+  });
+});
+
+describe("TabBar — 位置・右端のほかのエントリ（20260922-tabbar-pane-appearance。PR #12 から取り込み）", () => {
+  it("既定は上（`tab-bar-top`・order 0）。設定で下に変えると `tab-bar-bottom`・order 1 になる", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar").classes()).toContain("tab-bar-top");
+    expect((wrapper.get(".tab-bar").element as HTMLElement).style.order).toBe("0");
+
+    settings.setTabBarPosition("bottom");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".tab-bar").classes()).toContain("tab-bar-bottom");
+    expect((wrapper.get(".tab-bar").element as HTMLElement).style.order).toBe("1");
+  });
+
+  it("ホスト名・固定文字列・拡大の状態のエントリを、区切り文字でつなげて出す", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const settings = useSettingsStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1", { zoomedPaneId: "p1" }));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    session.host = { os: "linux", windowsBuild: null, hostname: "myhost" };
+    settings.setTabBarRight([{ kind: "zoom" }, { kind: "hostname" }, { kind: "text", text: "note" }]);
+    settings.setTabBarRightSeparator(" | ");
+    const wrapper = mountTabBar(makeConnection());
+    expect(wrapper.get(".tab-bar-right").text()).toBe("Z | myhost | note");
   });
 });

@@ -1,6 +1,14 @@
 import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SIDEBAR_WIDTH, loadSidebarCollapsed, loadSidebarWidth, readPrefs, useViewStore, writePrefs } from "./view.js";
+import {
+  SIDEBAR_WIDTH,
+  loadSidebarCollapsed,
+  loadSidebarWidth,
+  loadWorkspaceSort,
+  readPrefs,
+  useViewStore,
+  writePrefs,
+} from "./view.js";
 
 let pinia: Pinia;
 
@@ -48,6 +56,57 @@ describe("useViewStore — agents の並び順", () => {
       expect(useViewStore(createPinia()).agentSort).toBe("grouped");
     } finally {
       Storage.prototype.getItem = original;
+    }
+  });
+});
+
+// 20260922-appearance-settings-rest T1（design「インターフェース / データ構造」の `view.ts` 節）。
+// agents の並び順（上）と同じ形（wtm.prefs.v1・localStorage）。
+describe("useViewStore — workspace（spaces）の並び順", () => {
+  it("既定は opened で、押すたびに name と行き来する", () => {
+    const store = useViewStore(pinia);
+    expect(store.workspaceSort).toBe("opened");
+    store.toggleWorkspaceSort();
+    expect(store.workspaceSort).toBe("name");
+    store.toggleWorkspaceSort();
+    expect(store.workspaceSort).toBe("opened");
+  });
+
+  it("切り替えると localStorage に残り、新しいストアが読み戻す", () => {
+    const store = useViewStore(pinia);
+    store.toggleWorkspaceSort();
+    expect(sessionStorage.getItem("wtm.prefs.v1")).toBeNull(); // 表示位置とは別の入れ物
+    const store2 = useViewStore(createPinia());
+    expect(store2.workspaceSort).toBe("name");
+  });
+
+  it("壊れた値が入っていたら opened に落とす", () => {
+    localStorage.setItem("wtm.prefs.v1", JSON.stringify({ workspaceSort: "なにか" }));
+    expect(useViewStore(createPinia()).workspaceSort).toBe("opened");
+  });
+
+  it("localStorage が読めない環境でも動く（保存が効かないだけ）", () => {
+    const original = Storage.prototype.getItem;
+    Storage.prototype.getItem = () => {
+      throw new Error("denied");
+    };
+    try {
+      expect(useViewStore(createPinia()).workspaceSort).toBe("opened");
+    } finally {
+      Storage.prototype.getItem = original;
+    }
+  });
+});
+
+describe("loadWorkspaceSort（AC3）", () => {
+  it("有効な値はそのまま通す", () => {
+    expect(loadWorkspaceSort("opened")).toBe("opened");
+    expect(loadWorkspaceSort("name")).toBe("name");
+  });
+
+  it("壊れた値・無いときは opened", () => {
+    for (const raw of [undefined, null, "なにか", 1, {}, true]) {
+      expect(loadWorkspaceSort(raw), String(raw)).toBe("opened");
     }
   });
 });

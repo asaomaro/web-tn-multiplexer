@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
 import { ActionDispatcherKey, TerminalRegistryKey } from "../injection.js";
 import { paneNameOf } from "../store/paneName.js";
 import { useSessionStore } from "../store/session.js";
+import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
 
 /**
@@ -23,6 +24,10 @@ import { useViewStore } from "../store/view.js";
  *   ほかに移す処理が無かった）。
  * - 枠は端末（葉）の後ろに敷き、葉を `position: relative` で上に重ねる——枠の要素は端末を包まないので、操作できる要素の
  *   入れ子にならない。
+ * - エージェント名の可視ラベル（`.pane-frame-name`。20260922-appearance-settings-rest。opt-in・AC11）は、
+ *   **`.pane-frame-body`（端末）より後の兄弟**として置く——`z-index:auto` の重なりは DOM 順で後のものが
+ *   上に来るため、枠（`.pane-frame-edge`）の中に置くと端末の不透明な内容の下に隠れて見えなくなる
+ *   （taskcheck がスクリーンショットで実際に発見した不具合。`pointer-events: none` で端末のクリックは妨げない）。
  *
  * `enabled` が false（モバイルの `MobileShell`・単体テスト）なら枠を描かず、ストアにも触れない（`enabled` は作った後に
  * 変えない前提。モバイルは葉を PTY の大きさの縮小の枠に置くので、縁を足すと端末がはみ出る）。
@@ -33,6 +38,7 @@ const actions = inject(ActionDispatcherKey, undefined);
 const registry = inject(TerminalRegistryKey, undefined);
 const session = props.enabled ? useSessionStore() : null;
 const view = props.enabled ? useViewStore() : null;
+const settings = props.enabled ? useSettingsStore() : null;
 const edge = ref<HTMLElement | null>(null);
 
 /** 利用者が付けた名前 → エージェント名 → 端末のタイトル の順に拾う。どれも無ければ空。 */
@@ -120,6 +126,15 @@ function onKeydown(ev: KeyboardEvent): void {
     <div class="pane-frame-body">
       <slot />
     </div>
+    <!-- `.pane-frame-body`（端末。DOM 順で後）より後に置く——z-index:auto の重なりは DOM 順で
+         後のものが上に来るため、`.pane-frame-edge` の中に置くと端末の不透明な内容の下に隠れて
+         見えなくなる（taskcheck が実際のスクリーンショットで発見。review.md 参照）。 -->
+    <span
+      v-if="enabled && settings?.paneAgentNameVisible && paneName"
+      class="pane-frame-name"
+      aria-hidden="true"
+      >{{ paneName }}</span
+    >
   </div>
 </template>
 
@@ -130,9 +145,12 @@ function onKeydown(ev: KeyboardEvent): void {
   width: 100%;
   height: 100%;
 }
-/* 枠の太さ。分割の境界（`Splitter` の 4px）と同じにする。ふだんは背景と同じ色で、端末の外の縁に見える。 */
+/* 枠の太さ。分割の境界（`Splitter` の --wtm-pane-gap）と同じにする。ふだんは背景と同じ色で、端末の外の縁に見える。
+ * 値そのもの（既定 4px）は `App.vue` が `settings.paneFrameThickness` から配る CSS 変数
+ * （20260922-appearance-settings-rest）。変数が届いていない場所（このコンポーネント単体のテスト等）は
+ * 今までどおり 4px にフォールバックする。 */
 .pane-frame-enabled {
-  padding: 4px;
+  padding: var(--wtm-pane-gap, 4px);
 }
 .pane-frame-edge {
   position: absolute;
@@ -150,6 +168,27 @@ function onKeydown(ev: KeyboardEvent): void {
   outline: 1px solid var(--wtm-fg, #f8f8f2);
   outline-offset: -1px;
   background: var(--wtm-menu-active-bg, #44475a);
+}
+/*
+ * pane にエージェント名を表示する opt-in の設定（20260922-appearance-settings-rest。design「US4」・AC11）。
+ * `.pane-frame-edge` の隅に小さく重ねる——`.pane-frame-edge` 自身がクリック（メニューを開く）を処理するので、
+ * `pointer-events: none` でこの帯の上のクリックも同じ扱いにする（枠のクリック領域を狭めない）。
+ */
+.pane-frame-name {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  font-size: 0.75em;
+  padding: 0.1em 0.4em;
+  background: var(--wtm-menu-bg, #282a36);
+  color: var(--wtm-menu-fg, #f8f8f2);
+  border-bottom-right-radius: 3px;
+  opacity: 0.85;
 }
 /* 枠（absolute）より後に描くよう relative にして、端末を枠の上に重ねる（中央の押下・右クリックは端末へ届く）。 */
 .pane-frame-body {

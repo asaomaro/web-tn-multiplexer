@@ -66,14 +66,14 @@ const moveHereBtn = (): HTMLElement | null =>
   document.querySelector<HTMLElement>("[data-move-here]");
 
 describe("KeySettings — 一覧（AC1）", () => {
-  it("prefix と、3 群 34 個の操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
+  it("prefix と、3 群 35 個の操作の現在の割り当てが見える（既定は今のキー）。割り当てなしは「なし」", async () => {
     const { settings } = await mountKeys();
     expect(document.querySelector("h3")!.textContent).toBe("キー");
     expect(document.querySelector(".keys-prefix .keys-binding")!.textContent).toBe("ctrl+b");
     expect(
       Array.from(document.querySelectorAll(".keys-group-name")).map((h) => h.textContent),
     ).toEqual(["全体", "workspace / tab", "pane"]);
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(34);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(35);
     expect(summaryText("split_vertical")).toBe("prefix+v");
     expect(summaryText("switch_tab")).toBe("prefix+1..9");
     expect(summaryText("cycle_pane_previous")).toBe("prefix+shift+tab");
@@ -703,7 +703,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
   it("最初から表示され（開閉の概念を持たない）、操作名の一部で一致する操作だけが残る（AC1・AC-I1）", async () => {
     await mountKeys();
     expect(filterInput()).not.toBeNull();
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(34);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(35);
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     expect(row("zoom")).not.toBeNull();
@@ -727,7 +727,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     await typeFilter("");
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(34);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(35);
   });
 
   it("絞り込み中もフォーカスが入力欄に残る（入力のたびに奪われない。AC-I4）", async () => {
