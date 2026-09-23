@@ -40,7 +40,10 @@ async function main() {
   let sessionId;
   try {
     const payload = JSON.parse(raw);
-    sessionId = payload && payload.session_id;
+    // `session_id`（snake_case。Claude Code・Codex・Cursor・Devin・Droid・Qwen Code）と
+    // `sessionId`（camelCase。Grok CLI・GitHub Copilot CLI の一部）の両方を受ける
+    // （20260923-other-agents-session-resume design「hook スクリプト」・research.md F4）。
+    sessionId = payload && (payload.session_id || payload.sessionId);
   } catch {
     return; // stdin が JSON でない → 何もしない
   }

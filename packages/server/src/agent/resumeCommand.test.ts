@@ -10,6 +10,37 @@ describe("resumeCommandFor", () => {
     expect(resumeCommandFor("codex", "thr_123")).toBe("codex resume thr_123");
   });
 
+  // 20260923-other-agents-session-resume（research.md F2）。
+  it("builds the Cursor Agent CLI resume command", () => {
+    expect(resumeCommandFor("cursor", "sess_123")).toBe("cursor-agent --resume sess_123");
+  });
+
+  it("builds the GitHub Copilot CLI resume command", () => {
+    expect(resumeCommandFor("copilot", "sess_123")).toBe("copilot --resume=sess_123");
+  });
+
+  it("builds the Devin CLI resume command", () => {
+    expect(resumeCommandFor("devin", "sess_123")).toBe("devin --resume sess_123");
+  });
+
+  it("builds the Droid resume command", () => {
+    expect(resumeCommandFor("droid", "sess_123")).toBe("droid --resume sess_123");
+  });
+
+  it("builds the Grok CLI resume command", () => {
+    expect(resumeCommandFor("grok", "sess_123")).toBe("grok --resume sess_123");
+  });
+
+  it("builds the Qwen Code resume command", () => {
+    expect(resumeCommandFor("qwen", "sess_123")).toBe("qwen --resume sess_123");
+  });
+
+  it("rejects an unsafe sessionId for all 6 new kinds too", () => {
+    for (const kind of ["cursor", "copilot", "devin", "droid", "grok", "qwen"] as const) {
+      expect(resumeCommandFor(kind, "abc; rm -rf ~")).toBeUndefined();
+    }
+  });
+
   it("returns undefined for an unknown kind", () => {
     expect(resumeCommandFor("gemini", "abc")).toBeUndefined();
   });

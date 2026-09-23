@@ -279,6 +279,21 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
         こと（design D9）。
       - 設定の「エージェント連携」で解除すると、書き込んだフックのエントリだけが消え、
         手動で足した他の hook（あれば）が残ること。
+- [ ] エージェントの会話の再開・Claude Code・Codex 以外の6エージェント（20260923-other-agents-session-resume。
+      AC1〜AC8。**この6エージェントとも本開発環境には実機が存在せず、この work のコーディング中は
+      一度も実機確認できていない**——単体テストは各エージェントの公式ドキュメントの記述どおりに
+      設定ファイル・hook エントリが書き込まれることだけを検証しており、実物の CLI との結線は完全に
+      未検証）：Cursor Agent CLI・GitHub Copilot CLI・Devin CLI・Droid・Grok CLI・Qwen Code のいずれかが
+      実際にインストールされた環境があれば、上の Claude Code・Codex と同じ手順（導入→設定ファイルへの
+      書き込み確認→会話を進める→サーバ再起動→自動再開の確認→複数 pane での独立性→解除）で確認する。
+      各エージェントの exact な設定ファイルパス・hook エントリの形は `.aidev/works/
+      20260923-other-agents-session-resume/research.md` F4 の表を参照。
+      - **Devin CLI だけ設定ファイルのパス（`~/.devin/hooks.json`）が推測値**（公式ドキュメントに
+        記載が無かったため、同業他社 Droid の命名慣習から類推した。decisions.md D4）。実機で
+        確認できる環境があれば、まずこのパスが正しいかどうかを優先して確かめる。
+      - GitHub Copilot CLI・Grok CLI は本製品専用のファイル（`wtm-agent-report.json`）を
+        hooks ディレクトリへ新規作成する方式（他のエージェントは既存の設定ファイルへ追記する方式）。
+        既存の他の hook 設定（あれば）が変更されないことも確認する。
 - [ ] pane 名の legend 表示とドラッグでの入れ替え（20260923-pane-name-dnd-swap。AC1〜AC7・
       AC-I1〜AC-I5）：設定の「表示」で「エージェント名」を有効にし、pane を2つ以上に分割する。
       期待：各 pane の枠に沿って名前が埋め込まれた見た目（legend 風）になり、フォーカス中の

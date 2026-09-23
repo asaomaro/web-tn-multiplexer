@@ -4,7 +4,7 @@ import type { IntegrationFile } from "../persist/IntegrationFile.js";
 import { defaultIntegrationFileData } from "../persist/IntegrationFile.js";
 import type { AgentIntegrationInstaller } from "./AgentIntegrationInstaller.js";
 
-const KINDS: readonly AgentIntegrationKind[] = ["claude", "codex"];
+const KINDS: readonly AgentIntegrationKind[] = ["claude", "codex", "cursor", "copilot", "devin", "droid", "grok", "qwen"];
 
 /**
  * `agent_integration.*` RPC の実体（20260923-agent-session-resume）。導入・解除・自動再開設定の
