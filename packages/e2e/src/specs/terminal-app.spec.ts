@@ -259,6 +259,13 @@ test("tab バーの ＋ は帯を高くしない。サイドバーは折りた�
   await page.goto(`${appServer.origin}/#token=${appServer.token}`);
   await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
 
+  // tab バー自体が無いと帯の高さを測れない（20260922-appearance-settings-rest の自動非表示・AC4。
+  // この work 以前は tab が1個でも常に表示されていた）ので、もう1つ tab を作って表示させる。
+  await focusTerminal(page);
+  await prefixKey(page, "c");
+  await page.keyboard.press("Enter"); // 名前は既定のまま
+  await expect(page.locator(".tab-bar-item")).toHaveCount(2);
+
   // ＋ が帯を高くすると pane の行が減る。**＋ を消したときと比べる**のが唯一の確かめ方——
   // タブも ＋ も同じ行の高さへ引き伸ばされるので、「帯 = タブ + 下線」は ＋ が何 px でも成り立ってしまう
   // （最初そう書いて、負の対照で何も確かめていないことが分かった）。

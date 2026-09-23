@@ -42,7 +42,18 @@ export type AssignTarget =
  * `reason` は空でないときだけ画面に出す。
  */
 export type AssignResult =
-  { ok: true; binding: string } | { ok: false; reason: string; ignore?: true };
+  | { ok: true; binding: string }
+  | {
+      ok: false;
+      reason: string;
+      ignore?: true;
+      /**
+       * 衝突相手（20260922-keybinding-usability。design「US2」）。**「こちらへ移す」が出せるときだけ付く**——
+       * owner が単一の（範囲でない）chord としてこの binding を持っているとき限定。範囲の操作の一部など、
+       * 単一の chord として特定できないときは付けない（AC7）。
+       */
+      conflict?: { ownerId: ActionId; via: "prefix" | "direct"; chord: string };
+    };
 
 const IGNORE_SILENT: AssignResult = { ok: false, ignore: true, reason: "" };
 
@@ -165,11 +176,18 @@ function validateBinding(
       };
     const owner = km.ownerOf(via, c);
     if (owner === null) continue;
-    if (owner !== id)
+    if (owner !== id) {
+      const single = formatBinding({ via, chord: c, range: false });
+      // 範囲の一部など、単一の chord として特定できないときは conflict を付けない（AC7）。
+      const conflict = km.bindingsOf(owner).includes(single)
+        ? { conflict: { ownerId: owner, via, chord: c } }
+        : {};
       return {
         ok: false,
         reason: `${display(via, c)} は「${labelOf(owner)}」がすでに使っています。`,
+        ...conflict,
       }; // (a)
+    }
     if (!replaced.has(c))
       return { ok: false, reason: `${display(via, c)} はこの操作にすでに割り当てられています。` };
   }

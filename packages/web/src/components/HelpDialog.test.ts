@@ -40,10 +40,12 @@ describe("HelpDialog — 表示", () => {
     await open(view, wrapper);
     const grayed = wrapper.findAll(".help-dialog-grayed");
     expect(grayed.length).toBeGreaterThan(0);
-    expect(wrapper.text()).toContain("未対応（後続: 外観と設定）");
-    // `o` は 20260920-agent-notifications で「次の知らせへ移る」になった（`shift+r` は未対応のまま残る）。
+    // `o` は 20260920-agent-notifications で「次の知らせへ移る」になった。
     expect(wrapper.text()).toContain("次の知らせへ移る");
-    // `s` の行を特定して見る——「設定」は「未対応（後続: 外観と設定）」にも含まれるので、全文の `toContain` では
+    // `shift+r` は 20260922-appearance-settings-rest T7 で「設定を読み直す」（reload_config）の
+    // 既定割り当てに昇格し、「後続」の案内からは外れた（残っているのは e だけ。下の assertion）。
+    expect(wrapper.text()).toContain("設定を読み直す");
+    // `s` の行を特定して見る——「設定」は「設定を読み直す」（reload_config）にも含まれるので、全文の `toContain` では
     // `s` の表記が何であっても通ってしまう（20260921-herdr-settings-gaps で「通知の設定」から「設定」に広げた）。
     const sLabel = wrapper.findAll("dt").find((dt) => dt.text() === "prefix+s")?.element.nextElementSibling?.textContent;
     expect(sLabel).toBe("設定");
@@ -224,7 +226,12 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     const wrapper = mountDialog();
     await open(view, wrapper);
     expect(wrapper.text()).not.toContain("未対応（後続: 端末機能の拡張）"); // e は goto の割り当て
-    expect(wrapper.text()).toContain("未対応（後続: 外観と設定）"); // shift+r はそのまま
+    // shift+r は 20260922-appearance-settings-rest T7 で reload_config の既定割り当てに
+    // 昇格したので、ここでは触っていない shift+r の通常の行がそのまま出ることを確かめる
+    // （「後続」の案内ではなく、既定どおりの操作の行）。
+    expect(rowOf(wrapper, "prefix+shift+r")?.element.nextElementSibling?.textContent).toBe(
+      "設定を読み直す",
+    );
     expect(rowOf(wrapper, "prefix+g / prefix+e")).toBeDefined();
     // 「後続」の行そのものが出ない（work が空の壊れた行「未対応（後続: undefined）」にもならない）
     expect(rowOf(wrapper, "prefix+e"), "e の後続の行は無い").toBeUndefined();
@@ -232,15 +239,19 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     expect(wrapper.text()).not.toContain("未対応（後続: ）");
   });
 
-  it("shift+r を別の操作に割り当てても、その「後続」の行は出ない（全体の群）", async () => {
+  it("shift+r を別の操作に割り当てると、reload_config の既定行は「なし」になる（後続ではなく通常の上書き。全体の群）", async () => {
+    // shift+r は 20260922-appearance-settings-rest T7 で reload_config の既定割り当てに昇格した
+    // ので、これはもう「後続」の案内の上書きではなく、他の操作と同じ「上書きが既定に勝つ」
+    // （黙って割り当てを失う）一般則の確認になる。
     const settings = useSettingsStore(pinia);
     settings.setKeyBindings("help", ["prefix+?", "prefix+R"]);
     const view = useViewStore(pinia);
     const wrapper = mountDialog();
     await open(view, wrapper);
-    expect(rowOf(wrapper, "prefix+shift+r"), "shift+r の後続の行は無い").toBeUndefined();
     expect(rowOf(wrapper, "prefix+? / prefix+shift+r")).toBeDefined();
-    expect(wrapper.text()).not.toContain("未対応（後続: 外観と設定）");
+    const none = rowOf(wrapper, "なし");
+    expect(none?.element.nextElementSibling?.textContent).toBe("設定を読み直す");
+    expect(none?.classes()).toContain("help-dialog-grayed");
     expect(wrapper.text()).toContain("未対応（後続: 端末機能の拡張）"); // e はそのまま
   });
 

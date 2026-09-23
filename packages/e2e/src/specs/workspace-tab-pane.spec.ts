@@ -119,11 +119,13 @@ test("tab: 作成・名前変更・番号での切替・閉じる", async ({ pag
   // 閉じる：busy でなければ確認なしですぐ閉じる（D23）。
   await focusTerminal(page);
   await prefixKey(page, "X");
-  await expect(page.locator(".tab-bar-item")).toHaveCount(1);
+  // tab が1個に戻ると tab バー自体が消える（20260922-appearance-settings-rest の自動非表示・AC4。
+  // この work 以前は tab が1個でも常に表示され、`.tab-bar-item` の count は 1 だった）。
+  await expect(page.locator(".tab-bar")).toHaveCount(0);
 
   // 表示中の tab を閉じたら、残りの tab の端末が表示され、クリックせずにそのまま入力が届く
-  // （D97。以前は端末が 1 つも表示されなかった。親の統合 test で追加）。
-  await expect(page.locator(".tab-bar-item-active")).toHaveCount(1);
+  // （D97。以前は端末が 1 つも表示されなかった。親の統合 test で追加）。`.tab-bar-item-active` も
+  // tab バーごと消えている（上と同じ理由）ので、代わりに端末が表示されていることだけを見る。
   await expect(page.locator(".terminal-pane")).toHaveCount(1);
   const afterClose = `wtm-e2e-aftertabclose-${Date.now()}`;
   await typeLine(page, `echo ${afterClose}`);
@@ -447,6 +449,13 @@ test("サイドバーとタブバーのボタンが、キー操作と同じ結�
   await page.locator(".sidebar-section-footer .sidebar-btn").first().click();
   await created;
   await expect(page.locator(".sidebar-spaces .sidebar-row")).toHaveCount(2);
+
+  // tab バー自体が無いと ＋ をクリックできない（20260922-appearance-settings-rest の自動非表示・AC4。
+  // この work 以前は tab が1個でも常に表示されていた）ので、先にキー操作でもう1つ tab を作って表示させる。
+  await focusTerminal(page);
+  await prefixKey(page, "c");
+  await page.keyboard.press("Enter"); // 名前は既定のまま
+  await expect(page.locator(".tab-bar-item")).toHaveCount(2);
 
   // ＋：新しいタブの名前入力が開く（prefix+c と同じ）。
   await page.locator(".tab-bar-new").click();

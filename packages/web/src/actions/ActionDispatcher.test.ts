@@ -649,6 +649,106 @@ describe("ActionDispatcher — help/goto/toggleSidebar/detach/notYet", () => {
   });
 });
 
+describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-appearance-settings-rest。AC13〜AC15）", () => {
+  it("localStorage（wtm.prefs.v1）の今の値を settings・view ストアへ読み直し、トーストを出す（AC13・AC14）", () => {
+    const conn = makeConnection();
+    const settings = useSettingsStore(pinia);
+    const view = useViewStore(pinia);
+    const { dispatcher } = makeDispatcher(conn);
+    // ストアを作った時点の既定値（wtm.prefs.v1 はまだ空）であることを前提にする。
+    expect(settings.statusSymbols).toBe(true);
+    expect(settings.newCwdPolicy).toBe("follow");
+    expect(settings.paneFrameThickness).toBe("default");
+    expect(settings.paneAgentNameVisible).toBe(false);
+    expect(settings.themeAuto).toBe(false);
+    expect(settings.tabBarPosition).toBe("top");
+    expect(settings.tabBarRight).toEqual([]);
+    expect(settings.tabBarRightSeparator).toBe(" ");
+    expect(settings.paneOuterBorders).toBe(false);
+    expect(view.sidebarWidth).toBe(240);
+    expect(view.sidebarCollapsed).toBe(false);
+    expect(view.agentSort).toBe("grouped");
+    expect(view.workspaceSort).toBe("opened");
+
+    // 別のタブ・別のダイアログ経由など、この ActionDispatcher インスタンスを経ずに
+    // `wtm.prefs.v1` が書き変わった状況を模す（reloadConfig の実運用そのままの前提）。
+    localStorage.setItem(
+      "wtm.prefs.v1",
+      JSON.stringify({
+        statusSymbols: false,
+        scrollback: 500,
+        newCwdPolicy: "home",
+        newCwdPath: "/tmp/x",
+        themeAuto: true,
+        paneFrameThickness: "thick",
+        paneAgentNameVisible: true,
+        tabBarPosition: "bottom",
+        tabBarRight: [{ kind: "hostname" }],
+        tabBarRightSeparator: " / ",
+        paneOuterBorders: true,
+        sidebarWidth: 300,
+        sidebarCollapsed: true,
+        agentSort: "priority",
+        workspaceSort: "name",
+      }),
+    );
+
+    dispatcher.run({ type: "reloadConfig" });
+
+    expect(settings.statusSymbols).toBe(false);
+    expect(settings.scrollback).toBe(500);
+    expect(settings.newCwdPolicy).toBe("home");
+    expect(settings.newCwdPath).toBe("/tmp/x");
+    expect(settings.themeAuto).toBe(true);
+    expect(settings.paneFrameThickness).toBe("thick");
+    expect(settings.paneAgentNameVisible).toBe(true);
+    expect(settings.tabBarPosition).toBe("bottom");
+    expect(settings.tabBarRight).toEqual([{ kind: "hostname" }]);
+    expect(settings.tabBarRightSeparator).toBe(" / ");
+    expect(settings.paneOuterBorders).toBe(true);
+    expect(view.sidebarWidth).toBe(300);
+    expect(view.sidebarCollapsed).toBe(true);
+    expect(view.agentSort).toBe("priority");
+    expect(view.workspaceSort).toBe("name");
+    expect(view.toasts.map((t) => t.message)).toContain("設定を読み直しました。");
+  });
+
+  it("壊れた値は既定へ落ちる（load* の壊れた値の扱いをそのまま引き継ぐ）", () => {
+    const conn = makeConnection();
+    const settings = useSettingsStore(pinia);
+    const { dispatcher } = makeDispatcher(conn);
+    localStorage.setItem("wtm.prefs.v1", JSON.stringify({ paneFrameThickness: "huge" }));
+    dispatcher.run({ type: "reloadConfig" });
+    expect(settings.paneFrameThickness).toBe("default");
+  });
+
+  it("workspace・tab・pane の構成・フォーカスには一切触れない（AC15）", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const { dispatcher } = makeDispatcher(conn);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.paneUpserted(makePane("p1", "t1"));
+    view.setView("w1", "t1");
+    view.focusPane("p1");
+    const workspacesBefore = new Map(session.workspaces);
+    const tabsBefore = new Map(session.tabs);
+    const panesBefore = new Map(session.panes);
+
+    localStorage.setItem("wtm.prefs.v1", JSON.stringify({ agentSort: "priority" }));
+    dispatcher.run({ type: "reloadConfig" });
+
+    expect(view.workspaceId).toBe("w1");
+    expect(view.tabId).toBe("t1");
+    expect(view.focusedPaneId).toBe("p1");
+    expect(session.workspaces).toEqual(workspacesBefore);
+    expect(session.tabs).toEqual(tabsBefore);
+    expect(session.panes).toEqual(panesBefore);
+    expect(conn.requests, "サーバへは何も送らない（ローカルの localStorage を読み直すだけ）").toEqual([]);
+  });
+});
+
 describe("ActionDispatcher — メニュー専用の操作（D56 の訂正 10）", () => {
   it("clearPaneName: pane.rename(label:null) を送る", () => {
     const conn = makeConnection();

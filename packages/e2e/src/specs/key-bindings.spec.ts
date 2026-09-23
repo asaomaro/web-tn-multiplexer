@@ -109,7 +109,9 @@ test("prefix を ctrl+a に変えると、新しい prefix で入り、旧い ct
   await expect(prefixIndicator(page)).toHaveCount(0);
 
   // 新しい prefix で入り、次のキーが操作になる（prefix+c＝新しい tab）。
-  const tabs = await page.locator(".tab-bar-item").count();
+  // tab が1個のときは tab バー自体が無い（`.tab-bar-item` の count は 0。20260922-appearance-settings-rest
+  // の自動非表示・AC4）ので、実際の tab 数「1」として扱う（さもないと「0→1」を期待し、実際の「1→2」と食い違う）。
+  const tabs = Math.max(await page.locator(".tab-bar-item").count(), 1);
   await page.keyboard.press("Control+a");
   await expect(prefixIndicator(page)).toBeVisible();
   await page.keyboard.press("c");
@@ -225,13 +227,15 @@ test("下に固定した結果の文は、フォーカスした部品（一覧�
   // 自動のスクロールに任せると、この位置にならず、余白を外しても通ってしまう。
   await dialog(page).evaluate((d) => {
     const a = d.querySelector('[data-action="toggle_sidebar"] [data-add="direct"]')!;
-    const band = d.querySelector(".keys-message")!;
+    const band = d.querySelector(".keys-status-band")!;
     d.scrollTop += a.getBoundingClientRect().bottom - (band.getBoundingClientRect().top - 2);
   });
   await add.click();
   await expect(capture(page)).toBeFocused();
   const box = await capture(page).boundingBox();
-  const message = await keysSection(page).locator(".keys-message").boundingBox();
+  // 固定する帯は `.keys-status-band`（文言＋「こちらへ移す」を一緒に運ぶ。20260922-keybinding-usability・
+  // review 指摘）。`.keys-message` 単体ではなく帯全体で「隠さない」ことを確かめる。
+  const message = await keysSection(page).locator(".keys-status-band").boundingBox();
   const dialogBox = await dialog(page).boundingBox();
   expect(box && message && dialogBox).toBeTruthy();
   // 取り込みの部品はダイアログの見えている領域の中にあり、下に固定した文の帯と重ならない。
@@ -366,9 +370,11 @@ test("おすすめの直接のキー（ctrl+alt）を足すと、prefix なし�
   await expect.poll(() => focusedPaneIndex(page)).toBe(0);
   await page.keyboard.press("Control+Alt+l");
   await expect.poll(() => focusedPaneIndex(page)).toBe(1);
-  // 拡大表示（ctrl+alt+z）も prefix なしで効く。
+  // 拡大表示（ctrl+alt+z）も prefix なしで効く。tab バーの「Z」（`.tab-bar-zoomed`）は tab が
+  // 2個以上ないと出ない（20260922-appearance-settings-rest の自動非表示・AC4）ので、tab バーに
+  // 依存しない印（`.pane-layout-zoomed`。workspace-tab-pane.spec.ts と同じ判定）で見る。
   await page.keyboard.press("Control+Alt+z");
-  await expect(page.locator(".tab-bar-zoomed")).toHaveCount(1);
+  await expect(page.locator(".pane-layout-zoomed")).toHaveCount(1);
 });
 
 test("「tmux 風」プリセットを選んで足すと、prefix+% で右へ分割できる（20260922-keybinding-presets。AC1・AC2）", async ({
@@ -520,6 +526,245 @@ test("キーボードだけで通せる：行へ Tab→開く→［追加］→�
   await expect(row.locator(".keys-bindings")).toHaveText("prefix+g");
   await expect(add, "AC-I4：同じ行の［追加：prefix の後］へ").toBeFocused();
   expect(await storedKeys(page)).toBeNull();
+});
+
+test("絞り込み欄に文字を打つと一致する行だけが見える。空にすると戻る。Tab で欄へ入り、一致した行まで辿り着ける（AC1〜AC3・AC-I3。20260922-keybinding-usability）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  const totalBefore = await keysSection(page).locator(".keys-details").count();
+  expect(totalBefore).toBeGreaterThan(1);
+  const groupsBefore = await keysSection(page).locator(".keys-group").count();
+  expect(groupsBefore).toBeGreaterThan(1);
+
+  const filter = keysSection(page).locator("#keys-filter-input");
+  // AC-I3：絞り込み欄の少し手前の部品（prefix の［変更］。既定のままなので［既定に戻す］は無い）から
+  // Tab で絞り込み欄へ入り、打った文字で絞り込んだ後、Tab で一致した行（summary）まで辿り着ける
+  // （数えず、実際に Tab で確かめる）。
+  await prefixChangeButton(page).focus();
+  for (let i = 0; i < 5; i++) {
+    if (await filter.evaluate((el) => el === document.activeElement)) break;
+    await page.keyboard.press("Tab");
+  }
+  await expect(filter, "AC-I3：絞り込み欄へ Tab で入れる").toBeFocused();
+  await page.keyboard.type("拡大表示"); // 「拡大表示」（zoom）だけに一致する固有のラベル
+  await expect(keysSection(page).locator(".keys-details")).toHaveCount(1); // AC1
+  await expect(actionRow(page, "zoom")).toHaveCount(1);
+  await expect(keysSection(page).locator(".keys-group")).toHaveCount(1); // AC2：一致しない群は見出しごと消える
+  await expect(keysSection(page).locator(".keys-group-name")).toHaveText("pane");
+  await page.keyboard.press("Tab");
+  await expect(
+    actionRow(page, "zoom").locator("summary"),
+    "AC-I3：一致した行（summary）へ Tab で辿り着ける",
+  ).toBeFocused();
+
+  await filter.fill(""); // AC3：空にすると戻る
+  await expect(keysSection(page).locator(".keys-details")).toHaveCount(totalBefore);
+  await expect(keysSection(page).locator(".keys-group")).toHaveCount(groupsBefore);
+});
+
+test("衝突を起こして「こちらへ移す」を押すと、衝突相手の割り当てが外れ、対象へ移る。Tab で「こちらへ移す」へ到達し Enter で押せる（AC4・AC5・AC-I8。20260922-keybinding-usability）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  await openRow(page, "goto");
+  await actionRow(page, "goto").locator('[data-add="prefix"]').click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("v"); // split_vertical の既定（prefix+v・単一の割り当て）と衝突
+  await expect(status(page)).toContainText("prefix+v");
+  await expect(status(page)).toContainText("右へ分割");
+  const moveHereBtn = keysSection(page).locator("[data-move-here]");
+  await expect(moveHereBtn).toBeVisible(); // AC4：単一の割り当てとの衝突なので出る
+  await expect(
+    actionRow(page, "goto").locator('[data-add="prefix"]'),
+    "拒否された後もフォーカスは押したボタンへ戻る（既存の挙動。ここでは Tab の起点として使う）",
+  ).toBeFocused();
+
+  // AC-I8：衝突後、フォーカスの位置（押した［追加：prefix の後］）から Tab で「こちらへ移す」まで
+  // 辿り着け、Enter で押せる（数えず、実際に Tab で確かめる）。
+  for (let i = 0; i < 60; i++) {
+    if (await moveHereBtn.evaluate((el) => el === document.activeElement)) break;
+    await page.keyboard.press("Tab");
+  }
+  await expect(moveHereBtn, "AC-I8：Tab で「こちらへ移す」へ到達できる").toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(status(page)).toHaveText(
+    "prefix+v を「右へ分割」から「goto（workspace・tab・pane から探す）」へ移しました。",
+  );
+  await expect(actionRow(page, "goto").locator(".keys-bindings")).toHaveText("prefix+g / prefix+v");
+  await expect(actionRow(page, "split_vertical").locator(".keys-bindings")).toHaveText("なし"); // AC5：衝突相手から外れる
+  expect(await storedKeys(page)).toEqual({
+    bindings: { goto: ["prefix+g", "prefix+v"], split_vertical: [] },
+  });
+  await expect(moveHereBtn).toHaveCount(0); // 移したら消える
+});
+
+test("「こちらへ移す」ボタンは、下に固定した文の帯と一緒に、ダイアログの見えている領域の中に来る（追加のスクロール無しで押せる。AC4・AC-I6。20260922-keybinding-usability。review 指摘）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  await openSettings(page);
+  await openRow(page, "goto");
+  await actionRow(page, "goto").locator('[data-add="prefix"]').click();
+  await expect(capture(page)).toBeFocused();
+  await page.keyboard.press("v"); // split_vertical の既定（prefix+v）と衝突
+  const moveHereBtn = keysSection(page).locator("[data-move-here]");
+  await expect(moveHereBtn).toBeVisible();
+
+  // `toBeVisible()` は CSS の可視性だけを見る（表示領域に入っているかは見ない）ので、
+  // ここでは実際の座標を測り、**追加でスクロールしなくても**ダイアログの見えている領域の中に
+  // 収まっていることを確かめる（`.keys-message` 単体を sticky にしていた版では、ここが
+  // ダイアログの外〔下〕へ大きくはみ出していた。実地の `boundingBox()` で見つけた不具合）。
+  const btnBox = await moveHereBtn.boundingBox();
+  const dialogBox = await dialog(page).boundingBox();
+  expect(btnBox && dialogBox).toBeTruthy();
+  expect(btnBox!.y, "追加のスクロール無しでダイアログの上端より下にある").toBeGreaterThanOrEqual(
+    dialogBox!.y,
+  );
+  expect(
+    btnBox!.y + btnBox!.height,
+    "追加のスクロール無しでダイアログの下端より上にある",
+  ).toBeLessThanOrEqual(dialogBox!.y + dialogBox!.height + 1);
+});
+
+test("Keyboard Lock の switch：API が無い環境（`navigator.keyboard` を差し替えて再現）でも例外なく動き、既存のキー操作も壊れない（AC14。20260922-keybinding-usability。decisions D6）", async ({
+  page,
+  appServer,
+}) => {
+  // この E2E 環境は実は `navigator.keyboard` を持つ（decisions D6）。AC14 の「存在しない」側の
+  // 分岐は、`main.ts` の `navigator.keyboard ?? null` の配線ごと実地で再現する。
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "keyboard", { value: undefined, configurable: true });
+  });
+  const pageErrors: string[] = [];
+  page.on("pageerror", (e) => pageErrors.push(String(e)));
+
+  await openApp(page, appServer);
+  await openSettings(page);
+  const lockSwitch = keysSection(page).locator('button[role="switch"]');
+  await expect(lockSwitch).toHaveAttribute("aria-checked", "false");
+  await lockSwitch.click();
+  await expect(lockSwitch).toHaveAttribute("aria-checked", "true"); // switch 自体は出して切り替えられる（AC14 の但し書き）
+  await expect(dialog(page)).toHaveAttribute("open", ""); // 例外でページが壊れていない
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).not.toHaveAttribute("open", "");
+
+  // 既存のキー操作（prefix 経由の分割）は壊れない。
+  await focusTerminal(page);
+  expect(await paneCount(page)).toBe(1);
+  await prefixKey(page, "v");
+  await expect.poll(() => paneCount(page)).toBe(2);
+
+  expect(pageErrors, "switch を有効にしても例外を投げない（AC14）").toEqual([]);
+});
+
+test("Keyboard Lock の switch：全画面でなければ `keyboard.lock()` は呼ばれず、節「キー」の表示も既存のキー操作も変わらない（AC9・AC-I12。20260922-keybinding-usability。decisions D6）", async ({
+  page,
+  appServer,
+}) => {
+  // この環境は `navigator.keyboard` を実際に持つ（decisions D6）。差し替えず、呼び出しだけを記録する
+  // （`e2e-observe-browser.md`：ブラウザが実際に受けた呼び出しで見る。テスト自身のクライアント状態ではない）。
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    (window as unknown as { __wtmKeyboardCalls: string[] }).__wtmKeyboardCalls = calls;
+    const install = (): void => {
+      const kb = (navigator as unknown as { keyboard?: { lock: (c?: string[]) => Promise<void>; unlock: () => void } })
+        .keyboard;
+      if (kb === undefined) return;
+      const origLock = kb.lock.bind(kb);
+      const origUnlock = kb.unlock.bind(kb);
+      kb.lock = (codes?: string[]) => {
+        calls.push(`lock:${JSON.stringify(codes ?? null)}`);
+        return origLock(codes);
+      };
+      kb.unlock = () => {
+        calls.push("unlock");
+        origUnlock();
+      };
+    };
+    install();
+  });
+
+  await openApp(page, appServer);
+  await openSettings(page);
+  await openRow(page, "split_vertical");
+  await expect(actionRow(page, "split_vertical").locator(".keys-bindings")).toHaveText("prefix+v"); // AC9：mac 向けの置き換えが無いのでいつもどおり（切り替え前）
+  const lockSwitch = keysSection(page).locator('button[role="switch"]');
+  await lockSwitch.click();
+  await expect(lockSwitch).toHaveAttribute("aria-checked", "true");
+  await expect(actionRow(page, "split_vertical").locator(".keys-bindings")).toHaveText("prefix+v"); // AC9：switch を切り替えた後も表示は変わらない
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).not.toHaveAttribute("open", "");
+
+  const calls = (await page.evaluate(
+    () => (window as unknown as { __wtmKeyboardCalls: string[] }).__wtmKeyboardCalls,
+  )) as string[];
+  expect(calls.some((c) => c.startsWith("lock:")), "全画面でないので lock() は一度も呼ばれない（AC-I12）").toBe(
+    false,
+  );
+
+  // 既存のキー操作（prefix 経由の分割）は壊れない。
+  await focusTerminal(page);
+  expect(await paneCount(page)).toBe(1);
+  await prefixKey(page, "v");
+  await expect.poll(() => paneCount(page)).toBe(2);
+});
+
+test("Keyboard Lock の switch：全画面に入ると keyboard.lock() が LOCKED_CODES で実際に呼ばれ、抜けると unlock() が呼ばれる（main.ts の navigator.keyboard の配線を実地で確認。cross 点検の指摘で追加。20260922-keybinding-usability。decisions D6）", async ({
+  page,
+  appServer,
+}) => {
+  // main.ts の `keyboard: navigator.keyboard ?? null` の配線が生きていることを、実際の呼び出しで確認する
+  // （この行だけを壊す変異は、既存のどのテストも検出できないことが cross 点検で判明した）。
+  // 「OS・ブラウザの予約キーが実際に解放されるか」自体は Playwright から観測できないので、そこは
+  // `docs/verification.md` の手動確認へ（decisions D6）。ここで確かめるのは「呼ばれたか」だけ。
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    (window as unknown as { __wtmKeyboardCalls: string[] }).__wtmKeyboardCalls = calls;
+    const kb = (navigator as unknown as { keyboard?: { lock: (c?: string[]) => Promise<void>; unlock: () => void } })
+      .keyboard;
+    if (kb === undefined) return;
+    const origLock = kb.lock.bind(kb);
+    const origUnlock = kb.unlock.bind(kb);
+    kb.lock = (codes?: string[]) => {
+      calls.push(`lock:${JSON.stringify(codes ?? null)}`);
+      return origLock(codes);
+    };
+    kb.unlock = () => {
+      calls.push("unlock");
+      origUnlock();
+    };
+  });
+
+  await openApp(page, appServer);
+  await openSettings(page);
+  const lockSwitch = keysSection(page).locator('button[role="switch"]');
+  await lockSwitch.click();
+  await expect(lockSwitch).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).not.toHaveAttribute("open", "");
+
+  // この環境は自動化からの `requestFullscreen()` をユーザー操作無しでも許す（decisions D6 で probe 済み）。
+  await page.evaluate(() => document.documentElement.requestFullscreen());
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+  await expect
+    .poll(async () =>
+      page.evaluate(() => (window as unknown as { __wtmKeyboardCalls: string[] }).__wtmKeyboardCalls),
+    )
+    .toContainEqual('lock:["KeyT","KeyN","KeyW","Tab","PageUp","PageDown"]');
+
+  await page.evaluate(() => document.exitFullscreen());
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(false);
+  await expect
+    .poll(async () =>
+      page.evaluate(() => (window as unknown as { __wtmKeyboardCalls: string[] }).__wtmKeyboardCalls),
+    )
+    .toContainEqual("unlock");
 });
 
 // **`defaultBrowserType` は describe の中では使えない**（`settings.spec.ts` と同じ事情）。端末の条件だけを借りる。

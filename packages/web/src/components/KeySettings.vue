@@ -1,16 +1,25 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import {
   applyRecommended,
   planReset,
   validateAssignment,
+  type AssignResult,
   type AssignTarget,
 } from "../keys/assign.js";
-import { ACTIONS, actionDef, type ActionGroup, type ActionId } from "../keys/bindings.js";
-import { keyInputOf, type KeyboardEventLike } from "../keys/chord.js";
+import {
+  ACTIONS,
+  actionDef,
+  type ActionDef,
+  type ActionGroup,
+  type ActionId,
+} from "../keys/bindings.js";
+import { formatBinding, keyInputOf, type KeyboardEventLike } from "../keys/chord.js";
+import { displayBinding, type LayoutMap } from "../keys/chordDisplay.js";
 import { KEY_PRESETS } from "../keys/presets.js";
 import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
+import { isMacPlatform } from "../term/MouseBridge.js";
 
 /**
  * 設定の節「キー」（20260921-keybinding-customization。design「取り込み」「節「キー」の構成」・D9）。**押したキーをそのまま取り込んで割り当てる**——
@@ -34,9 +43,17 @@ const capturing = defineModel<boolean>("capturing", { default: false });
 const props = withDefaults(defineProps<{ kind?: "desktop" | "mobile" }>(), { kind: "desktop" });
 
 const GROUPS: readonly ActionGroup[] = ["全体", "workspace / tab", "pane"];
-const actionsByGroup = computed(() =>
-  GROUPS.map((group) => ({ group, actions: ACTIONS.filter((a) => a.group === group) })),
-);
+/** 操作名・群名での絞り込み（20260922-keybinding-usability。design「US1」・AC1〜AC3）。 */
+const filterText = ref("");
+const actionsByGroup = computed(() => {
+  const q = filterText.value.trim().toLowerCase();
+  const matches = (a: ActionDef, group: ActionGroup): boolean =>
+    q === "" || a.label.toLowerCase().includes(q) || group.toLowerCase().includes(q);
+  return GROUPS.map((group) => ({
+    group,
+    actions: ACTIONS.filter((a) => a.group === group && matches(a, group)),
+  })).filter((g) => g.actions.length > 0); // AC2：0 件の群は見出しごと消える
+});
 
 const root = ref<HTMLElement | null>(null);
 const message = ref("");
@@ -44,11 +61,37 @@ const message = ref("");
 const target = ref<AssignTarget | null>(null);
 /** 取り込み待ちを始めたボタン（終わったら戻す先）。 */
 let trigger: HTMLElement | null = null;
+/**
+ * 衝突して「こちらへ移す」を出せる状態（20260922-keybinding-usability。design「US2」）。
+ * 次の取り込み・ダイアログを閉じるで消える（AC6）。
+ */
+const pendingMove = ref<{
+  target: Extract<AssignTarget, { kind: "binding" }>;
+  conflict: NonNullable<Extract<AssignResult, { ok: false }>["conflict"]>;
+} | null>(null);
 
 const bindingsOf = (id: ActionId): readonly string[] => settings.keymap.bindingsOf(id);
+/**
+ * macOS の非 US 配列での Option chord 表示の補正（20260922-keybinding-usability。design「US3」・
+ * AC8〜AC10）。`getLayoutMap()` が使えない環境・macOS 以外では `null` のまま（AC9。取得中も
+ * `null` なので、取得できるまでは今までどおりの表示のまま）。
+ */
+const layoutMap = ref<LayoutMap | null>(null);
+onMounted(async () => {
+  if (!isMacPlatform()) return;
+  const keyboard = (navigator as Navigator & { keyboard?: { getLayoutMap?: () => Promise<LayoutMap> } })
+    .keyboard;
+  if (typeof keyboard?.getLayoutMap !== "function") return;
+  try {
+    layoutMap.value = await keyboard.getLayoutMap();
+  } catch {
+    // AC9：取得できない環境では今までの表示のまま。
+  }
+});
+const displayFor = (binding: string): string => displayBinding(binding, layoutMap.value);
 const bindingsText = (id: ActionId): string => {
   const list = bindingsOf(id);
-  return list.length === 0 ? "なし" : list.join(" / ");
+  return list.length === 0 ? "なし" : list.map(displayFor).join(" / ");
 };
 const viaOf = (binding: string): "prefix" | "direct" =>
   binding.startsWith("prefix+") ? "prefix" : "direct";
@@ -87,6 +130,7 @@ function startCapture(t: AssignTarget, ev: Event): void {
   trigger = ev.currentTarget instanceof HTMLElement ? ev.currentTarget : null;
   target.value = t;
   message.value = "";
+  pendingMove.value = null; // 前回の衝突の「こちらへ移す」は次の取り込みで消える（AC6）
   capturing.value = true;
   void nextTick(() => root.value?.querySelector<HTMLElement>(".keys-capture")?.focus());
 }
@@ -182,10 +226,30 @@ function onCaptureKeydown(ev: KeyboardEvent): void {
   if (!result.ok) {
     if (result.reason !== "") message.value = result.reason;
     if (result.ignore === true) return; // 修飾キー単体・IME・繰り返し：待ち続ける
+    // 衝突相手が単一の割り当てとして特定できるときだけ「こちらへ移す」を出せる（AC4・AC7）。
+    pendingMove.value =
+      result.conflict && t.kind === "binding" ? { target: t, conflict: result.conflict } : null;
     endCapture(); // 通らなかった：理由を出して、元のまま終わる（AC-I2）
     return;
   }
+  pendingMove.value = null;
   endCapture(apply(t, result.binding));
+}
+
+/** 衝突相手からその chord を外し、いま入力中の対象へ割り当てる（AC5。確認ダイアログを挟まない）。 */
+function moveHere(): void {
+  const pending = pendingMove.value;
+  if (pending === null) return;
+  const { target: moveTarget, conflict } = pending;
+  const binding = formatBinding({ via: conflict.via, chord: conflict.chord, range: false });
+  settings.setKeyBindings(
+    conflict.ownerId,
+    bindingsOf(conflict.ownerId).filter((b) => b !== binding),
+  );
+  apply(moveTarget, binding); // 衝突が消えたので今度は通る
+  message.value = `${binding} を「${actionDef(conflict.ownerId)?.label ?? conflict.ownerId}」から「${actionDef(moveTarget.id)?.label ?? moveTarget.id}」へ移しました。`;
+  pendingMove.value = null;
+  void nextTick(() => findChangeButton(moveTarget.id, binding)?.focus()); // AC-I9
 }
 
 /** 割り当てを 1 つ外す。フォーカスは同じ行の次の部品（無ければ［追加：prefix の後］）へ。 */
@@ -247,6 +311,11 @@ function resetPrefix(): void {
   void nextTick(() => root.value?.querySelector<HTMLElement>("[data-prefix-change]")?.focus());
 }
 
+/** 全画面のとき Keyboard Lock を使うかの入切（20260922-keybinding-usability。design「US4」・AC11）。 */
+function toggleKeyboardLock(): void {
+  settings.setKeyboardLockInFullscreen(!settings.keyboardLockInFullscreen);
+}
+
 /** いま選んでいるプリセットの id（既定は先頭＝herdr のおすすめ）。20260922-keybinding-presets・design「振る舞いの詳細」。 */
 const selectedPresetId = ref(KEY_PRESETS[0]!.id);
 
@@ -295,6 +364,7 @@ watch(
       endCapture("none");
       confirmingReset.value = false; // 開き直したとき、確認が出たままにならない
       message.value = ""; // 前回の結果の文を持ち越さない
+      pendingMove.value = null; // 「こちらへ移す」も閉じたら消える（AC6）
     }
   },
 );
@@ -313,7 +383,7 @@ watch(
 
     <div class="keys-prefix">
       <span class="keys-prefix-label">prefix</span>
-      <code class="keys-binding">{{ settings.keymap.prefix }}</code>
+      <code class="keys-binding">{{ displayFor(settings.keymap.prefix) }}</code>
       <button
         type="button"
         class="keys-btn"
@@ -338,6 +408,17 @@ watch(
       </button>
     </div>
 
+    <div class="keys-filter">
+      <label class="keys-filter-label" for="keys-filter-input">絞り込み</label>
+      <input
+        id="keys-filter-input"
+        v-model="filterText"
+        type="text"
+        class="keys-filter-input"
+        placeholder="操作名・群名で絞り込む"
+      />
+    </div>
+
     <div
       v-for="g in actionsByGroup"
       :key="g.group"
@@ -360,12 +441,12 @@ watch(
             <div class="keys-editor">
               <ul class="keys-chips">
                 <li v-for="b in bindingsOf(def.id)" :key="b" class="keys-chip">
-                  <code class="keys-binding">{{ b }}</code>
+                  <code class="keys-binding">{{ displayFor(b) }}</code>
                   <button
                     type="button"
                     class="keys-btn"
                     :data-change="`${def.id}|${b}`"
-                    :aria-label="`「${def.label}」の ${b} を変更`"
+                    :aria-label="`「${def.label}」の ${displayFor(b)} を変更`"
                     @click="startCapture(changeTarget(def.id, b), $event)"
                   >
                     変更
@@ -373,7 +454,7 @@ watch(
                   <button
                     type="button"
                     class="keys-btn"
-                    :aria-label="`「${def.label}」の ${b} を削除`"
+                    :aria-label="`「${def.label}」の ${displayFor(b)} を削除`"
                     @click="removeBinding(def.id, b, $event)"
                   >
                     削除
@@ -470,7 +551,29 @@ watch(
       は使えません）。届かないキーは［変更］で付け替えてください。
     </p>
 
-    <p class="keys-message" role="status" aria-live="polite">{{ message }}</p>
+    <button
+      type="button"
+      role="switch"
+      class="settings-switch"
+      :aria-checked="settings.keyboardLockInFullscreen"
+      @click="toggleKeyboardLock"
+    >
+      <span class="settings-mark">{{ settings.keyboardLockInFullscreen ? "入" : "切" }}</span>
+      <span>全画面のとき、ブラウザ予約キーも使う（実験的。対応ブラウザのみ）</span>
+    </button>
+
+    <div class="keys-status-band">
+      <p class="keys-message" role="status" aria-live="polite">{{ message }}</p>
+      <button
+        v-if="pendingMove !== null"
+        type="button"
+        class="keys-btn keys-move-here"
+        data-move-here
+        @click="moveHere"
+      >
+        こちらへ移す
+      </button>
+    </div>
   </section>
 </template>
 
@@ -500,6 +603,26 @@ watch(
 }
 .keys-prefix-label {
   font-weight: bold;
+}
+.keys-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em 0.6em;
+  margin-bottom: 0.4em;
+}
+.keys-filter-label {
+  font-size: 0.9em;
+}
+.keys-filter-input {
+  font: inherit;
+  color: inherit;
+  background: var(--wtm-menu-bg, #282a36);
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.15em 0.5em;
+  min-height: 1.75rem;
+  flex: 1 1 12em;
 }
 .keys-group {
   margin-top: 0.8em;
@@ -618,15 +741,57 @@ watch(
   align-items: center;
   gap: 0.4em 0.6em;
 }
-/* 長い一覧のどこを操作しても結果が見えるよう、画面（ダイアログ）の下に固定する。 */
-.keys-message {
+/* `SettingsDialog.vue` の `.settings-switch`/`.settings-mark` と同じ見た目（scoped は親から効かないため
+   ここで再現する。冒頭の注記と同じ理由。20260922-keybinding-usability・design「US4」）。 */
+.settings-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.4em 0.6em;
+  margin-top: 0.6em;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-mark {
+  flex: none;
+  min-width: 2em;
+  text-align: center;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 3px;
+  padding: 0 0.2em;
+}
+.settings-switch[aria-checked="true"] .settings-mark {
+  background: var(--wtm-menu-active-bg, #44475a);
+}
+/*
+ * 長い一覧のどこを操作しても結果が見えるよう、画面（ダイアログ）の下に固定する。
+ * **固定する帯はこの `.keys-status-band` 自身**（20260922-keybinding-usability。review 指摘で追加）——
+ * `.keys-message` 単体を sticky にすると、その直後に置く「こちらへ移す」ボタンは sticky ではない
+ * 普通の要素として `.keys-message` の「本来の（固定されていない）位置」の直後に続くため、一覧を
+ * 少し下へスクロールしただけで帯が下端に張り付いても、ボタン自身は画面の外（ダイアログの可視領域の
+ * 下）に取り残される（実地に `boundingBox()` で確認した実測のバグ）。帯ごと（文言＋ボタン）を
+ * 1 つの sticky 要素にすることで、両方が常に一緒に画面内へ来る。
+ */
+.keys-status-band {
   position: sticky;
   /* ダイアログの padding（1em）の内側で止まると、その下の帯を中身が透けて流れる——題名の行と同じく、padding を固定する側へ持たせて下端まで伸ばす。 */
   bottom: -1em;
   margin: 0.6em 0 0;
   padding: 0.3em 0 1em;
+  background: var(--wtm-menu-bg, #282a36);
+}
+.keys-message {
+  margin: 0;
   min-height: 1.4em;
   font-size: 0.9em;
-  background: var(--wtm-menu-bg, #282a36);
+}
+.keys-move-here {
+  margin-top: 0.4em;
 }
 </style>

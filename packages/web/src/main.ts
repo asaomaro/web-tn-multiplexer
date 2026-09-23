@@ -9,6 +9,7 @@ import App from "./App.vue";
 import { ActionDispatcher } from "./actions/ActionDispatcher.js";
 import { ActionDispatcherKey, ConnectionKey, DeviceKindKey, KeyInputControllerKey, NotificationControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
 import { KeyInputController } from "./keys/KeyInputController.js";
+import { KeyboardLockController } from "./keys/KeyboardLockController.js";
 import { KeyRouter } from "./keys/KeyRouter.js";
 import { CopyMode } from "./keys/CopyMode.js";
 import { NavigateMode } from "./keys/NavigateMode.js";
@@ -171,6 +172,23 @@ const themeController = new ThemeController({
   })(),
 });
 themeController.start();
+
+/**
+ * 全画面のとき、ブラウザ予約キーの一部を Keyboard Lock で受け取れるようにする
+ * （20260922-keybinding-usability。design「US4」）。`navigator.keyboard` の無い環境
+ * （Firefox・Safari 等）では feature-detect で null にし、無害に何もしない（AC14）。
+ */
+const keyboardLockController = new KeyboardLockController({
+  settings,
+  doc: document,
+  keyboard:
+    (
+      navigator as Navigator & {
+        keyboard?: { lock(codes?: string[]): Promise<void>; unlock(): void };
+      }
+    ).keyboard ?? null,
+});
+keyboardLockController.start();
 
 const viewSync = new ViewSync({ conn, registry, getScrollbackLines });
 // 新しい接続の `client.hello` が通るたび（初回・自動の再接続・503 等からの再試行・再ログイン・「再接続」ボタン）に、表示と

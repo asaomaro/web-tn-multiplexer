@@ -34,8 +34,12 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] 独自コマンドのキー: herdr の `[[keys.command]]`（`type` が `popup`・`pane`・`shell`・`plugin_action`）。サーバで任意のコマンドを走らせる仕組みと、その権限の設計が要る。`docs/herdr-parity.md` の H12（ポップアップ端末・独自コマンドのキー割り当て）（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
 - [ ] サイドバー・tab バーのボタン（`@keydown.stop`）や pane の枠にフォーカスがある間も、prefix・直接のキーを効かせる: いまはそのボタンにフォーカスが残ると、端末をクリックするまで届かない（prefix でも同じ既存の挙動）。
   ボタンの Enter/Space と入力欄への入力を守ったまま、修飾キー付き・prefix のキーだけを window へ通す形が要る（出典: .aidev/works/20260921-keybinding-customization/decisions.md D11）
-- [ ] キーの設定の使い勝手: 節「キー」の操作の絞り込み（いまは 34 個の `<details>` を順に開く）、衝突したときの「こちらへ移す」、macOS の非 US 配列で Option の chord の表示を押した字に合わせる
-  （`navigator.keyboard.getLayoutMap()`。Chromium 系だけ。decisions D7）、ブラウザが先に受けるキーを全画面のときだけ届ける（Keyboard Lock API。実験的。research F27）（出典: .aidev/works/20260921-keybinding-customization/decisions.md の D7・research.md の F27。操作の絞り込みと「こちらへ移す」は、この work の実装で出た改善案）
+- [x] キーの設定の使い勝手: 20260922-keybinding-usability で対応。節「キー」に操作名・群名での絞り込み欄を足し（`KeySettings.vue` の `filterText`/`actionsByGroup`）、
+      衝突したときは案内文の直後に「こちらへ移す」ボタンが出て単一の割り当てなら1回の操作で移せる（`assign.ts` の `AssignResult.conflict`・`KeySettings.vue` の `moveHere()`）。
+      macOS で `navigator.keyboard.getLayoutMap()` が使えるとき、`alt+…` の chord の表示を実際に押した字へ置き換える（`packages/web/src/keys/chordDisplay.ts`。表示専用、取り込み・照合は変えない）。
+      全画面のとき、ブラウザ・OS 予約キーの一部を `navigator.keyboard.lock()` で受け取る opt-in の switch を足した（既定は無効。`KeyboardLockController.ts`）。
+      実測: 実装 12 ファイル・1068 行追加（工程成果物は含まず）・単体 1505 件 pass・E2E 20 件 pass（`packages/e2e/src/specs/key-bindings.spec.ts`）。
+      AC12・AC13（Keyboard Lock の実効果）と AC8（macOS 実機での表示）は自動テストの対象外で `docs/verification.md` の手動確認へ（`.aidev/works/20260922-keybinding-usability/decisions.md` D6・D3）。
 - [x] Git worktree の作成と一覧（上の項目のうち worktree そのものを扱う部分）: 20260920-git-worktree-actions で対応。
       workspace の右クリックメニューに「新しい worktree」「worktree を開く…」、キーは `prefix+G`。
       作成先は `~/.wtm/worktrees/<repo>/<branch-slug>`（`packages/protocol/src/worktreePath.ts:37-41`）。
@@ -67,7 +71,33 @@ parent: 20260918-web-terminal-multiplexer
   17 テーマとも WCAG のコントラスト（文字 4.5・状態の記号 3 等）を満たすよう寄せ、単体テストで総当たり。既定は今までと同じ Dracula。
   実測: 単体 protocol 57・server 616・web 1203 本、E2E `theme-settings.spec.ts` 8 本（ほかの影響を受ける spec を含め一式で確認）。
   色の個別の上書き・明暗の変化をアプリへ知らせる（DSR 996・mode 2031）・選択の背景の見やすさは下の別の行に起こした
-- [ ] 外観と設定の残り: サイドバー行のカスタマイズ、tab バーの状態表示、pane の枠の設定、設定画面・再読み込み〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
+- [x] 外観と設定の残り: サイドバー行の並び替え（開いた順/名前順）、tab バーの自動非表示・現在時刻表示、
+  pane の枠・隙間の太さとエージェント名表示、設定の再読み込み（`prefix+shift+r`）〔D8〕
+  (needs: 20260918-web-terminal-multiplexer)（20260922-appearance-settings-rest。
+  `packages/web/src/components/Sidebar.vue:155-161`・`packages/web/src/components/TabBar.vue`・
+  `packages/web/src/components/PaneFrame.vue:107-137`・
+  `packages/web/src/actions/ActionDispatcher.ts` の `reloadConfig()`。
+  `docs/herdr-parity.md` H21・H22・H23・H25b。実測: unit 1504 本 green、
+  E2E `appearance-settings.spec.ts` 新規6本＋既存 spec 6ファイルの回帰修正
+  （最後まで安定した完走は未確認——test-result.md「E2E について」参照）〔D8〕）
+- [x] 外観と設定の残り（PR #12 から選択的に取り込み）: tab バーの位置（上/下）、右端の複数エントリ
+  （拡大の状態・ホスト名・日時4プリセット・固定文字列。最大16件・並び替え・区切り文字）、
+  pane 領域の外周の枠〔D8〕(needs: 20260918-web-terminal-multiplexer)（
+  20260922-appearance-settings-rest decisions.md [[D11]]。
+  `packages/web/src/tabbar/tabBarRight.ts`（新規）・
+  `packages/web/src/components/TabBar.vue`・`App.vue`・`SettingsDialog.vue`。
+  旧「現在時刻の常時表示」はこの右端エントリ（日時）に統合された。
+  実測: unit 1542 本 green（E2E は未実行——[[e2e-only-on-request]]。ユーザー方針で
+  このラウンドでは回していない）。PR #12（`20260922-tabbar-pane-appearance`）は
+  この取り込みと内容が重複するため close・branch 削除した）
+- [ ] 外観と設定の残り（未着手分）: サイドバー行の色の条件付け・独自トークン（H21）、
+  pane の枠の描画モード「自動」（分割時だけ表示）・隙間の入切（H23。`PaneFrame.vue` の
+  「常に padding・太さ3段階」設計と両立しないため、`PaneLayout.vue` への手入れを伴う
+  再設計が要る。PR #12 が持っていた設計〔`bordered`/`multiPane` prop を `PaneLayout.vue`
+  経由で渡す〕が参考になる）、設定の onboarding（H25b）
+  〔D8〕(needs: 20260918-web-terminal-multiplexer)（
+  20260922-appearance-settings-rest の requirements「対象外」／decisions.md [[D11]]で切り出し。
+  出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）、エージェントの会話の再開、名前付き session、更新時の引き継ぎ〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 配布と運用: 自己更新・更新チャネル、ログ、シェル補完〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
@@ -106,6 +136,16 @@ parent: 20260918-web-terminal-multiplexer
 - [x] workspace の既定の名前をリポジトリ名（git でなければフォルダ名）から自動で付ける: 今はどこで開いても一律に「1」で、別のリポジトリで開いた workspace がサイドバーで見分けられない。herdr は repo 名か cwd のフォルダ名を自動の名前にし（src/workspace.rs の display_name・automatic_workspace_label。名前を変えた後は変えた名前のまま）、cwd が変われば追従する。worktree を開く経路が label を明示しているのはこの穴への個別の手当て（出典: .aidev/works/20260921-new-terminal-cwd/review.md）
   → 着地: 20260921-workspace-auto-label（feature/workspace-auto-label）。名前を付けていない workspace を、開いた場所のリポジトリの根のフォルダ名（git の外ならフォルダ名・ホームなら `~`）で呼ぶ。規則は `packages/server/src/session/workspaceLabel.ts`（herdr の `git_repo_root` 等を移植。git のコマンドは使わない）、自動か付けたものかは `Workspace.autoLabel`。名前を空にして確定すると自動に戻る（herdr に無い）。`cd` への追従は別の項目に起こした。E2E `workspace-auto-label.spec.ts`（ほかのブラウザが受けた `workspace.created` の名前が最初から根の名前）
 - [ ] workspace の名前と git の情報を、最初の pane のいまの場所に追従させる: 自動の名前（20260921-workspace-auto-label）とサイドバーの git の情報（GitInfoPoller）はどちらも workspace を開いた場所（Workspace.cwd）から決めていて、cd しても変わらない。herdr は最初の tab の根の pane のいまの場所から名前と git の状態を決め直す（src/workspace.rs の display_name_from_terminals）。名前だけ追従させると git の情報と食い違うので、両方をまとめて扱う（出典: .aidev/works/20260921-workspace-auto-label/requirements.md）
-- [ ] テーマの色の個別の上書き: herdr の `[theme.custom]`（`accent`・`panel_bg`・`sidebar_bg`・状態の色など）と明暗別の `[theme.custom.light]`/`[theme.custom.dark]`。herdr でも設定ファイルでだけ変えられる。本製品には利用者が書く設定ファイルが無いので、設定の再読み込み（H25b）と合わせて置き場所から決める（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
+- [x] テーマの色の個別の上書き: herdr の `[theme.custom]`（`accent`・`panel_bg`・`sidebar_bg`・状態の色など）と明暗別の `[theme.custom.light]`/`[theme.custom.dark]`。herdr でも設定ファイルでだけ変えられる。~~本製品には利用者が書く設定ファイルが無いので、設定の再読み込み（H25b）と合わせて置き場所から決める~~（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
+  → 着地: 20260922-theme-custom-overrides（feature/theme-custom-overrides）。「置き場所」は設定の再読み込み（H25b）を待たず、既存の節「テーマ」に
+  上級者向けの折りたたみとして決着した（本製品の設定は元々すべて即時反映・保存で、herdr の「再読み込み」に相当する操作はどの設定にも無い）。
+  herdr の 19 トークンではなく、本製品が実際に使う 19 個の CSS 変数（`packages/web/src/theme/uiTokens.ts` の `CSS_VARS`）を対象にし、
+  「明るいとき」「暗いとき」の 2 層で上書きできる（`packages/web/src/theme/themeOverrides.ts`）。上書きは選んだテーマの計算結果（コントラスト
+  調整後）の上にそのまま当たり（自動調整はしない）、`ThemeController`（`applyOverrides`）・起動用の控え（`writeBoot`）の両方に反映する。
+  色ごと・すべてまとめて既定に戻せる（すべては確認あり）。保存は既定との差だけ（`wtm.prefs.v1` の `themeOverrides`）。
+  実測: 単体（全パッケージ）2181 本・E2E 一式 120 本（うち `theme-settings.spec.ts` 12 本）・smoke pass。回帰テストは
+  結線（`ThemeController` の watch・store の返り値）を外して落ちることを確かめ、生出力を
+  `.aidev/works/20260922-theme-custom-overrides/test-result.md` に貼った。独立 review 2 ラウンド（must 0・should 1・
+  nit 3 を解消）。
 - [ ] 明暗の変化を端末の中のアプリへ知らせる: DSR 996（`CSI ? 996 n` → `CSI ? 997 ; 1|2 n`）への応答と mode 2031 の通知（herdr の `src/terminal_theme.rs` の `HostAppearance::color_scheme_report`）。サーバの Mirror が、その pane の tab の大きさを決めているブラウザのテーマの明暗で答え、テーマや OS の明暗が変わったら通知する。いまは応えていない（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
 - [ ] 端末の選択の背景を見えるようにする: 上流の配色の選択の背景と端末の背景の比が低いテーマがあり（one-light 1.11・solarized-light 1.14・solarized 1.15・rose-pine-dawn 1.27・one-dark 1.31）、copy モードやマウスで選んだ範囲がほとんど見えない。`finalizePalette`（packages/protocol/src/theme.ts）に「選択の背景を端末の背景から寄せる」規則を足す案。20260921-theme-settings では「上流の値のまま、選んだ文字とカーソルだけ直す」（decisions D5）の内側として見送った（出典: .aidev/works/20260921-theme-settings/review.md）

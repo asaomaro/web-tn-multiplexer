@@ -3,6 +3,7 @@ import { watch, type WatchStopHandle } from "vue";
 import type { useSettingsStore } from "../store/settings.js";
 import { readPrefs } from "../store/view.js";
 import { lightDarkOf, loadThemePrefs } from "./themes.js";
+import { loadThemeOverrides, mergeVars, type ThemeOverrideLayer, type ThemeOverrides } from "./themeOverrides.js";
 import { CSS_VARS, uiTokens, type UiTokens } from "./uiTokens.js";
 
 type SettingsStore = ReturnType<typeof useSettingsStore>;
@@ -83,7 +84,17 @@ export class ThemeController {
       ],
       () => this.writeBoot(),
     );
-    this.stops.push(stopApply, stopBoot);
+    // 20260922-theme-custom-overrides：色の上書きが変わったら、画面へは `applyOverrides()`（`apply()` の早期 return を
+    // 経由しない別経路。テーマ名は変わっていないため）で、控えへは `writeBoot()` で反映する。`themeOverrides` は
+    // setter がイミュータブルに丸ごと差し替える（`keyPrefs` と同じ）ので、深い watch は要らない。
+    const stopOverrides: WatchStopHandle = watch(
+      () => settings.themeOverrides,
+      () => {
+        this.applyOverrides();
+        this.writeBoot();
+      },
+    );
+    this.stops.push(stopApply, stopBoot, stopOverrides);
   }
 
   /** 聞くのをやめる（テスト用）。 */
@@ -91,31 +102,57 @@ export class ThemeController {
     for (const stop of this.stops.splice(0)) stop();
   }
 
+  /**
+   * いま当てるべき CSS 変数（20260922-theme-custom-overrides）：`uiTokens(name)` の計算結果に、その `colorScheme`
+   * （`light`／`dark`）に合う上書きの層を重ねる（`settings.themeAuto` の真偽では選ばない。研究 F2 の逸脱）。
+   */
+  private computeVars(name: ThemeName): Record<(typeof CSS_VARS)[number], string> {
+    const base = uiTokens(name);
+    const overrides = this.opts.settings.themeOverrides;
+    const layer: ThemeOverrideLayer = base.colorScheme === "light" ? overrides.light : overrides.dark;
+    return mergeVars(base.vars, layer);
+  }
+
   /** 当てる。直前に当てた名前と同じなら何もしない（`start()` の 1 回目は `applied` が null なので必ず当たる）。 */
   apply(name: ThemeName): void {
     if (name === this.applied) return;
     this.applied = name;
     const { root } = this.opts;
-    const tokens = uiTokens(name);
-    for (const key of CSS_VARS) root.style.setProperty(key, tokens.vars[key]);
-    root.style.colorScheme = tokens.colorScheme;
+    const vars = this.computeVars(name);
+    for (const key of CSS_VARS) root.style.setProperty(key, vars[key]);
+    root.style.colorScheme = uiTokens(name).colorScheme;
     root.dataset["theme"] = name;
     this.opts.setTerminalTheme(TERMINAL_PALETTES[name]);
     this.opts.sendTheme(name);
+  }
+
+  /**
+   * 色の上書きだけが変わったときに再適用する（20260922-theme-custom-overrides）。`apply()` の「直前と同じ名前なら省く」
+   * 最適化はテーマ名の変化を追うためのもので、上書きの変化はこの経路で反映する（`applied` は書き換えない・端末の色や
+   * サーバへ伝える名前には影響しない——上書きは画面の枠だけ）。`start()` より前（`applied` が null）なら何もしない。
+   */
+  applyOverrides(): void {
+    if (this.applied === null) return;
+    const vars = this.computeVars(this.applied);
+    for (const key of CSS_VARS) this.opts.root.style.setProperty(key, vars[key]);
   }
 
   /** 控えを書く（固定＝1 つのテーマ、明るいとき・暗いとき＝`lightDarkOf`）。書けなくても落ちない（プライベートモード等）。 */
   writeBoot(): void {
     const { storage } = this.opts;
     // **保存された設定から作る**（このタブの store からではなく）——同じブラウザの別のタブで設定を変えていると、このタブの store は古い。
-    // 次の読み込みが使うのは保存された設定なので、控えもそれに揃える（review ラウンド 1）。
-    const saved = loadThemePrefs(readPrefs());
+    // 次の読み込みが使うのは保存された設定なので、控えもそれに揃える（review ラウンド 1）。上書き（20260922-theme-custom-overrides）も同じ理由で保存値から読む
+    // （`readPrefs()` は 1 回だけ呼び、`theme` の分・`themeOverrides` の分の両方に渡す。`readPrefs`/`writePrefs` の読み書きの所有者を 1 つにする方針〔`store/view.ts`〕
+    // と揃え、無駄な再読み込みもしない）。
+    const prefs = readPrefs();
+    const saved = loadThemePrefs(prefs);
+    const overrides = loadThemeOverrides(prefs["themeOverrides"]);
     const ld = lightDarkOf(saved);
     const cache: BootCache = {
       auto: saved.auto,
-      fixed: bootVars(saved.theme),
-      light: bootVars(ld.light),
-      dark: bootVars(ld.dark),
+      fixed: bootVars(saved.theme, overrides),
+      light: bootVars(ld.light, overrides),
+      dark: bootVars(ld.dark, overrides),
     };
     try {
       storage?.setItem(BOOT_KEY, JSON.stringify(cache));
@@ -135,7 +172,8 @@ export class ThemeController {
   }
 }
 
-function bootVars(name: ThemeName): BootVars {
+function bootVars(name: ThemeName, overrides: ThemeOverrides): BootVars {
   const t = uiTokens(name);
-  return { vars: t.vars, colorScheme: t.colorScheme };
+  const layer = t.colorScheme === "light" ? overrides.light : overrides.dark;
+  return { vars: mergeVars(t.vars, layer), colorScheme: t.colorScheme };
 }

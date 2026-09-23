@@ -5,8 +5,20 @@ import type { Action, CopyCommand, Dir } from "../keys/actions.js";
 import type { InputHold } from "../net/InputGate.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
-import { buildNewCwd, useSettingsStore } from "../store/settings.js";
-import { useViewStore } from "../store/view.js";
+import {
+  buildNewCwd,
+  loadNewCwdPath,
+  loadNewCwdPolicy,
+  loadPaneAgentNameVisible,
+  loadPaneFrameThickness,
+  loadPaneOuterBorders,
+  loadStatusSymbols,
+  useSettingsStore,
+} from "../store/settings.js";
+import { loadAgentSort, loadSidebarCollapsed, loadSidebarWidth, loadWorkspaceSort, readPrefs, useViewStore } from "../store/view.js";
+import { loadScrollbackPref } from "../term/scrollback.js";
+import { loadTabBarPosition, loadTabBarRightEntries, loadTabBarRightSeparator } from "../tabbar/tabBarRight.js";
+import { loadThemePrefs } from "../theme/themes.js";
 import { clientErrorMessage, errorCodeOf } from "../net/clientError.js";
 import { depthFirstPaneIds, neighborPaneId } from "../term/layoutOrder.js";
 import type { MenuTarget, UiPort } from "../term/MouseBridge.js";
@@ -146,6 +158,9 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
         return;
       case "notYet":
         this.view.toast(`未対応（後続: ${action.work}）`);
+        return;
+      case "reloadConfig":
+        this.reloadConfig();
         return;
       case "navigate":
         this.navigate(action.op, action.dir);
@@ -639,6 +654,42 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   /** 右クリックの宛先の切替（herdr の同名の方式）。 */
   setRightClickTarget(paneId: string, target: "herdr" | "pane"): void {
     void this.conn.request("pane.input.set", { paneId, rightClick: target }).catch(() => undefined);
+  }
+
+  /**
+   * 設定を読み直す（herdr の `reload_config` 相当。20260922-appearance-settings-rest。AC13〜AC15）。
+   * `localStorage`（`wtm.prefs.v1`）から、`settings`・`view` 各ストアの `wtm.prefs.v1` 由来の値を
+   * 読み直して反映する。**`settings`/`view` 以外のストア（`session`・通知の設定・`wtm.seen.v1`）には
+   * 触れない**（design decisions D4）。workspace・tab・pane の構成・フォーカスも変えない（AC15）。
+   */
+  private reloadConfig(): void {
+    const raw = readPrefs();
+    // `settings.ts` 側は raw 値を渡す形（`loadStatusSymbols(raw["statusSymbols"])` 等）。
+    this.settings.statusSymbols = loadStatusSymbols(raw["statusSymbols"]);
+    this.settings.scrollback = loadScrollbackPref(raw["scrollback"]);
+    this.settings.newCwdPolicy = loadNewCwdPolicy(raw["newCwdPolicy"]);
+    this.settings.newCwdPath = loadNewCwdPath(raw["newCwdPath"]);
+    const themePrefs = loadThemePrefs(raw);
+    this.settings.theme = themePrefs.theme;
+    this.settings.themeAuto = themePrefs.auto;
+    this.settings.themeLight = themePrefs.light;
+    this.settings.themeDark = themePrefs.dark;
+    this.settings.paneFrameThickness = loadPaneFrameThickness(raw["paneFrameThickness"]);
+    this.settings.paneAgentNameVisible = loadPaneAgentNameVisible(raw["paneAgentNameVisible"]);
+    // 20260922-tabbar-pane-appearance（PR #12 から取り込み）分。
+    this.settings.tabBarPosition = loadTabBarPosition(raw["tabBarPosition"]);
+    this.settings.tabBarRight = loadTabBarRightEntries(raw["tabBarRight"]);
+    this.settings.tabBarRightSeparator = loadTabBarRightSeparator(raw["tabBarRightSeparator"]);
+    this.settings.paneOuterBorders = loadPaneOuterBorders(raw["paneOuterBorders"]);
+    // `view.ts` 側も同じ raw を渡す（`loadSidebarWidth`/`loadSidebarCollapsed`/`loadWorkspaceSort`
+    // は元から raw 引数型。`loadAgentSort` は本来 `readPrefs()` を自分で呼ぶ自己完結型〔decisions
+    // D7〕だが、ここで省略すると `readPrefs()`（＝ `localStorage` の読み出し）が実質2回になるため、
+    // T7 の taskcheck 指摘で `raw` を渡せるようにした〔`loadAgentSort` 自体の定義参照〕）。
+    this.view.sidebarWidth = loadSidebarWidth(raw["sidebarWidth"]);
+    this.view.sidebarCollapsed = loadSidebarCollapsed(raw["sidebarCollapsed"]);
+    this.view.agentSort = loadAgentSort(raw);
+    this.view.workspaceSort = loadWorkspaceSort(raw["workspaceSort"]);
+    this.view.toast("設定を読み直しました。");
   }
 }
 

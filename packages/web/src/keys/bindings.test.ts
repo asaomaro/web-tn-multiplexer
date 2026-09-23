@@ -3,15 +3,17 @@ import { expandRange, formatBinding, parseBinding } from "./chord.js";
 import { ACTIONS, actionDef, actionFor, isActionId } from "./bindings.js";
 
 describe("操作のカタログ（design「操作のカタログ」）", () => {
-  it("34 個あり、id は重複しない・表示名は空でない", () => {
-    expect(ACTIONS).toHaveLength(34);
-    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(34);
+  // 20260922-appearance-settings-rest T7 で reload_config（全体）をカタログへ正式登録し、
+  // 34 → 35 個になった（NOT_YET_BINDINGS の案内から昇格。keymap.ts 参照）。
+  it("35 個あり、id は重複しない・表示名は空でない", () => {
+    expect(ACTIONS).toHaveLength(35);
+    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(35);
     for (const a of ACTIONS) expect(a.label.length, a.id).toBeGreaterThan(0);
   });
 
-  it("群は 全体 4・workspace / tab 12・pane 18（この順に並ぶ）", () => {
+  it("群は 全体 5・workspace / tab 12・pane 18（この順に並ぶ）", () => {
     const groups = ACTIONS.map((a) => a.group);
-    expect(groups.filter((g) => g === "全体")).toHaveLength(4);
+    expect(groups.filter((g) => g === "全体")).toHaveLength(5);
     expect(groups.filter((g) => g === "workspace / tab")).toHaveLength(12);
     expect(groups.filter((g) => g === "pane")).toHaveLength(18);
     // 群ごとにまとまっている（全体 → workspace / tab → pane）
@@ -102,7 +104,9 @@ describe("操作のカタログ（design「操作のカタログ」）", () => {
 
   it("isActionId / actionDef はカタログにある名前だけを通す（壊れた保存値を弾く）", () => {
     expect(isActionId("split_vertical")).toBe(true);
-    expect(isActionId("reload_config")).toBe(false); // 後続の案内（NOT_YET）はカタログの外
+    // 20260922-appearance-settings-rest T7 で reload_config をカタログへ登録したので、今は通る。
+    expect(isActionId("reload_config")).toBe(true);
+    expect(isActionId("edit_scrollback")).toBe(false); // 後続の案内（NOT_YET）はカタログの外
     expect(isActionId(42)).toBe(false);
     expect(isActionId(undefined)).toBe(false);
     expect(actionDef("bogus")).toBeUndefined();

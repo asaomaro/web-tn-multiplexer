@@ -3,9 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, watch } from "vue";
 import {
   buildNewCwd,
+  loadKeyboardLockInFullscreen,
   loadNewCwdPath,
   loadNewCwdPolicy,
+  loadPaneAgentNameVisible,
+  loadPaneFrameThickness,
+  loadPaneOuterBorders,
   loadStatusSymbols,
+  PANE_FRAME_THICKNESS_PX,
   useSettingsStore,
 } from "./settings.js";
 import { readPrefs, writePrefs } from "./view.js";
@@ -34,6 +39,162 @@ describe("loadStatusSymbols（AC3・AC7）", () => {
   });
 });
 
+describe("loadKeyboardLockInFullscreen（20260922-keybinding-usability。AC11）", () => {
+  it("boolean でなければ既定の「無効」（実験的 API なので opt-in）", () => {
+    for (const raw of [undefined, null, "true", 0, 1, {}, []]) {
+      expect(loadKeyboardLockInFullscreen(raw), String(raw)).toBe(false);
+    }
+    expect(loadKeyboardLockInFullscreen(true)).toBe(true);
+  });
+});
+
+// 20260922-appearance-settings-rest T3。
+describe("loadPaneFrameThickness・loadPaneAgentNameVisible（AC9〜AC12 の下地）", () => {
+  it("3つのどれかはそのまま", () => {
+    expect(loadPaneFrameThickness("thin")).toBe("thin");
+    expect(loadPaneFrameThickness("default")).toBe("default");
+    expect(loadPaneFrameThickness("thick")).toBe("thick");
+  });
+
+  it("3つのどれでもなければ既定（default）", () => {
+    for (const raw of [undefined, null, "medium", 4, {}, true]) {
+      expect(loadPaneFrameThickness(raw), String(raw)).toBe("default");
+    }
+  });
+
+  it("PANE_FRAME_THICKNESS_PX は3段階とも既定 4px を挟んで単調に増える", () => {
+    expect(PANE_FRAME_THICKNESS_PX.thin).toBeLessThan(PANE_FRAME_THICKNESS_PX.default);
+    expect(PANE_FRAME_THICKNESS_PX.default).toBe(4); // 今までの固定値（回帰なし）
+    expect(PANE_FRAME_THICKNESS_PX.default).toBeLessThan(PANE_FRAME_THICKNESS_PX.thick);
+  });
+
+  it("エージェント名表示は boolean はそのまま、それ以外は既定の「切」", () => {
+    expect(loadPaneAgentNameVisible(true)).toBe(true);
+    expect(loadPaneAgentNameVisible(false)).toBe(false);
+    for (const raw of [undefined, null, "true", 1, {}]) {
+      expect(loadPaneAgentNameVisible(raw), String(raw)).toBe(false);
+    }
+  });
+});
+
+describe("useSettingsStore — pane の枠・隙間の太さ／エージェント名表示（20260922-appearance-settings-rest）", () => {
+  it("何も保存されていなければ、太さは既定・エージェント名表示は無効", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.paneFrameThickness).toBe("default");
+    expect(store.paneAgentNameVisible).toBe(false);
+  });
+
+  it("太さを変えると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneFrameThickness("thick");
+    expect(store.paneFrameThickness, "押した時点で反映").toBe("thick");
+    expect(readPrefs()["paneFrameThickness"]).toBe("thick");
+    expect(useSettingsStore(createPinia()).paneFrameThickness).toBe("thick");
+  });
+
+  it("エージェント名表示を有効にすると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneAgentNameVisible(true);
+    expect(store.paneAgentNameVisible, "押した時点で反映").toBe(true);
+    expect(readPrefs()["paneAgentNameVisible"]).toBe(true);
+    expect(useSettingsStore(createPinia()).paneAgentNameVisible).toBe(true);
+  });
+
+  // `statusSymbols`/`newCwdPolicy` と同じ形（AC3 相当）：壊れた値でも起動できる。
+  it("保存された値が壊れていれば既定で起動する", () => {
+    writePrefs({ paneFrameThickness: "medium", paneAgentNameVisible: "yes" });
+    const store = useSettingsStore(createPinia());
+    expect(store.paneFrameThickness).toBe("default");
+    expect(store.paneAgentNameVisible).toBe(false);
+  });
+});
+
+// 20260922-tabbar-pane-appearance（PR #12 から取り込み）。
+describe("loadPaneOuterBorders", () => {
+  it("boolean はそのまま、それ以外は既定の「切」", () => {
+    expect(loadPaneOuterBorders(true)).toBe(true);
+    expect(loadPaneOuterBorders(false)).toBe(false);
+    for (const raw of [undefined, null, "true", 1, {}]) {
+      expect(loadPaneOuterBorders(raw), String(raw)).toBe(false);
+    }
+  });
+});
+
+describe("useSettingsStore — tab バーの位置・右端エントリ・pane の外周（20260922-tabbar-pane-appearance。PR #12 から取り込み）", () => {
+  it("何も保存されていなければ、位置は上・右端は空・区切りは半角スペース・外周は無し", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.tabBarPosition).toBe("top");
+    expect(store.tabBarRight).toEqual([]);
+    expect(store.tabBarRightSeparator).toBe(" ");
+    expect(store.paneOuterBorders).toBe(false);
+  });
+
+  it("位置を変えると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setTabBarPosition("bottom");
+    expect(store.tabBarPosition, "押した時点で反映").toBe("bottom");
+    expect(readPrefs()["tabBarPosition"]).toBe("bottom");
+    expect(useSettingsStore(createPinia()).tabBarPosition).toBe("bottom");
+  });
+
+  it("外周の枠を有効にすると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneOuterBorders(true);
+    expect(store.paneOuterBorders, "押した時点で反映").toBe(true);
+    expect(readPrefs()["paneOuterBorders"]).toBe(true);
+    expect(useSettingsStore(createPinia()).paneOuterBorders).toBe(true);
+  });
+
+  it("右端エントリの追加・並び替え・削除・更新・区切り文字（AC3・AC4 相当）", () => {
+    const store = useSettingsStore(pinia);
+    store.addTabBarRightEntry("hostname");
+    store.addTabBarRightEntry("text");
+    expect(store.tabBarRight).toEqual([{ kind: "hostname" }, { kind: "text", text: "" }]);
+
+    store.updateTabBarRightEntry(1, { kind: "text", text: "hello" });
+    expect(store.tabBarRight[1]).toEqual({ kind: "text", text: "hello" });
+
+    store.moveTabBarRightEntry(1, -1); // 上へ：text が先頭に来る
+    expect(store.tabBarRight).toEqual([{ kind: "text", text: "hello" }, { kind: "hostname" }]);
+    store.moveTabBarRightEntry(0, -1); // 端（0番目をさらに上へ）は何もしない
+    expect(store.tabBarRight).toEqual([{ kind: "text", text: "hello" }, { kind: "hostname" }]);
+
+    store.removeTabBarRightEntry(0);
+    expect(store.tabBarRight).toEqual([{ kind: "hostname" }]);
+    expect(readPrefs()["tabBarRight"]).toEqual([{ kind: "hostname" }]);
+
+    store.setTabBarRightSeparator(" / ");
+    expect(store.tabBarRightSeparator).toBe(" / ");
+    expect(readPrefs()["tabBarRightSeparator"]).toBe(" / ");
+  });
+
+  it("上限（MAX_TAB_BAR_RIGHT_ENTRIES=16）に達すると追加は何もしない", () => {
+    const store = useSettingsStore(pinia);
+    for (let i = 0; i < 16; i++) store.addTabBarRightEntry("zoom");
+    expect(store.tabBarRight).toHaveLength(16);
+    store.addTabBarRightEntry("zoom");
+    expect(store.tabBarRight, "17個目は追加されない").toHaveLength(16);
+  });
+
+  // `statusSymbols`/`paneFrameThickness` と同じ形：壊れた値でも起動できる。
+  it("保存された値が壊れていれば既定で起動する", () => {
+    writePrefs({ tabBarPosition: "left", tabBarRight: "not an array", tabBarRightSeparator: 5, paneOuterBorders: "yes" });
+    const store = useSettingsStore(createPinia());
+    expect(store.tabBarPosition).toBe("top");
+    expect(store.tabBarRight).toEqual([]);
+    expect(store.tabBarRightSeparator).toBe(" ");
+    expect(store.paneOuterBorders).toBe(false);
+  });
+
+  it("別のタブ・ウィンドウでの変更に storage イベントで追従する", () => {
+    const store = useSettingsStore(pinia);
+    writePrefs({ tabBarPosition: "bottom", paneOuterBorders: true });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.tabBarPosition).toBe("bottom");
+    expect(store.paneOuterBorders).toBe(true);
+  });
+});
+
 describe("useSettingsStore", () => {
   it("何も保存されていなければ、記号は入・scrollback は自動（AC7）", () => {
     const store = useSettingsStore(pinia);
@@ -47,6 +208,15 @@ describe("useSettingsStore", () => {
     expect(store.statusSymbols, "押した時点で反映（再読み込みを待たない）").toBe(false);
     expect(readPrefs()["statusSymbols"]).toBe(false);
     expect(useSettingsStore(createPinia()).statusSymbols).toBe(false);
+  });
+
+  it("keyboardLockInFullscreen は既定が無効で、切り替えると反映・保存され、新しいストアが読み戻す（20260922-keybinding-usability。AC11）", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.keyboardLockInFullscreen).toBe(false);
+    store.setKeyboardLockInFullscreen(true);
+    expect(store.keyboardLockInFullscreen, "押した時点で反映").toBe(true);
+    expect(readPrefs()["keyboardLockInFullscreen"]).toBe(true);
+    expect(useSettingsStore(createPinia()).keyboardLockInFullscreen).toBe(true);
   });
 
   // AC10：再読み込み（＝新しいストア）でも残る。
@@ -432,5 +602,95 @@ describe("useSettingsStore — キーの戻し（AC9）", () => {
     expect(b.keymap.prefix).toBe("ctrl+b");
     b.setKeyPrefix(null);
     expect(readPrefs()).not.toHaveProperty("keys");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 20260922-theme-custom-overrides：色の個別の上書き（AC6・AC7・AC8）
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("useSettingsStore — 色の個別の上書き（AC6・AC7・AC8）", () => {
+  it("何も保存されていなければ上書き無し", () => {
+    const store = useSettingsStore(pinia);
+    expect(store.themeOverrides).toEqual({ light: {}, dark: {} });
+  });
+
+  it("setThemeOverride で反映・保存する。既定との差だけを持つ", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#a6e3a1");
+    expect(store.themeOverrides).toEqual({ light: { "--wtm-accent": "#a6e3a1" }, dark: {} });
+    expect(readPrefs()["themeOverrides"]).toEqual({ light: { "--wtm-accent": "#a6e3a1" } });
+    const again = useSettingsStore(createPinia());
+    expect(again.themeOverrides).toEqual({ light: { "--wtm-accent": "#a6e3a1" }, dark: {} });
+  });
+
+  it("読めない値（構文が通らない色）は反映せず捨てる（二重の守り。setThemeOverride は妥当な値を渡す前提だが、直に replaceThemeOverrides を呼ぶ経路もある）", () => {
+    const store = useSettingsStore(pinia);
+    store.replaceThemeOverrides({ light: { "--wtm-accent": "notacolor" }, dark: {} });
+    expect(store.themeOverrides).toEqual({ light: {}, dark: {} });
+    expect(readPrefs()).not.toHaveProperty("themeOverrides");
+  });
+
+  it("resetThemeOverride はその 1 項目だけを外す（ほかは残る。AC6）", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    store.setThemeOverride("light", "--wtm-bg", "#000");
+    store.resetThemeOverride("light", "--wtm-accent");
+    expect(store.themeOverrides).toEqual({ light: { "--wtm-bg": "#000" }, dark: {} });
+  });
+
+  it("resetAllThemeOverrides はすべて消し、themeOverrides ごと保存から消える（AC7）", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    store.setThemeOverride("dark", "--wtm-bg", "#000");
+    store.resetAllThemeOverrides();
+    expect(store.themeOverrides).toEqual({ light: {}, dark: {} });
+    expect(readPrefs()).not.toHaveProperty("themeOverrides");
+  });
+
+  it("同じ内容を渡し直しても書かない（keys と同じ「二重の守り」の形）", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    const setItem = vi.spyOn(localStorage, "setItem");
+    try {
+      store.setThemeOverride("light", "--wtm-accent", "#fff");
+      expect(setItem).not.toHaveBeenCalled();
+      store.setThemeOverride("light", "--wtm-accent", "#000"); // 変えれば書かれる
+      expect(setItem).toHaveBeenCalledTimes(1);
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it("上書きを保存しても他の好み（テーマ・キー）は消えない", () => {
+    writePrefs({ theme: "nord" });
+    const store = useSettingsStore(pinia);
+    store.setKeyPrefix("ctrl+a");
+    store.setThemeOverride("dark", "--wtm-accent", "#89b4fa");
+    expect(readPrefs()).toMatchObject({
+      theme: "nord",
+      keys: { prefix: "ctrl+a" },
+      themeOverrides: { dark: { "--wtm-accent": "#89b4fa" } },
+    });
+  });
+
+  it("別のウィンドウで上書きが変わったら（storage イベント）追従し、古い状態から別の変更をしても先の変更を上書きしない", () => {
+    const store = useSettingsStore(pinia);
+    store.setThemeOverride("light", "--wtm-accent", "#fff");
+    // 別のウィンドウが暗いときの上書きを足して保存した（自分の書き込みでは storage は発火しない。ここでは書いてから発火させる）。
+    writePrefs({
+      themeOverrides: { light: { "--wtm-accent": "#fff" }, dark: { "--wtm-bg": "#000" } },
+    });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.themeOverrides).toEqual({ light: { "--wtm-accent": "#fff" }, dark: { "--wtm-bg": "#000" } });
+    const snapshot = store.themeOverrides;
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" })); // 変わっていなければ表を作り直さない
+    expect(store.themeOverrides).toBe(snapshot);
+    // このウィンドウで別の CSS 変数を変えても、先に保存された分は残る。
+    store.setThemeOverride("light", "--wtm-menu-bg", "#111");
+    expect(readPrefs()["themeOverrides"]).toEqual({
+      light: { "--wtm-accent": "#fff", "--wtm-menu-bg": "#111" },
+      dark: { "--wtm-bg": "#000" },
+    });
   });
 });

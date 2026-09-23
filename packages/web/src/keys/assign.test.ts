@@ -196,6 +196,20 @@ describe("validateAssignment — prefix の後のキー（AC4・AC6 (a)(b)(c)）
     ).toContain("前の pane へ巡回");
   });
 
+  it("(a) の衝突は conflict を持つ（20260922-keybinding-usability。design「US2」）", () => {
+    const r = validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "v" }));
+    expect(r).toMatchObject({
+      ok: false,
+      conflict: { ownerId: "split_vertical", via: "prefix", chord: "v" },
+    });
+  });
+
+  it("範囲の操作（switch_tab）の一部と衝突したときは conflict を付けない（単一の chord として特定できない。AC7）", () => {
+    const r = validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "5" }));
+    expect(reason(r)).toContain("tab を切り替え");
+    expect((r as { conflict?: unknown }).conflict).toBeUndefined();
+  });
+
   it("(b) prefix と同じキー・(c) Esc は拒否する", () => {
     expect(
       reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "b", ctrl: true }))),
@@ -217,14 +231,22 @@ describe("validateAssignment — prefix の後のキー（AC4・AC6 (a)(b)(c)）
     ).toContain("貼り付け");
   });
 
-  it("「後続」の案内のキー（shift+r・e）は空いているものとして通る（別の操作が優先される）", () => {
+  it("「後続」の案内のキー（e）は空いているものとして通る（別の操作が優先される）", () => {
+    // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てに昇格した
+    // ので、「後続」の案内として残っているのは e だけ（下のテストで、shift+r は既に
+    // reload_config が使っている＝空いていないことを確かめる）。
     expect(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "e" }))).toEqual({
       ok: true,
       binding: "prefix+e",
     });
+  });
+
+  it("shift+r は reload_config が既定で使っているので、別の操作への割り当ては拒否する", () => {
     expect(
-      validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "R", shift: true })),
-    ).toEqual({ ok: true, binding: "prefix+shift+r" });
+      reason(
+        validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "R", shift: true })),
+      ),
+    ).toContain("設定を読み直す");
   });
 });
 

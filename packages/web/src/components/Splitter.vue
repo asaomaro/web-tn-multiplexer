@@ -118,12 +118,13 @@ function onKeydown(ev: KeyboardEvent): void {
   background: var(--wtm-menu-active-bg, #44475a);
   outline: 1px solid var(--wtm-fg, #f8f8f2);
 }
+/* 太さは `PaneFrame.vue` の枠と同じ CSS 変数（`--wtm-pane-gap`。既定 4px。20260922-appearance-settings-rest）。 */
 .splitter.right {
-  width: 4px;
+  width: var(--wtm-pane-gap, 4px);
   cursor: col-resize;
 }
 .splitter.down {
-  height: 4px;
+  height: var(--wtm-pane-gap, 4px);
   cursor: row-resize;
 }
 </style>
