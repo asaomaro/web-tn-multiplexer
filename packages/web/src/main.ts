@@ -28,6 +28,7 @@ import { useSeenStore } from "./store/seen.js";
 import { useSessionStore } from "./store/session.js";
 import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
+import { useAgentIntegrationsStore } from "./store/agentIntegrations.js";
 import { isMacPlatform, MouseBridge } from "./term/MouseBridge.js";
 import { RendererPool } from "./term/RendererPool.js";
 import { TerminalRegistry } from "./term/TerminalRegistry.js";
@@ -88,6 +89,7 @@ const storeAdapter = new StoreAdapter({
   onAgentChanged: (paneId, prev, next) => notificationsBox.current?.onAgentChanged(paneId, prev, next),
   onSnapshotApplied: (panes, first) => notificationsBox.current?.onSnapshotApplied(panes, first),
   onPaneClosed: (paneId) => notificationsBox.current?.onPaneClosed(paneId),
+  onAgentIntegrationChanged: (status) => useAgentIntegrationsStore(pinia).setStatus(status),
 });
 
 const connection = new Connection({ kind, httpOrigin, wsUrl, store: storeAdapter, sink: sinkProxy });

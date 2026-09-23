@@ -161,7 +161,7 @@ describe("App — pane の描画", () => {
     const view = useViewStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
     session.tabUpserted(makeTab("t1", "w1", "p1"));
-    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null });
     view.setView("w1", "t1");
     const wrapper = mount(App, makeProvide(makeConnection()));
     await wrapper.vm.$nextTick();
@@ -174,7 +174,7 @@ describe("App — pane の描画", () => {
     const view = useViewStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
     session.tabUpserted(makeTab("t1", "w1", "p1"));
-    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "pane", agent: null });
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "pane", agent: null, agentSession: null });
     view.setView("w1", "t1");
     const wrapper = mount(App, { ...makeProvide(makeConnection()), attachTo: document.body });
     await wrapper.vm.$nextTick();
@@ -197,7 +197,7 @@ describe("App — pane の描画", () => {
       const view = useViewStore(pinia);
       session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
       session.tabUpserted(makeTab("t1", "w1", "p1"));
-      session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+      session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null });
       view.setView("w1", "t1");
       view.focusPane("p1"); // MobileShell はフォーカス中の pane を描く
       const wrapper = mount(App, makeProvide(makeConnection()));
@@ -267,7 +267,7 @@ describe("App — 再接続の後の表示と購読の張り直し（D107）", (
     const view = useViewStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
     session.tabUpserted(makeTab("t1", "w1", "p1"));
-    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null });
     view.setView("w1", "t1");
     view.onConnectionState("open");
     const conn = makeRecordingConnection();
@@ -299,7 +299,7 @@ describe("App — 再接続の後の表示と購読の張り直し（D107）", (
     const view = useViewStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
     session.tabUpserted(makeTab("t1", "w1", "p1"));
-    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null });
+    session.paneUpserted({ id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null });
     view.setView("w1", "t1");
     view.onConnectionState("open");
     const conn = makeRecordingConnection();

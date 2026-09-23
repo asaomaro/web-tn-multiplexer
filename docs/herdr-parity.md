@@ -57,7 +57,7 @@ MVP に分類した項目がすべて何らかの受け入れ基準（AC）で�
 | H29b | 通知音の差し替え・エージェントごとの音・外側端末への委譲 | 非対応（音源の同梱はせず内蔵音のみ。外側端末はブラウザに無い） |  — |
 | H30 | 切り離し（`prefix+q`）と再接続 | MVP（読み替え：このブラウザの接続だけを切る） | AC8 |
 | H31 | サーバ再起動後のレイアウト復元 | **MVP**（ゲートで確定・decisions.md D7） | AC18 |
-| H32 | 画面履歴の保存・再生、エージェント会話の再開、live handoff | 新規後続(提案):セッション永続化の拡張 | — |
+| H32 | 画面履歴の保存・再生、~~エージェント会話の再開~~、live handoff | エージェント会話の再開（Claude Code・Codex）は 20260923-agent-session-resume（herdr は連携（H18 相当）が報告した正確な会話IDで `claude --resume <id>` / `codex resume <id>` するが、本製品は herdr の連携プロトコルには依存せず、Claude Code・Codex それぞれの**公式** hooks 機構（`SessionStart`）を直接使う独自実装。導入は利用者の明示操作。decisions.md [[D1]]）。**画面履歴の保存・再生・live handoff は対象外のまま**。他 16 エージェント（herdr が resume 対応と記載するもの）への対応も対象外——判明した各エージェントの再開コマンドは同 work の research.md に記録済みで、`.aidev/backlog/product-roadmap.md` へ後続として残す | AC1〜AC7・AC-I1〜AC-I5（20260923-agent-session-resume） |
 | H33 | 名前付き session | 新規後続(提案):セッション永続化の拡張 | — |
 | H34 | 複数クライアントの同時接続とサイズの決め方 | MVP | AC9 |
 | H35 | モバイル向けの1列表示と移動用メニュー | MVP | AC12 |

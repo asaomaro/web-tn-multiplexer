@@ -9,7 +9,7 @@ function makeAgent(overrides: Partial<AgentInfo> = {}): AgentInfo {
 }
 
 function makePane(overrides: Partial<Pane> = {}): Pane {
-  return { id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, ...overrides };
+  return { id: "p1", tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null, ...overrides };
 }
 
 function makeTab(overrides: Partial<Tab> = {}): Tab {

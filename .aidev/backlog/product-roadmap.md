@@ -98,7 +98,24 @@ parent: 20260918-web-terminal-multiplexer
   〔D8〕(needs: 20260918-web-terminal-multiplexer)（
   20260922-appearance-settings-rest の requirements「対象外」／decisions.md [[D11]]で切り出し。
   出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
-- [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）、エージェントの会話の再開、名前付き session、更新時の引き継ぎ〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
+- [x] セッション永続化の拡張（エージェントの会話の再開のうち Claude Code・Codex）: 20260923-agent-session-resume
+      で対応。両エージェント公式の hooks 機構（`SessionStart`）を使い、pane ごとに会話IDを本製品自身の
+      ローカル socket へ報告させ（`packages/server/assets/agent-hook-report.cjs`）、`session.json`
+      に永続化し（`SessionFilePane.agentSession`）、サーバ再起動時に `claude --resume <id>` /
+      `codex resume <id>` を自動投入する（`SessionService.ts` の `maybeResumeAgentSession`）。
+      連携の導入・解除・自動再開の切替は設定画面「エージェント連携」節から明示操作で行う
+      （`AgentIntegrationInstaller.ts`・`SettingsDialog.vue`）。herdr 本来の「連携（H18相当）が
+      報告した正確なIDで再開する」方式と同じ発想だが、herdr のプロトコルには依存しない独自実装
+      （decisions.md D1）。
+      実測: 実装 48 ファイル・1631 行追加/48 行削除（工程成果物は含まず）・単体 2353 件 pass
+      （protocol 57・server 647・web 1649）・起動確認（smoke）pass。E2E は実施していない
+      （[[e2e-only-on-request]]）。実物の Claude Code・Codex CLI との結線・Windows の named pipe
+      権限限定は未検証（`docs/verification.md` の手動確認へ回した。decisions.md D5）。
+- [ ] セッション永続化の拡張（残り）: 画面履歴の保存と再生（opt-in）、名前付き session、更新時の
+      引き継ぎ、Claude Code・Codex 以外のエージェント（herdr が resume 対応と記載する16種）への
+      対応〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典:
+      .aidev/works/20260918-web-terminal-multiplexer/research.md。各エージェントの再開コマンドは
+      20260923-agent-session-resume/research.md F1.2 に一覧化済み）。
 - [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 配布と運用: 自己更新・更新チャネル、ログ、シェル補完〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 規則・契約の一元化: レイアウトの隣と深さ優先の順・`/api/login` の状態コードの意味・ログインの制限の回数を `@wtm/protocol` に置き、server と web の二重持ちをなくす (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/review.md 統合 review ラウンド1 の nit）

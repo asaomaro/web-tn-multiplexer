@@ -1,4 +1,5 @@
 import type { AgentInfo, Pane, SessionFocus, Tab, Workspace } from "./model.js";
+import type { AgentIntegrationStatusResult } from "./messages.js";
 
 /**
  * イベント（design.md「WebSocket の通信」のイベント表。architecture.md の独立点検で data の形を確定）。
@@ -64,6 +65,11 @@ export interface ClientErrorEvent {
   event: "client.error";
   data: { code: string; message: string };
 }
+/** 導入状態・自動再開設定が変わったときに全クライアントへ配布する（20260923-agent-session-resume）。 */
+export interface AgentIntegrationChangedEvent {
+  event: "agent_integration.changed";
+  data: AgentIntegrationStatusResult;
+}
 
 export type ServerEvent =
   | WorkspaceCreatedEvent
@@ -80,6 +86,7 @@ export type ServerEvent =
   | PaneAgentStatusChangedEvent
   | PaneSizeChangedEvent
   | SessionFocusChangedEvent
-  | ClientErrorEvent;
+  | ClientErrorEvent
+  | AgentIntegrationChangedEvent;
 
 export type ServerEventName = ServerEvent["event"];

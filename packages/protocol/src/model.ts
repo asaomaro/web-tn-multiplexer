@@ -69,6 +69,22 @@ export interface Pane {
   title: string;
   rightClick: RightClickTarget;
   agent: AgentInfo | null;
+  /**
+   * 公式フック連携（20260923-agent-session-resume）が報告した、この pane で直近に検出した
+   * エージェントの会話/セッション参照。サーバ再起動時の復元で `claude --resume <id>` 等の
+   * 投入に使う。画面判定で `agent` が非 null→null になったら一緒に null にする（design D9）。
+   */
+  agentSession: AgentSessionRef | null;
+}
+
+/** herdr との対応は無く、本製品独自の公式フック連携（20260923-agent-session-resume）専用。 */
+export type AgentIntegrationKind = "claude" | "codex";
+
+export interface AgentSessionRef {
+  kind: AgentIntegrationKind;
+  sessionId: string;
+  /** 報告を受けた時刻（epoch ms）。診断用。 */
+  reportedAt: number;
 }
 
 export interface AgentInfo {

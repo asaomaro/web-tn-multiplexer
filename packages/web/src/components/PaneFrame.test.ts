@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 function makePane(id: string, overrides: Partial<Pane> = {}): Pane {
-  return { id, tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, ...overrides };
+  return { id, tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null, ...overrides };
 }
 
 function mountFrame(opts: { enabled?: boolean; withPinia?: boolean } = {}) {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Pane, SessionSnapshot, Tab, Workspace, WorktreeEntry } from "./model.js";
+import type { AgentIntegrationKind, Pane, SessionSnapshot, Tab, Workspace, WorktreeEntry } from "./model.js";
 import { THEME_NAMES } from "./theme.js";
 
 /**
@@ -220,6 +220,41 @@ export interface WorktreeCreateResult {
   path: string;
 }
 
+// --- agent integration（20260923-agent-session-resume）---------------------
+
+const agentIntegrationKind = z.enum(["claude", "codex"]);
+
+export const AgentIntegrationStatusParams = z.object({});
+export type AgentIntegrationStatusParams = z.infer<typeof AgentIntegrationStatusParams>;
+
+/** 対象1エージェント分の状態（design「3. RPC 方式」）。 */
+export interface AgentIntegrationStatus {
+  /** PATH 上に実行ファイルが見つかるか（情報提供のみ。無くても導入操作は妨げない）。 */
+  cliDetected: boolean;
+  /** 対象の hooks 設定に本製品のフックが登録されているか（都度判定。design D4）。 */
+  installed: boolean;
+}
+export interface AgentIntegrationStatusResult {
+  /** herdr の `resume_agents_on_restore` に相当（design D3）。 */
+  autoResumeEnabled: boolean;
+  agents: Record<AgentIntegrationKind, AgentIntegrationStatus>;
+}
+
+export const AgentIntegrationInstallParams = z.object({ kind: agentIntegrationKind });
+export type AgentIntegrationInstallParams = z.infer<typeof AgentIntegrationInstallParams>;
+export interface AgentIntegrationInstallResult {
+  ok: boolean;
+  /** 失敗理由、または「既に導入済みです」等の補足（無ければ null）。 */
+  message: string | null;
+}
+
+export const AgentIntegrationUninstallParams = z.object({ kind: agentIntegrationKind });
+export type AgentIntegrationUninstallParams = z.infer<typeof AgentIntegrationUninstallParams>;
+export type AgentIntegrationUninstallResult = AgentIntegrationInstallResult;
+
+export const AgentIntegrationSetAutoResumeParams = z.object({ enabled: z.boolean() });
+export type AgentIntegrationSetAutoResumeParams = z.infer<typeof AgentIntegrationSetAutoResumeParams>;
+
 export const METHOD_SCHEMAS = {
   "client.hello": ClientHelloParams,
   "client.view": ClientViewParams,
@@ -248,6 +283,10 @@ export const METHOD_SCHEMAS = {
   "layout.set_split_ratio": LayoutSetSplitRatioParams,
   "worktree.list": WorktreeListParams,
   "worktree.create": WorktreeCreateParams,
+  "agent_integration.status": AgentIntegrationStatusParams,
+  "agent_integration.install": AgentIntegrationInstallParams,
+  "agent_integration.uninstall": AgentIntegrationUninstallParams,
+  "agent_integration.set_auto_resume": AgentIntegrationSetAutoResumeParams,
 } as const;
 
 export type MethodName = keyof typeof METHOD_SCHEMAS;
@@ -280,6 +319,10 @@ export interface MethodResultMap {
   "layout.set_split_ratio": Record<string, never>;
   "worktree.list": WorktreeListResult;
   "worktree.create": WorktreeCreateResult;
+  "agent_integration.status": AgentIntegrationStatusResult;
+  "agent_integration.install": AgentIntegrationInstallResult;
+  "agent_integration.uninstall": AgentIntegrationUninstallResult;
+  "agent_integration.set_auto_resume": Record<string, never>;
 }
 
 export type ParamsOf<M extends MethodName> = z.infer<(typeof METHOD_SCHEMAS)[M]>;

@@ -14,6 +14,12 @@ export interface SessionFilePane {
   cwd: string;
   shell: string;
   status?: PaneStatus | undefined;
+  /**
+   * 公式フック連携（20260923-agent-session-resume）が報告した会話/セッション参照。**以前の版の
+   * 保存には無い**——無ければ復元時は現状どおりプレーンなシェルになる（`autoLabel` と同じ
+   * 「optional 追加・schema 番号は据え置き」方式。design D2）。
+   */
+  agentSession?: { kind: string; sessionId: string; reportedAt: number } | undefined;
 }
 export interface SessionFileTab {
   id: string;
@@ -71,6 +77,7 @@ const SessionFilePaneSchema: z.ZodType<SessionFilePane> = z.object({
   cwd: z.string(),
   shell: z.string(),
   status: z.enum(["running", "failed"]).optional(),
+  agentSession: z.object({ kind: z.string(), sessionId: z.string(), reportedAt: z.number() }).optional(),
 });
 const SessionFileTabSchema: z.ZodType<SessionFileTab> = z.object({
   id: z.string(),

@@ -1,10 +1,12 @@
-import { THEME_NAMES } from "@wtm/protocol";
+import { THEME_NAMES, type AgentIntegrationInstallResult, type AgentIntegrationStatusResult } from "@wtm/protocol";
 import { mount } from "@vue/test-utils";
 import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DeviceKindKey, NotificationControllerKey } from "../injection.js";
+import { ActionDispatcherKey, DeviceKindKey, NotificationControllerKey } from "../injection.js";
+import type { ActionDispatcher } from "../actions/ActionDispatcher.js";
 import type { NotificationController } from "../notify/NotificationController.js";
 import type { DesktopPermission } from "../notify/ports.js";
+import { useAgentIntegrationsStore } from "../store/agentIntegrations.js";
 import { useNotificationsStore } from "../store/notifications.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore } from "../store/settings.js";
@@ -46,11 +48,13 @@ function makeController(opts: { permission?: DesktopPermission; requestResult?: 
   return { c, requestDesktopPermission, unlockSound, setPermission: (p: DesktopPermission) => void (permission = p) };
 }
 
-async function openDialog(controller = makeController(), kind?: "desktop" | "mobile") {
+async function openDialog(controller = makeController(), kind?: "desktop" | "mobile", actions?: Partial<ActionDispatcher>) {
   const view = useViewStore(pinia);
   // `DeviceKindKey` は既定値つきで受ける（provide しなければ "desktop"）。モバイルのテストだけ渡す。
   const provide: Record<symbol, unknown> = { [NotificationControllerKey as symbol]: controller.c };
   if (kind) provide[DeviceKindKey as symbol] = kind;
+  // `ActionDispatcherKey` も既定では provide しない（節「エージェント連携」は握りつぶす設計。渡したテストだけ使う）。
+  if (actions) provide[ActionDispatcherKey as symbol] = actions;
   const wrapper = mount(SettingsDialog, {
     global: { plugins: [pinia], provide },
     attachTo: document.body,
@@ -261,15 +265,123 @@ const checkedRadio = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
   radios(w).filter((r) => (r.element as HTMLInputElement).checked);
 const radioLabel = (r: ReturnType<typeof radios>[number]) => r.element.parentElement!.textContent!.trim();
 
-describe("SettingsDialog — 5 つの節（AC12）", () => {
-  it("見出し「通知」「テーマ」「表示」「端末」「キー」の 5 節が、この順で 1 枚に並ぶ（テーマは 20260921-theme-settings、キーは 20260921-keybinding-customization で足した）", async () => {
+describe("SettingsDialog — 6 つの節（AC12）", () => {
+  it("見出し「通知」「テーマ」「表示」「端末」「エージェント連携」「キー」の 6 節が、この順で 1 枚に並ぶ（テーマは 20260921-theme-settings、キーは 20260921-keybinding-customization、エージェント連携は 20260923-agent-session-resume で足した）", async () => {
     const { wrapper } = await openDialog();
-    expect(wrapper.findAll("section h3").map((h) => h.text())).toEqual(["通知", "テーマ", "表示", "端末", "キー"]);
+    expect(wrapper.findAll("section h3").map((h) => h.text())).toEqual(["通知", "テーマ", "表示", "端末", "エージェント連携", "キー"]);
     // 節は見出しで名前が付いている（読み上げで節の名前が分かる）。
     for (const sec of wrapper.findAll("section")) {
       const id = sec.attributes("aria-labelledby")!;
       expect(sec.find(`#${id}`).exists(), `${id} の見出しがある`).toBe(true);
     }
+  });
+});
+
+function makeAgentIntegrationActions(status: AgentIntegrationStatusResult) {
+  const refreshAgentIntegrationStatus = vi.fn(async () => {
+    useAgentIntegrationsStore(pinia).setStatus(status);
+  });
+  const installAgentIntegration = vi.fn(async (): Promise<AgentIntegrationInstallResult> => ({ ok: true, message: null }));
+  const uninstallAgentIntegration = vi.fn(async (): Promise<AgentIntegrationInstallResult> => ({ ok: true, message: null }));
+  const setAgentIntegrationAutoResume = vi.fn(async () => undefined);
+  const actions: Partial<ActionDispatcher> = {
+    refreshAgentIntegrationStatus,
+    installAgentIntegration,
+    uninstallAgentIntegration,
+    setAgentIntegrationAutoResume,
+  };
+  return { actions, refreshAgentIntegrationStatus, installAgentIntegration, uninstallAgentIntegration, setAgentIntegrationAutoResume };
+}
+
+const agentIntegrationSection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.find('section[aria-labelledby="settings-agent-integration"]');
+
+describe("SettingsDialog — 節「エージェント連携」（20260923-agent-session-resume・AC-I1〜AC-I5）", () => {
+  it("開くたびに状態を取得する（client.hello のスナップショットに乗らないため）", async () => {
+    const status: AgentIntegrationStatusResult = {
+      autoResumeEnabled: true,
+      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: false, installed: true } },
+    };
+    const { actions, refreshAgentIntegrationStatus } = makeAgentIntegrationActions(status);
+    const { wrapper } = await openDialog(makeController(), undefined, actions);
+
+    expect(refreshAgentIntegrationStatus).toHaveBeenCalledTimes(1);
+    const section = agentIntegrationSection(wrapper);
+    expect(section.text()).toContain("Claude Code");
+    expect(section.text()).toContain("未導入");
+    expect(section.text()).toContain("Codex");
+    expect(section.text()).toContain("導入済み");
+    expect(section.text()).toContain("この PATH には見つかりません"); // codex は cliDetected: false
+  });
+
+  it("未導入なら「導入」ボタンで installAgentIntegration(kind) を呼ぶ（AC-I1）", async () => {
+    const status: AgentIntegrationStatusResult = {
+      autoResumeEnabled: true,
+      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: true, installed: false } },
+    };
+    const { actions, installAgentIntegration } = makeAgentIntegrationActions(status);
+    const { wrapper } = await openDialog(makeController(), undefined, actions);
+
+    const buttons = agentIntegrationSection(wrapper).findAll("button.settings-btn");
+    await buttons[0]!.trigger("click");
+    await wrapper.vm.$nextTick();
+
+    expect(installAgentIntegration).toHaveBeenCalledWith("claude");
+  });
+
+  it("導入済みなら「解除」ボタンで uninstallAgentIntegration(kind) を呼ぶ（AC-I2）", async () => {
+    const status: AgentIntegrationStatusResult = {
+      autoResumeEnabled: true,
+      agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: true, installed: false } },
+    };
+    const { actions, uninstallAgentIntegration } = makeAgentIntegrationActions(status);
+    const { wrapper } = await openDialog(makeController(), undefined, actions);
+
+    const buttons = agentIntegrationSection(wrapper).findAll("button.settings-btn");
+    expect(buttons[0]!.text()).toBe("解除");
+    await buttons[0]!.trigger("click");
+    await wrapper.vm.$nextTick();
+
+    expect(uninstallAgentIntegration).toHaveBeenCalledWith("claude");
+  });
+
+  it("自動再開の switch は現在値を反映し、押すと反転して setAgentIntegrationAutoResume を呼ぶ（AC-I4）", async () => {
+    const status: AgentIntegrationStatusResult = {
+      autoResumeEnabled: true,
+      agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: true, installed: false } },
+    };
+    const { actions, setAgentIntegrationAutoResume } = makeAgentIntegrationActions(status);
+    const { wrapper } = await openDialog(makeController(), undefined, actions);
+
+    const sw = agentIntegrationSection(wrapper).find('[role="switch"]');
+    expect(sw.attributes("aria-checked")).toBe("true");
+    await sw.trigger("click");
+
+    expect(setAgentIntegrationAutoResume).toHaveBeenCalledWith(false);
+  });
+
+  it("失敗を伝える文言をそのまま表示する", async () => {
+    const status: AgentIntegrationStatusResult = {
+      autoResumeEnabled: true,
+      agents: { claude: { cliDetected: true, installed: false }, codex: { cliDetected: true, installed: false } },
+    };
+    const { actions } = makeAgentIntegrationActions(status);
+    actions.installAgentIntegration = vi.fn(async () => ({ ok: false, message: "設定ファイルを解釈できませんでした" }));
+    const { wrapper } = await openDialog(makeController(), undefined, actions);
+
+    const buttons = agentIntegrationSection(wrapper).findAll("button.settings-btn");
+    await buttons[0]!.trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(agentIntegrationSection(wrapper).text()).toContain("設定ファイルを解釈できませんでした");
+  });
+
+  it("ActionDispatcher が provide されていなくても他の設定操作は壊れない（握りつぶす設計）", async () => {
+    const { wrapper } = await openDialog();
+    expect(agentIntegrationSection(wrapper).text()).toContain("確認中");
+    // 通知の switch はそのまま押せる（他の節に影響しない。AC-I5）。
+    await notifySwitches(wrapper)[0]!.trigger("click");
+    expect(useNotificationsStore(pinia).prefs.toast).toBe(false);
   });
 });
 

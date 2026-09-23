@@ -1,5 +1,6 @@
 import type {
   AgentInfo,
+  AgentIntegrationKind,
   Dir,
   GitInfo,
   HostInfo,
@@ -20,6 +21,7 @@ import type { SessionFileData, SessionFilePane, SessionFileTab, SessionFileWorks
 import type { TerminalManager } from "../terminal/TerminalManager.js";
 import type { EventBus } from "../bus/EventBus.js";
 import { NotFoundError, SessionModel } from "./SessionModel.js";
+import { resumeCommandFor } from "../agent/resumeCommand.js";
 import { resolveNewCwd, type NewCwdDeps } from "./newCwd.js";
 import { autoWorkspaceLabel, defaultWorkspaceLabelDeps, folderLabelOf, type WorkspaceLabelDeps } from "./workspaceLabel.js";
 import { monotonicNow } from "../log/LogThrottle.js";
@@ -70,6 +72,17 @@ export interface SessionServiceOptions {
   workspaceLabelDeps?: WorkspaceLabelDeps | undefined;
   /** 復元の合計の期限を測る時計（ms）。既定は単調な `monotonicNow`（壁時計は戻りうる。D103 の独立点検 #8）。テストで差し替える。 */
   clock?: { now(): number } | undefined;
+  /**
+   * 公式フック連携（20260923-agent-session-resume）の report を受け取るローカル socket のパス。
+   * pane 起動時に `WTM_AGENT_REPORT_SOCKET` として環境変数に渡す。未設定（socket の起動に失敗した等）
+   * なら渡さない——hook 側は env が無ければ無害に何もしない（design「5. hook スクリプト」）。
+   */
+  agentReportSocketPath?: string | undefined;
+  /**
+   * 自動再開の可否を都度読む（設定画面から切り替えられるため、構築時に固定値で受け取らない。
+   * design D3）。省略時は既定 ON（herdr の `resume_agents_on_restore` の既定に合わせる）。
+   */
+  getAutoResumeEnabled?: (() => boolean) | undefined;
 }
 
 /**
@@ -90,6 +103,8 @@ export class SessionService {
   private readonly logger: Logger;
   private readonly newCwdDeps: NewCwdDeps | undefined;
   private readonly workspaceLabelDeps: WorkspaceLabelDeps;
+  private readonly agentReportSocketPath: string | undefined;
+  private readonly getAutoResumeEnabled: () => boolean;
   /**
    * 上限を超えたまままだ返っていない、根を探す問い合わせの数（review ラウンド 1・2）。0 でない間は新しく根を探さずフォルダ名にする——応答しない fs
    * （止まった NFS 等）への stat は取り消せず libuv のスレッドを塞ぐので、重ねてサーバ全体の fs を止めない。遅いだけなら返った時点で元に戻る。
@@ -116,6 +131,8 @@ export class SessionService {
     this.logger = opts.logger;
     this.newCwdDeps = opts.newCwdDeps;
     this.clock = opts.clock ?? { now: monotonicNow };
+    this.agentReportSocketPath = opts.agentReportSocketPath;
+    this.getAutoResumeEnabled = opts.getAutoResumeEnabled ?? (() => true);
     const labelDeps = opts.workspaceLabelDeps ?? defaultWorkspaceLabelDeps;
     this.workspaceLabelDeps = {
       ...labelDeps,
@@ -474,14 +491,21 @@ export class SessionService {
     // （その3フラグは `AgentInfo`（`@wtm/protocol`）には含まれない、判定内部だけの情報）。busy/title と
     // 同じ「実際に変わったときだけ発行する」規約に揃える。
     const agentChanged = patch.agent !== undefined && !sameAgent(pane.agent, patch.agent);
-    const updated = this.model.updatePaneRuntime(paneId, patch);
+    // 画面判定でエージェントが消えたら（非 null → null）、報告されていた会話参照も一緒に捨てる
+    // （20260923-agent-session-resume design D9）。エージェントを終了して別の作業をしている pane が、
+    // 次のサーバ再起動で勝手に古い会話を再開してしまう事故を防ぐ。
+    const clearsAgentSession = patch.agent === null && pane.agent !== null && pane.agentSession !== null;
+    const fullPatch = clearsAgentSession ? { ...patch, agentSession: null } : patch;
+    const updated = this.model.updatePaneRuntime(paneId, fullPatch);
     if (agentChanged) {
       this.bus.publish({ event: "pane.agent_status_changed", data: { paneId, agent: updated.agent } });
     }
     if (busyChanged || titleChanged || cwdChanged) {
       this.bus.publish({ event: "pane.updated", data: { pane: updated } });
     }
-    if (cwdChanged) this.persist.touch();
+    // 会話参照の消滅も保存契機にする（design D8）——さもないと、サーバが不意に落ちたときに
+    // 「もう有効ではない」という事実が session.json に反映されないまま残ることがある。
+    if (cwdChanged || clearsAgentSession) this.persist.touch();
   }
 
   updateWorkspaceGit(workspaceId: WorkspaceId, git: GitInfo | null): void {
@@ -517,6 +541,32 @@ export class SessionService {
   }
 
   /**
+   * pane 起動時に渡す環境変数（20260923-agent-session-resume design「6. フック登録の書式」）。
+   * `WTM_PANE_ID`・`WTM_AGENT_REPORT_SOCKET` は、この pane の中で Claude Code/Codex が起動されたときに、
+   * hook スクリプトが「どの pane の・どの会話か」を報告するために使う。socket が無い（起動に失敗した等）
+   * 環境では `WTM_AGENT_REPORT_SOCKET` を渡さない——hook 側は env が無ければ無害に何もしない。
+   * 全 pane に常に付ける（起動時点でその pane が Claude Code/Codex を動かすかは分からないため）。
+   */
+  private envForPane(paneId: PaneId): Record<string, string> {
+    const env: Record<string, string> = { ...(process.env as Record<string, string>), WTM_PANE_ID: paneId };
+    if (this.agentReportSocketPath) env.WTM_AGENT_REPORT_SOCKET = this.agentReportSocketPath;
+    return env;
+  }
+
+  /**
+   * 公式フック連携（20260923-agent-session-resume）からの報告を反映する。`paneId` が存在しなければ
+   * 何もしない（report 経路は best-effort。design「振る舞いの詳細・会話IDの報告受信」）。
+   */
+  reportAgentSession(paneId: PaneId, kind: AgentIntegrationKind, sessionId: string): void {
+    const pane = this.model.getPane(paneId);
+    if (!pane) return;
+    // `reportedAt` は壁時計の epoch ms（protocol の doc comment）。`this.clock` は復元の期限計測用の
+    // 単調時計（`monotonicNow`）なので、ここでは使わない（`AgentInfo.since` と同じ `Date.now()` に揃える）。
+    this.model.setAgentSession(paneId, { kind, sessionId, reportedAt: Date.now() });
+    this.persist.touch();
+  }
+
+  /**
    * pane 用の PTY を起動し、短い猶予（D37）の間に失敗しなかったかを確かめる。
    * 成功のときだけ `onExit` の配線（D18 の連鎖）も済ませる——ただし `alreadyExited` が true
    * （猶予中に code 0 で即終了していた）ときは配線しない。`TerminalHost.onExit` は一度きり・同期発火で
@@ -525,7 +575,13 @@ export class SessionService {
    * コミットした直後に `closePaneAfterExit` を自分で呼ぶ。
    */
   private async spawnForPane(paneId: PaneId, cwd: string): Promise<{ ok: boolean; alreadyExited: boolean }> {
-    const host = this.terminals.create(paneId, { cwd, cols: HEADLESS_COLS, rows: HEADLESS_ROWS, ...(this.shell ? { shell: this.shell } : {}) });
+    const host = this.terminals.create(paneId, {
+      cwd,
+      cols: HEADLESS_COLS,
+      rows: HEADLESS_ROWS,
+      ...(this.shell ? { shell: this.shell } : {}),
+      env: this.envForPane(paneId),
+    });
     const result = await raceSpawn(host, this.spawnGraceMs);
     if (!result.ok) {
       this.terminals.dispose(paneId);
@@ -579,7 +635,7 @@ export class SessionService {
     for (const wsData of data.workspaces) {
       for (const tabData of wsData.tabs) {
         for (const paneData of tabData.panes) {
-          await this.restorePaneProcess(paneData.id, paneData.cwd);
+          await this.restorePaneProcess(paneData.id, paneData.cwd, paneData.agentSession);
         }
       }
     }
@@ -609,14 +665,37 @@ export class SessionService {
     this.model.restoreWorkspace(wsData, autoLabel);
   }
 
-  private async restorePaneProcess(paneId: PaneId, cwd: string): Promise<void> {
+  private async restorePaneProcess(
+    paneId: PaneId,
+    cwd: string,
+    agentSession?: { kind: string; sessionId: string } | undefined,
+  ): Promise<void> {
     const spawn = await this.spawnForPane(paneId, cwd);
     if (!spawn.ok) {
       this.model.markPaneFailed(paneId, "シェルの起動に失敗しました");
       return;
     }
     // 復元対象の pane は restoreWorkspace で既にモデルに入っているので、すぐ連鎖してよい。
-    if (spawn.alreadyExited) await this.closePaneAfterExit(paneId, 0);
+    if (spawn.alreadyExited) {
+      await this.closePaneAfterExit(paneId, 0);
+      return;
+    }
+    this.maybeResumeAgentSession(paneId, agentSession);
+  }
+
+  /**
+   * 保存されていた会話参照があれば、シェルの起動（上）に**続けて**再開コマンドを投入する
+   * （20260923-agent-session-resume design D10：起動そのものの分岐は増やさず、成功した後に
+   * pane へ書き込むだけにする。無効な参照はコマンド自身がエラーで終わり、普通のシェルに戻る。AC6）。
+   * 同一 cwd・同一種別の pane が複数あっても、pane ごとに一意な `sessionId` を持つため
+   * 重複排除はしない（design D11）。
+   */
+  private maybeResumeAgentSession(paneId: PaneId, agentSession: { kind: string; sessionId: string } | undefined): void {
+    if (!agentSession) return;
+    if (!this.getAutoResumeEnabled()) return;
+    const command = resumeCommandFor(agentSession.kind, agentSession.sessionId);
+    if (!command) return;
+    this.terminals.get(paneId)?.write(`${command}\r`);
   }
 
   // --- helpers ------------------------------------------------------------

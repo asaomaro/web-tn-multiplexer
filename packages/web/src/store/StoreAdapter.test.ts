@@ -20,7 +20,7 @@ function makeTab(id: string, workspaceId: string): Tab {
   return { id, workspaceId, label: id, layout: { type: "pane", paneId: "p1" }, focusedPaneId: "p1", zoomedPaneId: null, sizeOwnerClientId: null };
 }
 function makePane(id: string, tabId: string): Pane {
-  return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null };
+  return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null };
 }
 
 function makeAdapter(overrides: Partial<ConstructorParameters<typeof StoreAdapter>[0]> = {}) {
@@ -209,6 +209,17 @@ describe("StoreAdapter", () => {
     adapter.applyEvent({ event: "pane.agent_status_changed", data: { paneId: "p1", agent: null } });
     adapter.applyEvent({ event: "pane.size_changed", data: { paneId: "p1", cols: 100, rows: 30 } });
     expect(useSessionStore(pinia).panes.get("p1")).toMatchObject({ cols: 100, rows: 30 });
+  });
+
+  it("agent_integration.changed は注入した onAgentIntegrationChanged へ（20260923-agent-session-resume。省略時は例外を投げない）", () => {
+    const onAgentIntegrationChanged = vi.fn();
+    const { adapter } = makeAdapter({ onAgentIntegrationChanged });
+    const status = { autoResumeEnabled: false, agents: { claude: { cliDetected: true, installed: true }, codex: { cliDetected: false, installed: false } } } as const;
+    adapter.applyEvent({ event: "agent_integration.changed", data: status });
+    expect(onAgentIntegrationChanged).toHaveBeenCalledWith(status);
+
+    const { adapter: withoutCallback } = makeAdapter();
+    expect(() => withoutCallback.applyEvent({ event: "agent_integration.changed", data: status })).not.toThrow();
   });
 
   it("session.focus_changed", () => {
