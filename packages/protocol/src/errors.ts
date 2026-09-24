@@ -12,7 +12,11 @@ export type ErrorCode =
   | "worktree_path_exists"
   | "worktree_no_commits"
   | "worktree_invalid_branch"
-  | "worktree_failed";
+  | "worktree_failed"
+  // worktree の削除（20260924-worktree-remove）。
+  | "worktree_dirty"
+  | "worktree_not_a_worktree"
+  | "worktree_is_main";
 
 export interface ProtocolError {
   code: ErrorCode;

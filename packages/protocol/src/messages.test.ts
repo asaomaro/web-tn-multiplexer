@@ -22,6 +22,7 @@ import {
   WorkspaceMoveParams,
   WorkspaceMoveToParams,
   WorkspaceRenameParams,
+  WorktreeRemoveParams,
 } from "./messages.js";
 import { THEME_NAMES } from "./theme.js";
 
@@ -119,6 +120,13 @@ describe("messages", () => {
   // 20260924-pane-move-cross-tab（ドラッグでサイドバーの workspace 行へ移動）。
   it("validates pane.move_to_new_tab params", () => {
     expect(PaneMoveToNewTabParams.parse({ paneId: "p1", targetWorkspaceId: "w2" })).toEqual({ paneId: "p1", targetWorkspaceId: "w2" });
+  });
+
+  // 20260924-worktree-remove。
+  it("validates worktree.remove params (force is optional)", () => {
+    expect(WorktreeRemoveParams.parse({ workspaceId: "w1", path: "/tmp/wt1" })).toEqual({ workspaceId: "w1", path: "/tmp/wt1" });
+    expect(WorktreeRemoveParams.parse({ workspaceId: "w1", path: "/tmp/wt1", force: true })).toEqual({ workspaceId: "w1", path: "/tmp/wt1", force: true });
+    expect(() => WorktreeRemoveParams.parse({ workspaceId: "w1", path: "" })).toThrow(); // 空文字は拒否
   });
 
   it("registers a schema for every method the WebSocket table defines", () => {

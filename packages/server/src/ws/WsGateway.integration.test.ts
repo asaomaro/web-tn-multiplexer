@@ -622,11 +622,15 @@ describe("WsGateway — 不正なフレームの窓の時計（D106）", () => {
   }, 10000);
 });
 
-/** worktree の方式は別のテストで確かめるので、ここでは呼ばれない代役を置く（20260920-git-worktree-actions）。 */
+/**
+ * worktree の方式は別のテストで確かめるので、ここでは呼ばれない代役を置く
+ * （一覧・作成は 20260920-git-worktree-actions。削除は 20260924-worktree-remove）。
+ */
 function stubWorktrees(): WorktreeService {
   return {
     list: () => Promise.reject(new Error("not used in this test")),
     create: () => Promise.reject(new Error("not used in this test")),
+    remove: () => Promise.reject(new Error("not used in this test")),
   };
 }
 

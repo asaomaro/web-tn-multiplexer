@@ -2,7 +2,7 @@
 import { computed, inject, nextTick, ref, watch } from "vue";
 import { ActionDispatcherKey } from "../injection.js";
 import { useSessionStore } from "../store/session.js";
-import { useViewStore } from "../store/view.js";
+import { type DialogContext, useViewStore } from "../store/view.js";
 import { linkedWorktreeChildrenOf } from "../store/workspaceGrouping.js";
 
 /**
@@ -14,6 +14,9 @@ import { linkedWorktreeChildrenOf } from "../store/workspaceGrouping.js";
  * `kind === "confirmReplacePane"`（20260924-pane-dnd-split-move。review 指摘 must）も同じ
  * ダイアログで扱う——D&D での分割解除（`pane.replace`）のドロップ先が busy なときの確認。
  * `pane.close` と同じ D23 の安全策を踏襲する（既存の busy pane 確認と見た目・操作感を揃える）。
+ *
+ * `kind === "confirmWorktreeRemove"`/`"confirmWorktreeRemoveForce"`（20260924-worktree-remove）
+ * も同じダイアログで扱う——worktree の削除（と、dirty 時の `--force` 再実行）の確認。
  */
 const session = useSessionStore();
 const view = useViewStore();
@@ -40,7 +43,21 @@ const message = computed(() => {
   if (ctx?.kind === "confirmReplacePane") {
     return "ドロップ先の pane はまだ動作中です。閉じてドラッグした pane に置き換えますか？";
   }
+  if (ctx?.kind === "confirmWorktreeRemove") {
+    return ctx.openWorkspaceId
+      ? "この worktree は現在 workspace として開いています。workspace を閉じて worktree を削除しますか？"
+      : "この worktree を削除しますか？";
+  }
+  if (ctx?.kind === "confirmWorktreeRemoveForce") {
+    return "この worktree には未コミットの変更が残っています。変更を破棄して削除しますか？";
+  }
   return "";
+});
+
+/** 確定ボタンの文言。worktree の削除系だけ「削除」——「閉じる」のままだと破壊的な操作に見えない。 */
+const confirmLabel = computed(() => {
+  const kind = view.dialogContext?.kind;
+  return kind === "confirmWorktreeRemove" || kind === "confirmWorktreeRemoveForce" ? "削除" : "閉じる";
 });
 
 /** 対象が worktree 自動グループの本体（親）1件のときだけ、束ねられた linked worktree を返す（無ければ空）。 */
@@ -52,10 +69,12 @@ const linkedWorktrees = computed(() => {
   return linkedWorktreeChildrenOf(target.id, [...session.workspaces.values()]);
 });
 
+const CONFIRM_DIALOG_KINDS: DialogContext["kind"][] = ["confirmClose", "confirmReplacePane", "confirmWorktreeRemove", "confirmWorktreeRemoveForce"];
+
 watch(
   () => view.dialogContext,
   (ctx) => {
-    if (ctx?.kind === "confirmClose" || ctx?.kind === "confirmReplacePane") {
+    if (ctx && CONFIRM_DIALOG_KINDS.includes(ctx.kind)) {
       closeLinkedWorktrees.value = false; // 開くたびに既定オフへ戻す（confirmClose 以外では未使用）
       void nextTick(() => {
         dialogEl.value?.showModal();
@@ -69,13 +88,26 @@ watch(
 
 // `actions` を参照するので arrow function にする（`function` 宣言だと const 絞り込みが効かない）。
 const confirm = (): void => {
-  if (view.dialogContext?.kind === "confirmReplacePane") actions.confirmReplacePane();
+  const ctx = view.dialogContext;
+  if (ctx?.kind === "confirmReplacePane") actions.confirmReplacePane();
+  else if (ctx?.kind === "confirmWorktreeRemove") actions.confirmWorktreeRemove();
+  else if (ctx?.kind === "confirmWorktreeRemoveForce") actions.confirmWorktreeRemoveForce();
   else actions.confirmClose(closeLinkedWorktrees.value);
 };
 
-function cancel(): void {
+/**
+ * worktree の削除系は、取り消すと一覧ダイアログへ「戻る」（`openWorktree` を呼び直す）——
+ * `view.dialogContext` は単一の値で、一覧の上に確認を重ねてはいないため（design「設計方針」）。
+ * それ以外（`confirmClose`/`confirmReplacePane`）は単に閉じるだけで、元々「上に開く」対象が無い。
+ */
+const cancel = (): void => {
+  const ctx = view.dialogContext;
+  if (ctx?.kind === "confirmWorktreeRemove" || ctx?.kind === "confirmWorktreeRemoveForce") {
+    actions.openWorktree(ctx.sourceWorkspaceId);
+    return;
+  }
   view.closeDialog();
-}
+};
 
 function onNativeCancel(ev: Event): void {
   ev.preventDefault();
@@ -110,7 +142,7 @@ function onKeydown(ev: KeyboardEvent): void {
     </label>
     <div class="confirm-dialog-actions">
       <button ref="cancelBtn" type="button" @click="cancel">キャンセル</button>
-      <button type="button" @click="confirm">閉じる</button>
+      <button type="button" @click="confirm">{{ confirmLabel }}</button>
     </div>
   </dialog>
 </template>

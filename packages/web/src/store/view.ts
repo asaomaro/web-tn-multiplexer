@@ -182,6 +182,16 @@ export type DialogContext =
   // worktree（20260920-git-worktree-actions）。**サーバへ聞いてから開く**ので、開く時点で中身が揃っている。
   | { kind: "worktreeCreate"; workspaceId: string; info: WorktreeListResult }
   | { kind: "worktreeOpen"; workspaceId: string; entries: WorktreeEntry[] }
+  /**
+   * worktree の削除の確認（20260924-worktree-remove）。`confirmClose`/`confirmReplacePane` と
+   * 同じ D23 の安全策——`ConfirmDialog.vue` が扱う。`sourceWorkspaceId` は一覧を開いた元の
+   * workspace（repo root 解決用。`worktree.remove` の `workspaceId` と同じ意味）。
+   * `openWorkspaceId` は削除対象の path が現在開いている workspace と一致する場合、その id
+   * （確認文言の出し分け用。閉じる処理自体はサーバ側が自動で行う）。
+   */
+  | { kind: "confirmWorktreeRemove"; sourceWorkspaceId: string; path: string; openWorkspaceId: string | null }
+  /** dirty で通常の削除が失敗したあとの `--force` 確認（同上。design「振る舞いの詳細」）。 */
+  | { kind: "confirmWorktreeRemoveForce"; sourceWorkspaceId: string; path: string; openWorkspaceId: string | null }
   // 手動グループ（20260923-workspace-grouping。herdr に前例が無い独自拡張）。
   // 新しいグループを作り、右クリック元の workspace をそのまま追加する（`NameDialog` を再利用）。
   | { kind: "createGroup"; workspaceId: string }

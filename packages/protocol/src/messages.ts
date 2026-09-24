@@ -342,6 +342,15 @@ export interface WorktreeCreateResult {
   path: string;
 }
 
+/**
+ * 既にある worktree checkout を消す（20260924-worktree-remove）。`workspaceId` は削除対象では
+ * なく、実行場所（repo root）を解決するための操作元の workspace——`path` が削除対象
+ * （`WorktreeEntry.path`）。対象が現在開いている workspace の cwd と一致すれば、成功後に
+ * その workspace も自動的に閉じる（design「振る舞いの詳細」）。
+ */
+export const WorktreeRemoveParams = z.object({ workspaceId, path: z.string().min(1), force: z.boolean().optional() });
+export type WorktreeRemoveParams = z.infer<typeof WorktreeRemoveParams>;
+
 // --- agent integration（20260923-agent-session-resume。6つ追加: 20260923-other-agents-session-resume）---
 
 /** `model.ts` の `AgentIntegrationKind` と値を揃える（別の型なので同期がずれないよう並びも揃える）。 */
@@ -420,6 +429,7 @@ export const METHOD_SCHEMAS = {
   "layout.set_split_ratio": LayoutSetSplitRatioParams,
   "worktree.list": WorktreeListParams,
   "worktree.create": WorktreeCreateParams,
+  "worktree.remove": WorktreeRemoveParams,
   "agent_integration.status": AgentIntegrationStatusParams,
   "agent_integration.install": AgentIntegrationInstallParams,
   "agent_integration.uninstall": AgentIntegrationUninstallParams,
@@ -470,6 +480,8 @@ export interface MethodResultMap {
   "layout.set_split_ratio": Record<string, never>;
   "worktree.list": WorktreeListResult;
   "worktree.create": WorktreeCreateResult;
+  /** 成功時のみ返る（`pane.close` と同じ形。失敗は例外——`{ok:false}` は無い）。 */
+  "worktree.remove": Record<string, never>;
   "agent_integration.status": AgentIntegrationStatusResult;
   "agent_integration.install": AgentIntegrationInstallResult;
   "agent_integration.uninstall": AgentIntegrationUninstallResult;

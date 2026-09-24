@@ -18,7 +18,7 @@ function makeWorkspace(id: string, overrides: Partial<Workspace> = {}): Workspac
 }
 
 function makeActions() {
-  return { confirmClose: vi.fn(), confirmReplacePane: vi.fn() };
+  return { confirmClose: vi.fn(), confirmReplacePane: vi.fn(), confirmWorktreeRemove: vi.fn(), confirmWorktreeRemoveForce: vi.fn(), openWorktree: vi.fn() };
 }
 
 function mountDialog(actions: ReturnType<typeof makeActions>) {
@@ -238,5 +238,140 @@ describe("ConfirmDialog — D&D での分割解除の確認（kind: confirmRepla
     await wrapper.vm.$nextTick();
     await wrapper.get("dialog").trigger("keydown", { key: "y" });
     expect(actions.confirmReplacePane).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 20260924-worktree-remove。
+describe("ConfirmDialog — worktree の削除の確認（kind: confirmWorktreeRemove / confirmWorktreeRemoveForce）", () => {
+  it("開いていない worktree なら「開いています」に触れないメッセージ", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".confirm-dialog-message").text()).toBe("この worktree を削除しますか？");
+  });
+
+  it("開いている workspace と一致すれば、閉じることに触れたメッセージになる（AC4）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: "w9" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".confirm-dialog-message").text()).toContain("workspace を閉じて worktree を削除しますか");
+  });
+
+  it("dirty での --force 確認は専用のメッセージ（AC6・AC7）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".confirm-dialog-message").text()).toContain("未コミットの変更が残っています");
+  });
+
+  it("確定ボタンの文言は「削除」——「閉じる」のままだと破壊的操作に見えない（decisions.md D1）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findAll("button")[1]!.text()).toBe("削除");
+  });
+
+  it("confirmClose の確定ボタンは従来どおり「閉じる」のまま（回帰確認）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "pane", id: "p1" }] });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findAll("button")[1]!.text()).toBe("閉じる");
+  });
+
+  it("role=alertdialog で開き、最初のフォーカスは「キャンセル」（AC-I4）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    const dialog = wrapper.get("dialog").element as HTMLDialogElement;
+    expect(dialog.open).toBe(true);
+    expect(document.activeElement).toBe(wrapper.findAll("button")[0]!.element);
+  });
+
+  it("チェックボックス（束ねた worktree）は出ない——worktree 削除は workspace 対象ではない", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+  });
+
+  it("「削除」ボタンで confirmWorktreeRemove を呼ぶ（AC-I2）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    await wrapper.findAll("button")[1]!.trigger("click");
+    expect(actions.confirmWorktreeRemove).toHaveBeenCalledTimes(1);
+    expect(actions.confirmWorktreeRemoveForce).not.toHaveBeenCalled();
+  });
+
+  it("「削除」ボタン（--force 確認側）で confirmWorktreeRemoveForce を呼ぶ（AC8）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    await wrapper.findAll("button")[1]!.trigger("click");
+    expect(actions.confirmWorktreeRemoveForce).toHaveBeenCalledTimes(1);
+    expect(actions.confirmWorktreeRemove).not.toHaveBeenCalled();
+  });
+
+  it("「キャンセル」ボタンは削除を送らず、一覧ダイアログへ戻る（openWorktree を呼ぶ。AC-I1・AC-I2）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    await wrapper.findAll("button")[0]!.trigger("click");
+    expect(actions.confirmWorktreeRemove).not.toHaveBeenCalled();
+    expect(actions.openWorktree).toHaveBeenCalledWith("w1");
+  });
+
+  it("Esc（dialog の cancel イベント）でも一覧ダイアログへ戻る", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w2", path: "/w/b", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("dialog").trigger("cancel");
+    expect(actions.confirmWorktreeRemoveForce).not.toHaveBeenCalled();
+    expect(actions.openWorktree).toHaveBeenCalledWith("w2");
+  });
+
+  it("y で削除を確定・n でキャンセル（一覧へ戻る）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("dialog").trigger("keydown", { key: "n" });
+    expect(actions.confirmWorktreeRemove).not.toHaveBeenCalled();
+    expect(actions.openWorktree).toHaveBeenCalledWith("w1");
+
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("dialog").trigger("keydown", { key: "y" });
+    expect(actions.confirmWorktreeRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirmClose の「キャンセル」は openWorktree を呼ばず、ただ閉じる（回帰確認）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    view.focusPane("p0");
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "pane", id: "p1" }] });
+    await wrapper.vm.$nextTick();
+    await wrapper.findAll("button")[0]!.trigger("click");
+    expect(actions.openWorktree).not.toHaveBeenCalled();
+    expect(view.dialogContext).toBeNull();
   });
 });
