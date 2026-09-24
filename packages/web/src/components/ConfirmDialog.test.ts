@@ -18,7 +18,7 @@ function makeWorkspace(id: string, overrides: Partial<Workspace> = {}): Workspac
 }
 
 function makeActions() {
-  return { confirmClose: vi.fn() };
+  return { confirmClose: vi.fn(), confirmReplacePane: vi.fn() };
 }
 
 function mountDialog(actions: ReturnType<typeof makeActions>) {
@@ -194,5 +194,49 @@ describe("ConfirmDialog — 束ねた worktree も一緒に閉じる", () => {
     view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "workspace", id: "w1" }] });
     await wrapper.vm.$nextTick();
     expect((wrapper.find('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false);
+  });
+});
+
+// 20260924-pane-dnd-split-move（review 指摘 must）：D&D での分割解除がドロップ先の busy な
+// pane を確認なしに閉じてしまっていたのを、既存の D23 の安全策と同じダイアログに乗せて直した。
+describe("ConfirmDialog — D&D での分割解除の確認（kind: confirmReplacePane）", () => {
+  it("busy なドロップ先の確認メッセージを出す", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmReplacePane", paneId: "p1", targetPaneId: "p2" });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    const dialog = wrapper.get("dialog").element as HTMLDialogElement;
+    expect(dialog.open).toBe(true);
+    expect(wrapper.get(".confirm-dialog-message").text()).toContain("閉じてドラッグした pane に置き換えますか");
+  });
+
+  it("「閉じる」ボタンで confirmReplacePane を呼ぶ（confirmClose は呼ばない）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmReplacePane", paneId: "p1", targetPaneId: "p2" });
+    await wrapper.vm.$nextTick();
+    await wrapper.findAll("button")[1]!.trigger("click");
+    expect(actions.confirmReplacePane).toHaveBeenCalledTimes(1);
+    expect(actions.confirmClose).not.toHaveBeenCalled();
+  });
+
+  it("linked worktree のチェックボックスは出ない（workspace 対象ではないため）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmReplacePane", paneId: "p1", targetPaneId: "p2" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+  });
+
+  it("y キーで confirmReplacePane を呼ぶ", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmReplacePane", paneId: "p1", targetPaneId: "p2" });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("dialog").trigger("keydown", { key: "y" });
+    expect(actions.confirmReplacePane).toHaveBeenCalledTimes(1);
   });
 });

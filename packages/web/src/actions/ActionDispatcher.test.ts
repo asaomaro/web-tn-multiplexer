@@ -462,6 +462,49 @@ describe("ActionDispatcher — 閉じる前の確認（D23。busy な pane を�
   });
 });
 
+// 20260924-pane-dnd-split-move（review 指摘 must）：中央ドロップでの分割解除（pane.replace）は
+// ドロップ先のプロセスを実際に終了させるため、既存の busy pane 確認（D23。上の describe）と
+// 同じ安全策を踏襲する。
+describe("ActionDispatcher — D&D での分割解除の確認（busy なドロップ先だけ。review 指摘 must）", () => {
+  it("replacePaneWithDrag: ドロップ先が busy でなければ確認せず直接送る", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.paneUpserted(makePane("p2", "t1", false));
+    makeDispatcher(conn).dispatcher.replacePaneWithDrag("p1", "p2");
+    expect(conn.requests).toEqual([["pane.replace", { paneId: "p1", targetPaneId: "p2" }]]);
+    expect(view.dialogContext).toBeNull();
+  });
+
+  it("replacePaneWithDrag: ドロップ先が busy なら確認ダイアログを開き、直接は送らない", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.paneUpserted(makePane("p2", "t1", true));
+    makeDispatcher(conn).dispatcher.replacePaneWithDrag("p1", "p2");
+    expect(conn.requests).toEqual([]);
+    expect(view.dialogContext).toEqual({ kind: "confirmReplacePane", paneId: "p1", targetPaneId: "p2" });
+  });
+
+  it("confirmReplacePane: 確定すると pane.replace を送り、ダイアログを閉じる", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmReplacePane", paneId: "p1", targetPaneId: "p2" });
+    makeDispatcher(conn).dispatcher.confirmReplacePane();
+    expect(conn.requests).toEqual([["pane.replace", { paneId: "p1", targetPaneId: "p2" }]]);
+    expect(view.dialogContext).toBeNull();
+  });
+
+  it("confirmReplacePane: 別の種類のダイアログが開いていたら何もしない", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "pane", id: "p9" }] });
+    makeDispatcher(conn).dispatcher.confirmReplacePane();
+    expect(conn.requests).toEqual([]);
+    expect(view.dialogContext).toEqual({ kind: "confirmClose", targets: [{ type: "pane", id: "p9" }] });
+  });
+});
+
 describe("ActionDispatcher — navigate", () => {
   it("enterMode(navigate) は現在の workspace を選択の初期値にする", () => {
     const conn = makeConnection();

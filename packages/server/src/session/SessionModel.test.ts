@@ -192,6 +192,162 @@ describe("SessionModel — focus / navigation", () => {
     });
   });
 
+  // 20260924-pane-dnd-split-move：ドラッグでの分割（縁へドロップ）。
+  describe("moveToEdge", () => {
+    it("縁が right/bottom なら既存の split と同じ並びになる（target=a, new=b）", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+
+      const ok = model.moveToEdge(p2, pane.id, "right");
+
+      expect(ok).toBe(true);
+      expect(model.getTab(tab.id)?.layout).toMatchObject({ dir: "right", a: { paneId: pane.id }, b: { paneId: p2 } });
+    });
+
+    it("縁が left/top なら a/b が入れ替わる（new=a, target=b）", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+
+      // p2 を pane の上端へ移す（元は右隣。now 上）。
+      const ok = model.moveToEdge(p2, pane.id, "top");
+
+      expect(ok).toBe(true);
+      expect(model.getTab(tab.id)?.layout).toMatchObject({ dir: "down", a: { paneId: p2 }, b: { paneId: pane.id } });
+    });
+
+    it("元あった場所の split は畳まれる（3枚の木で確認）", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      const { pane: right } = model.splitPane(pane.id, "right", undefined, p2, init);
+      const p3 = model.reserveNextPaneId();
+      model.splitPane(right.id, "down", undefined, p3, init);
+      // layout: right(pane, down(p2, p3))
+
+      model.moveToEdge(p3, pane.id, "left");
+
+      // p3 を消した後の (p2, p3) split は p2 だけに畳まれる。トップレベルの split（s1）自体は残り、
+      // その a 側（元は pane 単体だった場所）が「pane の左に p3」という新しい split に置き換わる。
+      expect(model.getTab(tab.id)?.layout).toEqual({
+        type: "split",
+        id: expect.any(String),
+        dir: "right",
+        ratio: 0.5,
+        a: {
+          type: "split",
+          id: expect.any(String),
+          dir: "right",
+          ratio: 0.5,
+          a: { type: "pane", paneId: p3 },
+          b: { type: "pane", paneId: pane.id },
+        },
+        b: { type: "pane", paneId: p2 },
+      });
+    });
+
+    it("自分自身の縁へは何もしない", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getTab(tab.id)?.layout;
+
+      expect(model.moveToEdge(pane.id, pane.id, "right")).toBe(false);
+      expect(model.getTab(tab.id)?.layout).toEqual(before);
+    });
+
+    it("別 tab の pane へは動かさない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const { pane: otherTabPane } = model.createWorkspace("/home/u", "other", init);
+
+      expect(model.moveToEdge(pane.id, otherTabPane.id, "right")).toBe(false);
+    });
+  });
+
+  // 20260924-pane-dnd-split-move：ドラッグでの分割解除（中央へドロップ）。research.md F5。
+  describe("replacePane", () => {
+    it("ドロップ先を閉じ、ドラッグした pane がその位置とスペースを引き継ぐ", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      const { pane: right } = model.splitPane(pane.id, "right", undefined, p2, init);
+      const p3 = model.reserveNextPaneId();
+      model.splitPane(right.id, "down", undefined, p3, init);
+      // layout: right(pane, down(p2, p3))
+
+      const result = model.replacePane(pane.id, p3);
+
+      expect(result?.removedPaneIds).toEqual([p3]);
+      // pane が p3 の旧位置（down split の b 側）を引き継ぎ、p2 が隣に残る。
+      // pane の旧位置（右分割の a 側）は畳まれ、p2 が昇格する。
+      expect(model.getTab(tab.id)?.layout).toEqual({
+        type: "split",
+        id: expect.any(String),
+        dir: "down",
+        ratio: 0.5,
+        a: { type: "pane", paneId: p2 },
+        b: { type: "pane", paneId: pane.id },
+      });
+      expect(model.getPane(p3)).toBeUndefined(); // レイアウトからだけでなく pane 一覧からも消える
+    });
+
+    it("両側で split が畳まれる（2 pane だけの tab でも成立する。research.md F5）", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+
+      const result = model.replacePane(pane.id, p2);
+
+      expect(result?.removedPaneIds).toEqual([p2]);
+      expect(model.getTab(tab.id)?.layout).toEqual({ type: "pane", paneId: pane.id });
+    });
+
+    it("ドロップ先が focus 中だったら、生き残った pane に focus が移る", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init); // splitPane は新しい pane (p2) を focus する
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(p2);
+
+      model.replacePane(pane.id, p2);
+
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(pane.id);
+    });
+
+    it("ドロップ先が zoom 中でも zoom を解除する（closePane と同じ。D100）", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+      model.zoomPane(p2, "on");
+
+      model.replacePane(pane.id, p2);
+
+      expect(model.getTab(tab.id)?.zoomedPaneId).toBeNull();
+    });
+
+    it("自分自身では何もしない", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getTab(tab.id)?.layout;
+
+      expect(model.replacePane(pane.id, pane.id)).toBeNull();
+      expect(model.getTab(tab.id)?.layout).toEqual(before);
+    });
+
+    it("別 tab の pane とは何もしない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const { pane: otherTabPane } = model.createWorkspace("/home/u", "other", init);
+
+      expect(model.replacePane(pane.id, otherTabPane.id)).toBeNull();
+    });
+  });
+
   it("cyclePane focuses the next pane in depth-first order, wrapping at the ends", () => {
     const model = new SessionModel();
     const { pane } = model.createWorkspace("/home/u", "api", init);

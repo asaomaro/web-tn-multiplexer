@@ -10,6 +10,10 @@ import { linkedWorktreeChildrenOf } from "../store/workspaceGrouping.js";
  * `role=alertdialog`・最初のフォーカスは「キャンセル」・`y`/`n` でも確定/取り消しできる。
  * 「束ねた worktree も一緒に閉じる」チェックボックス（20260923-workspace-grouping。herdr の
  * `close_group` 相当）は、対象が worktree 自動グループの本体（親）1件のときだけ出す。
+ *
+ * `kind === "confirmReplacePane"`（20260924-pane-dnd-split-move。review 指摘 must）も同じ
+ * ダイアログで扱う——D&D での分割解除（`pane.replace`）のドロップ先が busy なときの確認。
+ * `pane.close` と同じ D23 の安全策を踏襲する（既存の busy pane 確認と見た目・操作感を揃える）。
  */
 const session = useSessionStore();
 const view = useViewStore();
@@ -29,9 +33,14 @@ const TARGET_LABEL: Record<"pane" | "tab" | "workspace", string> = {
 
 const message = computed(() => {
   const ctx = view.dialogContext;
-  if (ctx?.kind !== "confirmClose") return "";
-  const labels = ctx.targets.map((t) => TARGET_LABEL[t.type]);
-  return `閉じますか？（${labels.join("・")}）`;
+  if (ctx?.kind === "confirmClose") {
+    const labels = ctx.targets.map((t) => TARGET_LABEL[t.type]);
+    return `閉じますか？（${labels.join("・")}）`;
+  }
+  if (ctx?.kind === "confirmReplacePane") {
+    return "ドロップ先の pane はまだ動作中です。閉じてドラッグした pane に置き換えますか？";
+  }
+  return "";
 });
 
 /** 対象が worktree 自動グループの本体（親）1件のときだけ、束ねられた linked worktree を返す（無ければ空）。 */
@@ -46,8 +55,8 @@ const linkedWorktrees = computed(() => {
 watch(
   () => view.dialogContext,
   (ctx) => {
-    if (ctx?.kind === "confirmClose") {
-      closeLinkedWorktrees.value = false; // 開くたびに既定オフへ戻す
+    if (ctx?.kind === "confirmClose" || ctx?.kind === "confirmReplacePane") {
+      closeLinkedWorktrees.value = false; // 開くたびに既定オフへ戻す（confirmClose 以外では未使用）
       void nextTick(() => {
         dialogEl.value?.showModal();
         cancelBtn.value?.focus();
@@ -60,7 +69,8 @@ watch(
 
 // `actions` を参照するので arrow function にする（`function` 宣言だと const 絞り込みが効かない）。
 const confirm = (): void => {
-  actions.confirmClose(closeLinkedWorktrees.value);
+  if (view.dialogContext?.kind === "confirmReplacePane") actions.confirmReplacePane();
+  else actions.confirmClose(closeLinkedWorktrees.value);
 };
 
 function cancel(): void {

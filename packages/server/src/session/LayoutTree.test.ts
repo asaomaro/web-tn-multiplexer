@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   cycleOrder,
   findSplit,
+  insertAtEdge,
   leaves,
   neighbor,
   remove,
@@ -57,6 +58,35 @@ describe("LayoutTree", () => {
       ratio: 0.5,
       a: { type: "pane", paneId: "p1" },
       b: { type: "pane", paneId: "p3" },
+    });
+  });
+
+  // 20260924-pane-dnd-split-move（design「インターフェース / データ構造 > LayoutTree.ts」）。
+  it("insertAtEdge: right/bottom は既存の split() と同じ結果（target=a, new=b）", () => {
+    const right = insertAtEdge(pane("p1"), "p1", "right", "p2", "s1");
+    expect(right).toEqual(split(pane("p1"), "p1", "right", "p2", "s1"));
+    const bottom = insertAtEdge(pane("p1"), "p1", "bottom", "p2", "s1");
+    expect(bottom).toEqual({ type: "split", id: "s1", dir: "down", ratio: 0.5, a: pane("p1"), b: pane("p2") });
+  });
+
+  it("insertAtEdge: left/top は a/b が入れ替わる（new=a, target=b）が dir は同じ軸のまま", () => {
+    const left = insertAtEdge(pane("p1"), "p1", "left", "p2", "s1");
+    expect(left).toEqual({ type: "split", id: "s1", dir: "right", ratio: 0.5, a: pane("p2"), b: pane("p1") });
+    const top = insertAtEdge(pane("p1"), "p1", "top", "p2", "s1");
+    expect(top).toEqual({ type: "split", id: "s1", dir: "down", ratio: 0.5, a: pane("p2"), b: pane("p1") });
+  });
+
+  it("insertAtEdge: ネストした木でも対象の葉だけを置き換える", () => {
+    let node = split(pane("p1"), "p1", "right", "p2", "s1");
+    node = insertAtEdge(node, "p2", "left", "p3", "s2");
+    expect(leaves(node)).toEqual(["p1", "p3", "p2"]);
+    expect(node).toEqual({
+      type: "split",
+      id: "s1",
+      dir: "right",
+      ratio: 0.5,
+      a: pane("p1"),
+      b: { type: "split", id: "s2", dir: "right", ratio: 0.5, a: pane("p3"), b: pane("p2") },
     });
   });
 

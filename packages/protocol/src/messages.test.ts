@@ -10,6 +10,8 @@ import {
   GroupToggleCollapsedParams,
   METHOD_SCHEMAS,
   NewCwd,
+  PaneMoveToEdgeParams,
+  PaneReplaceParams,
   PaneSplitParams,
   TabCreateParams,
   TabMoveParams,
@@ -90,6 +92,21 @@ describe("messages", () => {
     expect(GroupAddMemberParams.parse({ groupId: "g1", workspaceId: "w1" })).toEqual({ groupId: "g1", workspaceId: "w1" });
     expect(GroupRemoveMemberParams.parse({ workspaceId: "w1" })).toEqual({ workspaceId: "w1" });
     expect(GroupToggleCollapsedParams.parse({ groupId: "g1" })).toEqual({ groupId: "g1" });
+  });
+
+  // 20260924-pane-dnd-split-move（ドラッグでの分割。縁は4方向）。
+  it("validates pane.move_to_edge params (edge is top/bottom/left/right only)", () => {
+    expect(PaneMoveToEdgeParams.parse({ paneId: "p1", targetPaneId: "p2", edge: "left" })).toEqual({
+      paneId: "p1",
+      targetPaneId: "p2",
+      edge: "left",
+    });
+    expect(() => PaneMoveToEdgeParams.parse({ paneId: "p1", targetPaneId: "p2", edge: "up" })).toThrow();
+  });
+
+  // 20260924-pane-dnd-split-move（ドラッグでの分割解除）。
+  it("validates pane.replace params", () => {
+    expect(PaneReplaceParams.parse({ paneId: "p1", targetPaneId: "p2" })).toEqual({ paneId: "p1", targetPaneId: "p2" });
   });
 
   it("registers a schema for every method the WebSocket table defines", () => {

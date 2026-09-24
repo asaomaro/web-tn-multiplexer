@@ -628,6 +628,56 @@ export class SessionModel {
     return true;
   }
 
+  /**
+   * 既存の pane（`paneId`）を、別の pane（`targetPaneId`）の縁へ移して分割する
+   * （20260924-pane-dnd-split-move。design「振る舞いの詳細 > サーバ側」）。新しい pane は作らない。
+   * 自分自身・同一 tab でない pane への要求は何もせず false（`swapPaneWith` と同じ方針）。
+   */
+  moveToEdge(paneId: PaneId, targetPaneId: PaneId, edge: Layout.Edge): boolean {
+    if (paneId === targetPaneId) return false;
+    const pane = this.requirePane(paneId);
+    const target = this.panes.get(targetPaneId);
+    if (!target || target.tabId !== pane.tabId) return false;
+    const tab = this.requireTab(pane.tabId);
+    const withoutSource = Layout.remove(tab.layout, paneId);
+    // `paneId` が tab で唯一の pane なら `targetPaneId` は同じ tab に存在しえない（上のガードで
+    // 既に弾かれているはず）。念のための防御。
+    if (withoutSource === null) return false;
+    const splitId = this.nextId("s");
+    const newLayout = Layout.insertAtEdge(withoutSource, targetPaneId, edge, paneId, splitId);
+    this.tabs.set(tab.id, { ...tab, layout: newLayout });
+    return true;
+  }
+
+  /**
+   * `paneId`（ドラッグした pane。生き残る）が `targetPaneId`（ドロップ先。閉じる）の位置と
+   * スペースを引き継ぐ（20260924-pane-dnd-split-move。design「振る舞いの詳細 > サーバ側」。
+   * research.md F5：`swap` で位置を入れ替えてから `remove` で畳む）。プロセスの破棄は呼び出し側
+   * （`SessionService`）の責務——`closePane` と同じ層分け。
+   */
+  replacePane(paneId: PaneId, targetPaneId: PaneId): RemovalResult | null {
+    if (paneId === targetPaneId) return null;
+    const pane = this.requirePane(paneId);
+    const target = this.panes.get(targetPaneId);
+    if (!target || target.tabId !== pane.tabId) return null;
+    const tab = this.requireTab(pane.tabId);
+    const swapped = Layout.swap(tab.layout, paneId, targetPaneId);
+    const newLayout = Layout.remove(swapped, targetPaneId);
+    // 上のガードで `paneId`・`targetPaneId` は別々に同一 tab に存在することを確認済みなので、
+    // tab には最低2枚あり、ここで null になることは無い。念のための防御。
+    if (newLayout === null) return null;
+    this.panes.delete(targetPaneId);
+    const nextFocused = tab.focusedPaneId === targetPaneId ? paneId : tab.focusedPaneId;
+    this.tabs.set(tab.id, {
+      ...tab,
+      layout: newLayout,
+      focusedPaneId: nextFocused,
+      zoomedPaneId: null, // pane を閉じたら zoom を解除する（closePane と同じ。D100）
+    });
+    if (nextFocused !== tab.focusedPaneId) this.setFocus(tab.workspaceId, tab.id, nextFocused);
+    return { removedPaneIds: [targetPaneId], removedTabIds: [], closedWorkspaceId: null };
+  }
+
   zoomPane(paneId: PaneId, mode: "toggle" | "on" | "off"): void {
     const pane = this.requirePane(paneId);
     const tab = this.requireTab(pane.tabId);

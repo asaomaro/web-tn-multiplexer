@@ -4,6 +4,7 @@ import { computed, ref } from "vue";
 import type { Mode } from "../keys/actions.js";
 import type { ConnectionState } from "../net/ports.js";
 import type { MenuTarget } from "../term/MouseBridge.js";
+import type { Zone } from "../term/paneDragZone.js";
 
 const STORAGE_KEY = "wtm.view.v1";
 
@@ -171,6 +172,11 @@ export type DialogContext =
   // `currentAutoLabel` は開いた時点で名前が自動だったか（20260921-workspace-auto-label。変えずに確定したら送らない判定に使う）。
   | { kind: "renameWorkspace"; workspaceId: string; currentLabel: string; currentAutoLabel: boolean }
   | { kind: "confirmClose"; targets: { type: "pane" | "tab" | "workspace"; id: string }[] }
+  /**
+   * D&D での分割解除（`pane.replace`）の対象（`targetPaneId`）が busy なとき（20260924-pane-dnd-split-move。
+   * `confirmClose` と同じ D23 の安全策——review 指摘 must）。`paneId` はドラッグした側（生き残る）。
+   */
+  | { kind: "confirmReplacePane"; paneId: string; targetPaneId: string }
   | { kind: "help" }
   | { kind: "goto" }
   // worktree（20260920-git-worktree-actions）。**サーバへ聞いてから開く**ので、開く時点で中身が揃っている。
@@ -211,7 +217,11 @@ export const useViewStore = defineStore("view", () => {
    * pane 名ラベルをドラッグして入れ替える操作の一時状態（20260923-pane-name-dnd-swap。design「1.」）。
    * 複数の `PaneFrame` インスタンスをまたいで共有する必要があるためここに置く（`contextMenu` と同じ流儀）。
    */
-  const paneDrag = ref<{ sourcePaneId: string; overPaneId: string | null } | null>(null);
+  /**
+   * `overZone`（20260924-pane-dnd-split-move。design「クライアント状態」）: ホバー中の pane 内の
+   * どこ（縁/中央）に反応しているか。`overPaneId` が null のときは無意味なので併せて null にする。
+   */
+  const paneDrag = ref<{ sourcePaneId: string; overPaneId: string | null; overZone: Zone | null } | null>(null);
   /**
    * workspace 行・グループのヘッダー行の D&D の一時状態（20260923-workspace-grouping。`paneDrag` と
    * 同じ流儀）。`sourceIds` は動かす対象——通常の行なら `[workspace.id]`、グループのヘッダー行なら
@@ -334,13 +344,17 @@ export const useViewStore = defineStore("view", () => {
 
   /** ドラッグ開始（20260923-pane-name-dnd-swap。閾値を超えて初めて呼ぶ。design「5.」）。 */
   function startPaneDrag(paneId: string): void {
-    paneDrag.value = { sourcePaneId: paneId, overPaneId: null };
+    paneDrag.value = { sourcePaneId: paneId, overPaneId: null, overZone: null };
   }
 
-  /** ポインタ直下の pane が変わるたびに呼ぶ。無駄な再描画を避けるため同値なら何もしない。 */
-  function setPaneDragOver(paneId: string | null): void {
-    if (!paneDrag.value || paneDrag.value.overPaneId === paneId) return;
-    paneDrag.value = { ...paneDrag.value, overPaneId: paneId };
+  /**
+   * ポインタ直下の pane・ゾーンが変わるたびに呼ぶ（20260924-pane-dnd-split-move で `zone` 引数を
+   * 追加。呼び出し元は `PaneFrame.vue` の1箇所のみなので破壊的な拡張で問題ない。design D14 相当）。
+   * 無駄な再描画を避けるため両方とも同値なら何もしない。
+   */
+  function setPaneDragOver(paneId: string | null, zone: Zone | null = null): void {
+    if (!paneDrag.value || (paneDrag.value.overPaneId === paneId && paneDrag.value.overZone === zone)) return;
+    paneDrag.value = { ...paneDrag.value, overPaneId: paneId, overZone: paneId ? zone : null };
   }
 
   function endPaneDrag(): void {

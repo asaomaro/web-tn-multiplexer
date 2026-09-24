@@ -549,6 +549,37 @@ export class SessionService {
     return ok;
   }
 
+  /**
+   * 名前ラベルのドラッグを pane の縁へドロップしての分割（20260924-pane-dnd-split-move。
+   * `swapPaneWith` と同じ形——レイアウトだけを書き換え、`layout.updated` を1回配布する）。
+   */
+  moveToEdge(paneId: PaneId, targetPaneId: PaneId, edge: "top" | "bottom" | "left" | "right"): boolean {
+    const ok = this.model.moveToEdge(paneId, targetPaneId, edge);
+    if (ok) {
+      const pane = this.requirePane(paneId);
+      this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
+      this.persist.touch();
+    }
+    return ok;
+  }
+
+  /**
+   * 名前ラベルのドラッグを pane の中央へドロップしての分割解除（20260924-pane-dnd-split-move。
+   * design「振る舞いの詳細 > サーバ側」。`targetPaneId` のプロセスを実際に終了させる点は
+   * `closePane` と同じ経路——ただし `replacePane` は要求した pane（`paneId`）自身が必ず生き残るため、
+   * `closePane` のような tab/workspace の連鎖的な消滅・`recreateIfEmpty`（D24）は起こりえない。
+   */
+  replacePane(paneId: PaneId, targetPaneId: PaneId): boolean {
+    const pane = this.requirePane(paneId);
+    const result = this.model.replacePane(paneId, targetPaneId);
+    if (!result) return false;
+    for (const pid of result.removedPaneIds) this.terminals.dispose(pid);
+    for (const pid of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId: pid } });
+    this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
+    this.persist.touch();
+    return true;
+  }
+
   zoomPane(paneId: PaneId, mode: "toggle" | "on" | "off"): void {
     const pane = this.requirePane(paneId);
     this.model.zoomPane(paneId, mode);
