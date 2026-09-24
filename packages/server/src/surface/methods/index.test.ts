@@ -36,9 +36,17 @@ class FakeFanout implements OutputFanout {
   }
 }
 
+/** 20260924-dark-mode-report。呼ばれた回数だけ数える——`Mirror` 全体を実装する必要は無い。 */
+class FakeMirror {
+  notifyAppearanceMayHaveChangedCalls = 0;
+  notifyAppearanceMayHaveChanged(): void {
+    this.notifyAppearanceMayHaveChangedCalls++;
+  }
+}
+
 class FakeHost implements TerminalHost {
   readonly pid = 1;
-  readonly mirror = {} as TerminalHost["mirror"];
+  readonly mirror = new FakeMirror() as unknown as TerminalHost["mirror"];
   readonly fanout = new FakeFanout();
   private readonly exitListeners = new Set<(code: number) => void>();
   constructor(
@@ -138,6 +146,31 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
     if (bad.ok) throw new Error("unreachable");
     expect(bad.error.code).toBe("invalid_params");
     expect(ctx.clients.get(clientId)?.theme).toBe("gruvbox-light");
+  });
+
+  // 20260924-dark-mode-report。design「インターフェース / データ構造 > client.ts」。
+  it("client.theme は、全 pane の Mirror.notifyAppearanceMayHaveChanged を呼ぶ（push のトリガー）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const { pane: p1 } = await ctx.session.createWorkspace("/home/u", "w1");
+    const { pane: p2 } = await ctx.session.createWorkspace("/home/u2", "w2");
+    const m1 = ctx.terminals.get(p1.id)!.mirror as unknown as FakeMirror;
+    const m2 = ctx.terminals.get(p2.id)!.mirror as unknown as FakeMirror;
+
+    await ctx.surface.invoke(c, "client.theme", { theme: "nord" });
+
+    expect(m1.notifyAppearanceMayHaveChangedCalls).toBe(1);
+    expect(m2.notifyAppearanceMayHaveChangedCalls).toBe(1);
+  });
+
+  it("client.theme が invalid_params で失敗しても、pane への通知は呼ばない（副作用が漏れない）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const { pane } = await ctx.session.createWorkspace("/home/u", "w1");
+    const m = ctx.terminals.get(pane.id)!.mirror as unknown as FakeMirror;
+
+    const bad = await ctx.surface.invoke(c, "client.theme", { theme: "terminal" });
+
+    expect(bad.ok).toBe(false);
+    expect(m.notifyAppearanceMayHaveChangedCalls).toBe(0);
   });
 
   it("作る方式（tab・workspace・分割）は、作る前に作った人の操作の時刻を進める——起動の猶予の間の色の問い合わせにも作った人の配色で答える（20260921-theme-settings の decisions D13）", async () => {
