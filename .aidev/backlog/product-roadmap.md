@@ -227,7 +227,14 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] xterm.js のカーソルの描き方を決める: cursorStyle / cursorInactiveStyle をリポジトリで一度も設定しておらず（TerminalRegistry.ts の new Terminal）、フォーカスの無い pane のカーソルの見え方が xterm.js の既定任せ（出典: .aidev/works/20260920-ui-selection-visuals/design.md）
 - [ ] mobile.spec.ts の D105 が一式で走らせると落ちる（単独では通る）: 分割後に隠れた pane の rows が 41→38 に変わる。負荷でタイミングが変わると現れる競合で、20260918 の着手前コードでも一式では落ちる。E2E 一式が安定して緑にならない原因（出典: .aidev/works/20260920-ui-selection-visuals/decisions.md）
 - [ ] サイドバーの帯を下端に固定する: 行が多いと .sidebar-section-footer（新規・メニュー）が画面外へ流れ、「一度折りたたむ」以外に到達できないことがある（.sidebar-footer の折りたたみボタンは margin-top:auto で常に見える）。固定するには .sidebar の overflow-y を内側の入れ物へ移す必要があり、それは 20260920-ui-selection-visuals の AC3 の判定（.sidebar の scrollWidth）を空振りにするので、判定の作り直しと同時に行う（出典: .aidev/works/20260920-sidebar-tabbar-controls/design.md）
-- [ ] worktree の削除（git worktree remove）: 作成と一覧だけ実装したので、UI から片付けられない。時間切れ等で登録だけ残った中途半端な worktree も消せない（WorktreeService.ts:10 に対象外と明記）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+- [x] worktree の削除（git worktree remove）: 作成と一覧だけ実装したので、UI から片付けられない。時間切れ等で登録だけ残った中途半端な worktree も消せない（WorktreeService.ts:10 に対象外と明記）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+      一覧ダイアログの各行から削除できるようにした（`worktree.remove`）。開いている workspace
+      と一致すれば自動的に閉じる。dirty なら `--force` の確認を挟む2段階式（herdr と同じ）。
+      実測: `pnpm -s typecheck` exit 0（3パッケージ）・protocol/server/web 合計 2920 passed /
+      0 failed・`aidev coverage --strict` ac=16 gaps=0
+      （`.aidev/works/20260924-worktree-remove/test-result.md`）。
+      review round1 で見つかった2件の狭い既知の制約（多クライアント競合・lock 済み worktree）は
+      backlog に別途追加済み（下記2行。review.md round1）。
 - [ ] worktree の作成先を設定できるようにする: いまは ~/.wtm/worktrees 固定で、DefaultWorktreeService は root を受け取れるのに composeServer.ts:141 が渡していない。herdr の worktrees.directory 相当。E2E から逃がせないため spec 側で後片付けしている（D7）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] E2E が古いビルドを見る: pnpm -C packages/e2e test は再ビルドせず、@wtm/server の dist と packages/web/dist を読む。直さずに走らせても通ったように見える。test スクリプトか CI で build を前置する（D8）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] workspace のメニューをキーボードから開く: Sidebar.vue の行に tabindex も keydown も無く、右クリック（マウス）でしか開けない。pane の枠だけ PaneFrame.vue で対応済み。「worktree を開く…」がキーだけで到達できない原因（AC-I3 の制限）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
@@ -266,3 +273,5 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] クリップボード画像のリモート貼り付け: herdr は `remote_image_paste`（既定 Ctrl+V、`herdr --remote` 使用時だけ有効）でクライアントの画像クリップボードをリモートのペインへ貼り付けられるが、web-tn-multiplexer にはこれに相当する実装が無い（`packages/web/src/term/clipboard.ts` はテキストの readText/writeText のみ、画像用の navigator.clipboard.read()・ClipboardItem・サーバー側の画像アップロード経路とも未実装）。サーバーとブラウザが別マシンの構成（WSL2 のようにOSクリップボードが共有される環境を除く、純粋なリモート接続）では、pane 内のプロセスがクライアント側の画像クリップボードに触れる手段が無い。（出典: .aidev/works/20260923-workspace-grouping/review.md）
 - [ ] 複数クライアントで同じtabを見ているとき、片方のD&Dによる pane 分割解除（pane.replace）でドロップ先が閉じられると、そのpaneへローカルでfocusしていた別クライアントの focus 復帰先が想定とずれる: viewRepair.ts のフォールバック規則（閉じたpaneの代わりはレイアウト木の最初の葉。SessionModel.closePaneの規則をそのまま写したもの）は、SessionModel.replacePaneの「後継は必ずドラッグした pane 自身」という規則を知らない（pane.closed/layout.updated イベントに推奨後継のヒントが無いため、クライアント側では区別できない）。20260924-pane-dnd-split-move の cross-check で発見。直すには protocol（イベントへの後継ヒント追加）とviewRepair.ts双方の変更が要る。（出典: .aidev/works/20260924-pane-dnd-split-move/review.md）
 - [ ] レイアウトだけを書き換える pane 操作（swapPaneWith/moveToEdge/replacePane/moveToTab/moveToNewTab）はセッション全体のグローバル focus（this.focus）を更新しない: ローカル保存 view の無い新規クライアントが直後に再接続すると、移動先ではなく元の focus が指す pane へ復元されうる（20260924-pane-move-cross-tab decisions.md D4）
+- [ ] worktree 削除の確認ダイアログの openWorkspaceId は開いた瞬間のスナップショットで確定まで再評価されない: 複数クライアントが同じ repo を開いている状況で、確認ダイアログが開いている間に別クライアントがその path を新しく workspace として開くと、確定時にサーバはその workspace を黙って閉じる（AC4/US2 が求める確認が効かない狭い競合）。design が『一覧の即時同期は作らない』と決めた既存のトレードオフの範囲内（20260924-worktree-remove review.md round1）
+- [ ] worktree の削除で lock 済み（git worktree lock）の対象は classifyWorktreeRemoveError のどの分岐にもマッチせず worktree_failed に落ちる: --force 単体では削除できず（-f -f が要る）、利用者は汎用メッセージのまま行き詰まる（20260924-worktree-remove review.md round1。実機確認: fatal: cannot remove a locked working tree; use 'remove -f -f' to override or unlock first）

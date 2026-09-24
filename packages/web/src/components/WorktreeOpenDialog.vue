@@ -53,6 +53,18 @@ function choose(index: number): void {
   accept();
 }
 
+/**
+ * 削除の確認へ進む（20260924-worktree-remove。design「クライアント側」）。この一覧ダイアログ
+ * 自体は `ActionDispatcher.removeWorktree` が開く確認ダイアログに置き換わる——`view.dialogContext`
+ * は単一の値なので、この一覧は一旦消え、確認の確定・取り消し・完了のいずれでも
+ * `openWorktree` により開き直る（`ConfirmDialog.vue`/`ActionDispatcher.ts` が担う）。
+ */
+function remove(path: string): void {
+  const ctx = view.dialogContext;
+  if (ctx?.kind !== "worktreeOpen") return;
+  actions?.removeWorktree(ctx.workspaceId, path);
+}
+
 function cancel(): void {
   view.closeDialog();
 }
@@ -82,6 +94,13 @@ function onKeydown(ev: KeyboardEvent): void {
   if (ev.key === "ArrowUp" || ev.key === "k") {
     ev.preventDefault();
     move(-1);
+    return;
+  }
+  // 削除（20260924-worktree-remove。AC-I3）。既存のキーと衝突しない新しい割り当て。
+  if (ev.key === "Delete" || ev.key === "Backspace") {
+    ev.preventDefault();
+    const entry = entries.value[selected.value];
+    if (entry) remove(entry.path);
   }
 }
 </script>
@@ -108,8 +127,13 @@ function onKeydown(ev: KeyboardEvent): void {
         :aria-selected="index === selected"
         @click="choose(index)"
       >
-        <span class="worktree-open-dialog-branch">{{ entry.branch ?? "(detached)" }}</span>
-        <span class="worktree-open-dialog-path">{{ entry.path }}</span>
+        <div class="worktree-open-dialog-info">
+          <span class="worktree-open-dialog-branch">{{ entry.branch ?? "(detached)" }}</span>
+          <span class="worktree-open-dialog-path">{{ entry.path }}</span>
+        </div>
+        <!-- タブ順には乗せない（tabindex="-1"）——キーボードでの削除は Delete/Backspace に一本化し、
+             role="option" の中に2つ目のタブ停止点を作らない（design「クライアント側」）。 -->
+        <button type="button" class="worktree-open-dialog-delete" tabindex="-1" @click.stop="remove(entry.path)">削除</button>
       </li>
     </ul>
   </dialog>
@@ -141,10 +165,32 @@ function onKeydown(ev: KeyboardEvent): void {
 }
 .worktree-open-dialog-item {
   display: flex;
-  flex-direction: column;
-  gap: 0.2em;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6em;
   padding: 0.4em 0.6em;
   cursor: pointer;
+}
+.worktree-open-dialog-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  min-width: 0; /* 長いパスを .worktree-open-dialog-path の overflow-wrap に委ねる */
+}
+.worktree-open-dialog-delete {
+  flex: none;
+  background: none;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  color: inherit;
+  font-size: 0.85em;
+  padding: 0.2em 0.6em;
+  cursor: pointer;
+}
+.worktree-open-dialog-delete:hover {
+  background: var(--wtm-error-fg, #ff5555);
+  border-color: var(--wtm-error-fg, #ff5555);
+  color: var(--wtm-bg, #1e1f29);
 }
 .worktree-open-dialog-item:hover {
   background: var(--wtm-menu-hover-bg, #343746);

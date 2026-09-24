@@ -18,7 +18,7 @@ const ENTRIES: WorktreeEntry[] = [
 ];
 
 function makeActions() {
-  return { confirmWorktreeOpen: vi.fn() };
+  return { confirmWorktreeOpen: vi.fn(), removeWorktree: vi.fn() };
 }
 
 function mountDialog(actions: ReturnType<typeof makeActions>) {
@@ -106,5 +106,71 @@ describe("WorktreeOpenDialog（20260920-git-worktree-actions）", () => {
     const items = wrapper.findAll(".worktree-open-dialog-item");
     expect(items[0]!.attributes("aria-selected")).toBe("true");
     expect(items[1]!.attributes("aria-selected")).toBe("false");
+  });
+});
+
+// 20260924-worktree-remove。
+describe("WorktreeOpenDialog — 削除", () => {
+  it("削除ボタンで removeWorktree(workspaceId, path) を呼ぶ（AC1）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountDialog(actions);
+    await open(wrapper, view);
+    await wrapper.findAll(".worktree-open-dialog-delete")[1]!.trigger("click");
+    expect(actions.removeWorktree).toHaveBeenCalledWith("w1", "/w/feature");
+    expect(actions.confirmWorktreeOpen).not.toHaveBeenCalled(); // クリックの伝播で「開く」が誤発火しない（AC-I5）
+  });
+
+  it("削除ボタンのクリックは行の「開く」へ伝播しない（@click.stop。AC-I5）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountDialog(actions);
+    await open(wrapper, view);
+    const button = wrapper.findAll(".worktree-open-dialog-delete")[0]!;
+    await button.trigger("click");
+    expect(actions.removeWorktree).toHaveBeenCalledTimes(1);
+    expect(actions.confirmWorktreeOpen).not.toHaveBeenCalled();
+  });
+
+  it("削除ボタンはタブ順に乗らない（tabindex=-1。キーボードは Delete/Backspace に一本化）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    await open(wrapper, view);
+    for (const button of wrapper.findAll(".worktree-open-dialog-delete")) {
+      expect(button.attributes("tabindex")).toBe("-1");
+    }
+  });
+
+  it("Delete キーで、選択中の項目を削除する（AC-I3）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountDialog(actions);
+    await open(wrapper, view);
+    const dialog = wrapper.get("dialog");
+    await dialog.trigger("keydown", { key: "ArrowDown" }); // /w/feature を選ぶ
+    await dialog.trigger("keydown", { key: "Delete" });
+    expect(actions.removeWorktree).toHaveBeenCalledWith("w1", "/w/feature");
+  });
+
+  it("Backspace キーでも同様に削除する", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountDialog(actions);
+    await open(wrapper, view);
+    await wrapper.get("dialog").trigger("keydown", { key: "Backspace" }); // 先頭（既定選択）
+    expect(actions.removeWorktree).toHaveBeenCalledWith("w1", "/repo");
+  });
+
+  it("Delete/Backspace は既存の ↑↓/Enter/Escape と衝突しない（回帰確認）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountDialog(actions);
+    await open(wrapper, view);
+    const dialog = wrapper.get("dialog");
+    await dialog.trigger("keydown", { key: "ArrowDown" });
+    await dialog.trigger("keydown", { key: "ArrowUp" });
+    await dialog.trigger("keydown", { key: "Enter" });
+    expect(actions.confirmWorktreeOpen).toHaveBeenCalledWith("/repo"); // 選択が正しく先頭へ戻っている
+    expect(actions.removeWorktree).not.toHaveBeenCalled();
   });
 });

@@ -7,7 +7,7 @@ import { MemoryLogger } from "../log/Logger.js";
 import type { SessionService } from "../session/SessionService.js";
 import { makeTempDir } from "../persist/atomicFile.js";
 import { ChildProcessGitRunner } from "../infra/GitRunner.js";
-import { DefaultWorktreeService, classifyWorktreeError, defaultWorktreeRoot } from "./WorktreeService.js";
+import { DefaultWorktreeService, classifyWorktreeError, classifyWorktreeRemoveError, defaultWorktreeRoot } from "./WorktreeService.js";
 
 const git = new ChildProcessGitRunner();
 async function runGit(cwd: string, args: string[]): Promise<void> {
@@ -15,9 +15,22 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
   if (r.code !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
 }
 
-/** `getWorkspace` しか使わないので、そこだけ持つ最小の代役にする（git の振る舞いに集中するため）。 */
-function sessionWith(cwd: string | null): SessionService {
-  return { getWorkspace: (): Workspace | undefined => (cwd === null ? undefined : ({ cwd } as Workspace)) } as unknown as SessionService;
+/**
+ * `getWorkspace`（一覧・作成用）に加え、20260924-worktree-remove から `snapshot`（cwd→workspace
+ * の逆引き）・`closeWorkspace`（実際には閉じず、呼ばれた id を記録するだけ）も持つ代役
+ * （git の振る舞いに集中するため）。`openWorkspaces` は「今開いている workspace」として
+ * `snapshot().workspaces` に載せる。
+ */
+function sessionWith(cwd: string | null, openWorkspaces: Workspace[] = []): SessionService & { closedWorkspaceIds: string[] } {
+  const closedWorkspaceIds: string[] = [];
+  return {
+    getWorkspace: (): Workspace | undefined => (cwd === null ? undefined : ({ cwd } as Workspace)),
+    snapshot: () => ({ workspaces: openWorkspaces }),
+    closeWorkspace: async (id: string) => {
+      closedWorkspaceIds.push(id);
+    },
+    closedWorkspaceIds,
+  } as unknown as SessionService & { closedWorkspaceIds: string[] };
 }
 
 describe("DefaultWorktreeService（本物の git を使う。既存の GitInfoPoller.test.ts と同じ流儀）", () => {
@@ -151,6 +164,76 @@ describe("DefaultWorktreeService（本物の git を使う。既存の GitInfoPo
     await expect(svc.list("w1")).rejects.toBeInstanceOf(RpcError);
     await expect(svc.list("w1")).rejects.toMatchObject({ code: "worktree_failed" });
   });
+
+  // 20260924-worktree-remove。
+  describe("remove", () => {
+    it("成功すると、その worktree は一覧から消える。開いている workspace は無いので closeWorkspace は呼ばない", async () => {
+      const created = await make().create("w1", "feature/x");
+      const session = sessionWith(repo); // openWorkspaces 無し
+      const svc = new DefaultWorktreeService(session, git, new MemoryLogger(), root, () => 0);
+
+      await svc.remove("w1", created.path, false);
+
+      const after = await make().list("w1");
+      expect(after.entries.map((e) => e.branch)).not.toContain("feature/x");
+      expect(session.closedWorkspaceIds).toEqual([]);
+    });
+
+    it("開いている workspace の cwd と一致すれば、成功後にその workspace を閉じる（AC5・AC10）", async () => {
+      const created = await make().create("w1", "feature/y");
+      const session = sessionWith(repo, [{ id: "w9", cwd: created.path } as Workspace]);
+      const svc = new DefaultWorktreeService(session, git, new MemoryLogger(), root, () => 0);
+
+      await svc.remove("w1", created.path, false);
+
+      expect(session.closedWorkspaceIds).toEqual(["w9"]);
+    });
+
+    // taskcheck の must 指摘：design の最重要の安全策（git worktree remove を先に実行し、
+    // 成功したときだけ close する）を、削除対象が実際に開いている workspace と一致する状況で
+    // 直接確かめる——一致する候補が無いと、close 呼び出しの順序を壊しても検出できない。
+    it("開いている workspace と一致していても、dirty で失敗すれば closeWorkspace は呼ばない（design の最重要の安全策）", async () => {
+      const created = await make().create("w1", "feature/dirty");
+      await writeFile(join(created.path, "untracked.txt"), "x");
+      const session = sessionWith(repo, [{ id: "w9", cwd: created.path } as Workspace]);
+      const svc = new DefaultWorktreeService(session, git, new MemoryLogger(), root, () => 0);
+
+      await expect(svc.remove("w1", created.path, false)).rejects.toMatchObject({ code: "worktree_dirty" });
+
+      const after = await make().list("w1");
+      expect(after.entries.map((e) => e.branch)).toContain("feature/dirty"); // 消えていない
+      expect(session.closedWorkspaceIds).toEqual([]); // 先に close していない
+    });
+
+    it("dirty でも --force を付ければ削除できる（AC7・AC8）", async () => {
+      const created = await make().create("w1", "feature/force");
+      await writeFile(join(created.path, "untracked.txt"), "x");
+      const session = sessionWith(repo, [{ id: "w9", cwd: created.path } as Workspace]);
+      const svc = new DefaultWorktreeService(session, git, new MemoryLogger(), root, () => 0);
+
+      await svc.remove("w1", created.path, true);
+
+      const after = await make().list("w1");
+      expect(after.entries.map((e) => e.branch)).not.toContain("feature/force");
+      expect(session.closedWorkspaceIds).toEqual(["w9"]); // dirty 経路でも、成功すれば同じく閉じる
+    });
+
+    it("既に worktree でない対象は worktree_not_a_worktree（AC9）", async () => {
+      const notAWorktree = await makeTempDir("wtm-worktree-not-a-worktree-");
+      const svc = new DefaultWorktreeService(sessionWith(repo), git, new MemoryLogger(), root, () => 0);
+      await expect(svc.remove("w1", notAWorktree, false)).rejects.toMatchObject({ code: "worktree_not_a_worktree" });
+    });
+
+    it("main working tree（clone した元のディレクトリ）は削除できない: worktree_is_main", async () => {
+      const svc = new DefaultWorktreeService(sessionWith(repo), git, new MemoryLogger(), root, () => 0);
+      await expect(svc.remove("w1", repo, false)).rejects.toMatchObject({ code: "worktree_is_main" });
+    });
+
+    it("workspace が無ければ not_found（cwdOf と同じ経路）", async () => {
+      const svc = new DefaultWorktreeService(sessionWith(null), git, new MemoryLogger(), root, () => 0);
+      await expect(svc.remove("missing", "/anywhere", false)).rejects.toMatchObject({ code: "not_found" });
+    });
+  });
 });
 
 describe("classifyWorktreeError", () => {
@@ -179,6 +262,34 @@ describe("classifyWorktreeError", () => {
 
   it("知らない理由は worktree_failed", () => {
     expect(classifyWorktreeError("fatal: something else\n")).toBe("worktree_failed");
+  });
+});
+
+// 20260924-worktree-remove。文字列は design.md「依拠する既存の事実」参照
+// （dirty・not_a_working_tree・main working tree はこのリポジトリの git 2.43 で実測済み）。
+describe("classifyWorktreeRemoveError", () => {
+  it("未コミットの変更が残っている（実測）", () => {
+    const stderr = "fatal: '../wt1' contains modified or untracked files, use --force to delete it\n";
+    expect(classifyWorktreeRemoveError(stderr)).toBe("worktree_dirty");
+  });
+
+  // **未検証**（herdr のソースにのみ確認がある文字列。このリポジトリに submodule が無く実機未検証。
+  // design.md「実現性 / リスク」参照）。
+  it("submodule を含む場合も dirty と同じ扱い（--force で解決するため。未検証・herdr 由来の文字列）", () => {
+    const stderr = "fatal: working trees containing submodules cannot be moved or removed\n";
+    expect(classifyWorktreeRemoveError(stderr)).toBe("worktree_dirty");
+  });
+
+  it("既に worktree でない", () => {
+    expect(classifyWorktreeRemoveError("fatal: '../does-not-exist' is not a working tree\n")).toBe("worktree_not_a_worktree");
+  });
+
+  it("main working tree", () => {
+    expect(classifyWorktreeRemoveError("fatal: '.' is a main working tree\n")).toBe("worktree_is_main");
+  });
+
+  it("知らない理由は worktree_failed", () => {
+    expect(classifyWorktreeRemoveError("fatal: something else\n")).toBe("worktree_failed");
   });
 });
 

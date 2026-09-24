@@ -7,10 +7,14 @@ import { generatedBranchSlug, parseWorktreeListPorcelain, repoNameFromGitCommonD
 
 const GIT_TIMEOUT_MS = 10_000; // `worktree add` は大きな repo だと数秒かかる
 
-/** worktree の一覧と作成（20260920-git-worktree-actions）。**削除はこの work の対象外**。 */
+/**
+ * worktree の一覧・作成・削除（一覧・作成は 20260920-git-worktree-actions。
+ * 削除は 20260924-worktree-remove で追加）。
+ */
 export interface WorktreeService {
   list(workspaceId: string): Promise<WorktreeListResult>;
   create(workspaceId: string, branch: string): Promise<WorktreeCreateResult>;
+  remove(workspaceId: string, path: string, force: boolean): Promise<void>;
 }
 
 /** 作成先の根。herdr は `~/.herdr/worktrees`。`/` 区切りに正規化して返す（web がそのまま連結する）。 */
@@ -42,6 +46,23 @@ export function classifyWorktreeError(
   // `fatal: cannot lock ref 'refs/heads/foo/bar': 'refs/heads/foo' exists; ...`）。
   // Git のブランチは refs のディレクトリなので、`foo` と `foo/bar` は同時に存在できない。
   if (/cannot lock ref .*exists; cannot create/.test(line)) return "worktree_invalid_branch";
+  return "worktree_failed";
+}
+
+/**
+ * `git worktree remove` の失敗を種類に分ける（`classifyWorktreeError` の `remove` 版。
+ * 20260924-worktree-remove。design「依拠する既存の事実」で実機確認した文字列）。
+ */
+export function classifyWorktreeRemoveError(
+  stderr: string,
+): "worktree_dirty" | "worktree_not_a_worktree" | "worktree_is_main" | "worktree_failed" {
+  const line = stderr.split("\n").find((l) => /^(fatal|error):/.test(l.trim())) ?? "";
+  // untracked/modified なファイルが残っている・submodule を含む、のどちらも `--force` で解決する
+  // 同じ種類として扱う（design「依拠する既存の事実」。herdr の分類と同じ）。
+  if (/contains modified or untracked files/.test(line)) return "worktree_dirty";
+  if (/working trees containing submodules cannot be moved or removed/.test(line)) return "worktree_dirty";
+  if (/is not a working tree/.test(line)) return "worktree_not_a_worktree";
+  if (/is a main working tree/.test(line)) return "worktree_is_main";
   return "worktree_failed";
 }
 
@@ -119,6 +140,24 @@ export class DefaultWorktreeService implements WorktreeService {
       throw new RpcError(code, `git worktree add failed (${code})`);
     }
     return { path: await this.recordedPath(path) };
+  }
+
+  /**
+   * worktree checkout を消す（20260924-worktree-remove。design「振る舞いの詳細」）。
+   * **`git worktree remove` を先に実行し、成功したときだけ開いている workspace を閉じる**——
+   * 逆にすると、dirty で失敗した場合に動いているシェルを先に失う（design「設計方針」）。
+   */
+  async remove(workspaceId: string, path: string, force: boolean): Promise<void> {
+    const cwd = this.cwdOf(workspaceId);
+    const args = ["worktree", "remove", ...(force ? ["--force"] : []), path];
+    const removed = await this.run(cwd, args);
+    if (removed.code !== 0) {
+      const code = classifyWorktreeRemoveError(removed.stderr);
+      this.log.warn("worktree remove failed", { workspaceId, path, force, code, stderr: removed.stderr.trim() });
+      throw new RpcError(code, `git worktree remove failed (${code})`);
+    }
+    const openWorkspace = this.session.snapshot().workspaces.find((w) => w.cwd === path);
+    if (openWorkspace) await this.session.closeWorkspace(openWorkspace.id);
   }
 
   /**

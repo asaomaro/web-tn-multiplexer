@@ -24,6 +24,12 @@ const MESSAGES: Record<ErrorCode, string> = {
   worktree_invalid_branch: "そのブランチ名は Git が受け付けません（空白などは使えません）。別の名前にしてください。",
   // **「作成」と言い切らない**——一覧の取得の失敗にも同じコードを使うので（`WorktreeService.list`）。
   worktree_failed: "worktree の操作に失敗しました。サーバのログを確かめてください。",
+  // worktree の削除（20260924-worktree-remove）。`worktree_dirty` は通常 `sendWorktreeRemove`
+  // （`ActionDispatcher.ts`）が catch して `--force` の確認へ進むため、ここへは通常来ない——
+  // 防御的に登録しておく（想定外の経路で表に出た場合の保険）。
+  worktree_dirty: "この worktree には未コミットの変更が残っています。",
+  worktree_not_a_worktree: "この worktree は既に見つかりません。一覧を開き直しました。",
+  worktree_is_main: "これはメインの作業ツリーのため削除できません。",
 };
 
 /**

@@ -1233,6 +1233,193 @@ describe("ActionDispatcher — worktree", () => {
   });
 });
 
+// 20260924-worktree-remove。
+describe("ActionDispatcher — worktree の削除", () => {
+  it("removeWorktree：開いている workspace の cwd と一致しなければ openWorkspaceId は null（AC1）", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    dispatcher.removeWorktree("w1", "/w/a");
+    expect(view.dialogContext).toEqual({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+  });
+
+  it("removeWorktree：開いている workspace の cwd と一致すれば、その id が openWorkspaceId に入る（AC4）", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w9", ["t9"], { cwd: "/w/a" }));
+    dispatcher.removeWorktree("w1", "/w/a");
+    expect(useViewStore(pinia).dialogContext).toEqual({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: "w9" });
+  });
+
+  it("confirmWorktreeRemove：worktree.remove(force:false) を送り、成功すると一覧を開き直す（AC2・AC3・AC-I1）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["worktree.remove"] = {};
+    conn.resolveWith["worktree.list"] = { worktreeRoot: "/root", repoName: "wtm", suggestedBranch: "s", entries: [] };
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+
+    dispatcher.confirmWorktreeRemove();
+
+    expect(conn.requests[0]).toEqual(["worktree.remove", { workspaceId: "w1", path: "/w/a", force: false }]);
+    expect(view.dialogContext).toBeNull(); // 送った時点で一覧の確認ダイアログは閉じている
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(conn.requests.map(([m]) => m)).toContain("worktree.list"); // 成功後、一覧を開き直す
+  });
+
+  it("confirmWorktreeRemove：削除対象が一覧を開いた元の workspace 自身なら、成功後に openWorktree を呼ばない（review round1 の should 指摘。AC3）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["worktree.remove"] = {};
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    // openWorkspaceId === sourceWorkspaceId：一覧を開いた元の workspace 自身を削除する。
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: "w1" });
+
+    dispatcher.confirmWorktreeRemove();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // w1 はサーバ側で既に閉じられている——そこから一覧を開き直すと not_found になるので呼ばない
+    // （view の移動先は既存の repairView に任せる）。
+    expect(conn.requests.map(([m]) => m)).not.toContain("worktree.list");
+  });
+
+  it("応答を待つ間に他のダイアログが開いていたら、成功しても奪わない（review round1 の should 指摘）", async () => {
+    const conn = makeConnection();
+    let resolveRemove: (v: unknown) => void = () => undefined;
+    conn.request = function <M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+      this.requests.push([method, params]);
+      return new Promise((r) => (resolveRemove = r as (v: unknown) => void));
+    };
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+
+    dispatcher.confirmWorktreeRemove();
+    view.openDialogWithContext({ kind: "help" }); // 応答が返る前に、別の操作で別のダイアログが開いた
+    resolveRemove({});
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(conn.requests.map(([m]) => m)).not.toContain("worktree.list"); // 一覧を開き直して奪わない
+    expect(view.dialogContext).toEqual({ kind: "help" }); // 開いていたダイアログのまま
+  });
+
+  it("応答を待つ間に他のダイアログが開いていたら、dirty で失敗しても --force 確認を開かない（同上）", async () => {
+    const conn = makeConnection();
+    let rejectRemove: (err: unknown) => void = () => undefined;
+    conn.request = function <M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+      this.requests.push([method, params]);
+      return new Promise((_r, rej) => (rejectRemove = rej));
+    };
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+
+    dispatcher.confirmWorktreeRemove();
+    view.openDialogWithContext({ kind: "help" });
+    rejectRemove(new Error("worktree_dirty: from server"));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(view.dialogContext).toEqual({ kind: "help" }); // confirmWorktreeRemoveForce に奪われない
+  });
+
+  it("confirmWorktreeRemove：dirty で失敗すると、一覧へは戻らず --force 確認を開く（AC6・AC7）", async () => {
+    const conn = makeConnection();
+    conn.rejectWith["worktree.remove"] = "worktree_dirty";
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: "w9" });
+
+    dispatcher.confirmWorktreeRemove();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(view.dialogContext).toEqual({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: "w9" });
+    expect(conn.requests.map(([m]) => m)).not.toContain("worktree.list"); // まだ一覧には戻らない
+    expect(view.toasts.length).toBe(0); // dirty はトーストではなく確認で伝える
+  });
+
+  it("confirmWorktreeRemove：dirty 以外の失敗は、トーストで知らせてから一覧を開き直す（AC9）", async () => {
+    const conn = makeConnection();
+    conn.rejectWith["worktree.remove"] = "worktree_not_a_worktree";
+    // entries を空にしない——空だと openWorktree 自身が追加のトーストを出し、件数の検証が壊れる。
+    conn.resolveWith["worktree.list"] = { worktreeRoot: "/root", repoName: "wtm", suggestedBranch: "s", entries: [{ path: "/w/other", branch: "other" }] };
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+
+    dispatcher.confirmWorktreeRemove();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(view.toasts.length).toBe(1);
+    expect(view.toasts[0]!.message).toBe(clientErrorMessage("worktree_not_a_worktree"));
+    expect(conn.requests.map(([m]) => m)).toContain("worktree.list"); // 一覧を開き直して戻す
+  });
+
+  it("confirmWorktreeRemoveForce：worktree.remove(force:true) を送る（AC8）", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+
+    dispatcher.confirmWorktreeRemoveForce();
+
+    expect(conn.requests[0]).toEqual(["worktree.remove", { workspaceId: "w1", path: "/w/a", force: true }]);
+  });
+
+  it("confirmWorktreeRemoveForce：force 済みの再試行が再び dirty で失敗しても、--force 確認を繰り返さない（無限ループ防止）", async () => {
+    const conn = makeConnection();
+    conn.rejectWith["worktree.remove"] = "worktree_dirty";
+    // entries を空にしない——空だと openWorktree 自身が追加のトーストを出し、件数の検証が壊れる。
+    conn.resolveWith["worktree.list"] = { worktreeRoot: "/root", repoName: "wtm", suggestedBranch: "s", entries: [{ path: "/w/other", branch: "other" }] };
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+
+    dispatcher.confirmWorktreeRemoveForce();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // トーストで知らせて一覧を開き直す（confirmWorktreeRemoveForce をもう一度開いて無限に確認を
+    // 繰り返すことはしない——`force: true` での再試行は `!force` のガードで dirty 分岐に入らない）。
+    expect(view.dialogContext).toMatchObject({ kind: "worktreeOpen" });
+    expect(view.toasts.length).toBe(1);
+    expect(conn.requests.map(([m]) => m)).toContain("worktree.list");
+  });
+
+  it("confirmWorktreeRemove：別の種類のダイアログが開いていたら何もしない", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "pane", id: "p9" }] });
+    dispatcher.confirmWorktreeRemove();
+    expect(conn.requests).toEqual([]);
+    expect(view.dialogContext).toEqual({ kind: "confirmClose", targets: [{ type: "pane", id: "p9" }] });
+  });
+
+  it("confirmWorktreeRemoveForce：別の種類のダイアログが開いていたら何もしない", () => {
+    const conn = makeConnection();
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    dispatcher.confirmWorktreeRemoveForce();
+    expect(conn.requests).toEqual([]);
+    expect(view.dialogContext).toEqual({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+  });
+});
+
 // 20260923-workspace-grouping。
 describe("ActionDispatcher — workspace の並べ替え", () => {
   it("moveWorkspace: 表示中の workspace を対象に workspace.move を送る", () => {

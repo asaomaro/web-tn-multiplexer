@@ -296,6 +296,75 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   }
 
   /**
+   * worktree 一覧の行から削除を実行する（20260924-worktree-remove）。確認を経る
+   * （design「クライアント側」・AC-I1・AC-I2）。現在開いている workspace の cwd と一致すれば、
+   * 確認の文言でそれが伝わる（AC4）。
+   */
+  removeWorktree(sourceWorkspaceId: string, path: string): void {
+    const openWorkspace = [...this.session.workspaces.values()].find((w) => w.cwd === path);
+    this.view.openDialogWithContext({
+      kind: "confirmWorktreeRemove",
+      sourceWorkspaceId,
+      path,
+      openWorkspaceId: openWorkspace?.id ?? null,
+    });
+  }
+
+  confirmWorktreeRemove(): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "confirmWorktreeRemove") return;
+    this.view.closeDialog();
+    this.sendWorktreeRemove(ctx.sourceWorkspaceId, ctx.path, false, ctx.openWorkspaceId);
+  }
+
+  /** dirty で通常の削除が失敗したあとの `--force` での再実行（AC7・AC8）。 */
+  confirmWorktreeRemoveForce(): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "confirmWorktreeRemoveForce") return;
+    this.view.closeDialog();
+    this.sendWorktreeRemove(ctx.sourceWorkspaceId, ctx.path, true, ctx.openWorkspaceId);
+  }
+
+  /**
+   * `worktree.remove` を送る。成功・dirty 以外の失敗のときは `openWorktree` で一覧を開き直す
+   * ——`view.dialogContext` は単一の値で、一覧ダイアログの上に確認を「重ねる」ことはできない
+   * ため（design「設計方針」）。dirty で force 無しの初回が失敗した場合だけ、一覧へは戻らず
+   * `--force` 確認へ進む。
+   * **2つの例外**（review round1 の should 指摘）: (1) 削除対象が一覧を開いた元の workspace
+   * 自身だった場合、成功時はその workspace 自体が既に閉じられているため一覧を開き直さない
+   * （view の移動先は既存の `repairView` に任せる）。(2) RPC の応答を待つ間に別の操作で
+   * 他のダイアログが開いていたら、それを奪わない。
+   */
+  private sendWorktreeRemove(sourceWorkspaceId: string, path: string, force: boolean, openWorkspaceId: string | null): void {
+    this.conn
+      .request("worktree.remove", { workspaceId: sourceWorkspaceId, path, force })
+      .then(() => {
+        // 応答を待つ間に別の操作で他のダイアログが開いていたら、それを奪わない
+        // （review round1 の should 指摘。20260924-pane-move-cross-tab の D2 と同じ考え方）。
+        if (this.view.dialogContext !== null) return;
+        // 削除対象が「一覧を開いた元の workspace」自身だった場合、その workspace は
+        // サーバ側で既に閉じられている——そこから一覧を開き直すことはできない（`not_found` に
+        // なる）。view の移動先は既存の `repairView`（`StoreAdapter.ts`）に任せる
+        // （review round1 の should 指摘）。
+        if (sourceWorkspaceId === openWorkspaceId) return;
+        this.openWorktree(sourceWorkspaceId); // 更新された一覧を開き直す（AC2・AC3・AC-I1）
+      })
+      .catch((err: unknown) => {
+        if (!force && errorCodeOf(err) === "worktree_dirty") {
+          if (this.view.dialogContext === null) {
+            this.view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId, path, openWorkspaceId });
+          }
+          return;
+        }
+        // トーストは常に出す（失敗した事実は、他のダイアログが開いていても伝えてよい）。
+        this.view.toast(worktreeErrorMessage(err));
+        // 何も変わっていないので、削除元の workspace は必ず生きている——一覧を開き直して戻す
+        // （AC9・AC-I1）。他のダイアログを奪わないことだけ守る。
+        if (this.view.dialogContext === null) this.openWorktree(sourceWorkspaceId);
+      });
+  }
+
+  /**
    * その場所を cwd に workspace を作って表示を移す（作成と一覧の共通の後半）。
    * **label にブランチ名を渡す**（review ラウンド1）。渡さなければサーバが worktree の根のフォルダ名を自動の名前にする
    * （20260921-workspace-auto-label。以前は一律に `"1"` で、worktree を 2 つ作ると `1` が並んだ）が、ダイアログで選んだブランチ名のほうが
