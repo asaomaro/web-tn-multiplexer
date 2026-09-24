@@ -11,6 +11,8 @@ import {
   METHOD_SCHEMAS,
   NewCwd,
   PaneMoveToEdgeParams,
+  PaneMoveToNewTabParams,
+  PaneMoveToTabParams,
   PaneReplaceParams,
   PaneSplitParams,
   TabCreateParams,
@@ -107,6 +109,16 @@ describe("messages", () => {
   // 20260924-pane-dnd-split-move（ドラッグでの分割解除）。
   it("validates pane.replace params", () => {
     expect(PaneReplaceParams.parse({ paneId: "p1", targetPaneId: "p2" })).toEqual({ paneId: "p1", targetPaneId: "p2" });
+  });
+
+  // 20260924-pane-move-cross-tab（ドラッグで tab バーの tab へ移動）。
+  it("validates pane.move_to_tab params", () => {
+    expect(PaneMoveToTabParams.parse({ paneId: "p1", targetTabId: "t2" })).toEqual({ paneId: "p1", targetTabId: "t2" });
+  });
+
+  // 20260924-pane-move-cross-tab（ドラッグでサイドバーの workspace 行へ移動）。
+  it("validates pane.move_to_new_tab params", () => {
+    expect(PaneMoveToNewTabParams.parse({ paneId: "p1", targetWorkspaceId: "w2" })).toEqual({ paneId: "p1", targetWorkspaceId: "w2" });
   });
 
   it("registers a schema for every method the WebSocket table defines", () => {

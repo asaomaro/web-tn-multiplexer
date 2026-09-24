@@ -505,6 +505,136 @@ describe("ActionDispatcher — D&D での分割解除の確認（busy なドロ�
   });
 });
 
+describe("ActionDispatcher — D&D による別 tab・別 workspace への移動（20260924-pane-move-cross-tab）", () => {
+  it("movePaneToTab: pane.move_to_tab を送り、応答が ok なら移動先の tab（別 workspace 含む）へ表示を切り替える（AC8・AC-I4）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["pane.move_to_tab"] = { ok: true };
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w2", ["t2"]));
+    session.tabUpserted(makeTab("t2", "w2"));
+    view.setView("w1", "t1");
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.movePaneToTab("p1", "t2");
+    expect(conn.requests).toEqual([["pane.move_to_tab", { paneId: "p1", targetTabId: "t2" }]]);
+    // 応答が返るまでは表示を切り替えない（design「エラー処理」。失敗時に何も起きていないのと区別する）。
+    expect(view.workspaceId).toBe("w1");
+    await flush();
+    expect(view.workspaceId).toBe("w2");
+    expect(view.tabId).toBe("t2");
+    expect(view.focusedPaneId).toBe("p1");
+  });
+
+  it("movePaneToTab: 応答を待つ間にユーザーが別の tab へ既に移っていたら、応答到着時に view を追わない（review round1 の should 指摘）", async () => {
+    const conn = makeConnection();
+    let resolveMove: (v: unknown) => void = () => undefined;
+    conn.request = function <M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+      this.requests.push([method, params]);
+      return new Promise((r) => (resolveMove = r as (v: unknown) => void));
+    };
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w2", ["t2"]));
+    session.tabUpserted(makeTab("t2", "w2"));
+    session.tabUpserted(makeTab("t9", "w1"));
+    view.setView("w1", "t1");
+    const { dispatcher, registry } = makeDispatcher(conn);
+    const focusSpy = vi.spyOn(registry, "focus");
+
+    dispatcher.movePaneToTab("p1", "t2");
+    view.setView("w1", "t9"); // 応答が返る前に、ユーザーが別の tab へ既に移っている
+    resolveMove({ ok: true });
+    await flush();
+
+    // 応答到着時に t2 へ強制的に引き戻されない——ユーザーが今いる t9 のまま。
+    expect(view.workspaceId).toBe("w1");
+    expect(view.tabId).toBe("t9");
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("movePaneToTab: 応答が ok:true でも移動先 tab がまだ session に同期されていなければ何もしない（focus だけ動いて表示と食い違う事故を防ぐ。taskcheck 指摘）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["pane.move_to_tab"] = { ok: true };
+    const view = useViewStore(pinia);
+    view.setView("w1", "t1");
+    view.focusPane("p0"); // 表示中の tab で今 focus されている、移動する pane（p1）とは別の pane
+    const { dispatcher, registry } = makeDispatcher(conn);
+    const focusSpy = vi.spyOn(registry, "focus");
+    dispatcher.movePaneToTab("p1", "t-unknown");
+    await flush();
+    expect(view.workspaceId).toBe("w1");
+    expect(view.tabId).toBe("t1");
+    // 表示は t1・p0 のまま——ここで p1 に focus だけ動くと、画面（p0）とキー入力の宛先（p1）が食い違う。
+    expect(view.focusedPaneId).toBe("p0");
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("movePaneToTab: 応答が ok:false なら表示を切り替えない（自分自身の tab・存在しない tab 等）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["pane.move_to_tab"] = { ok: false };
+    const view = useViewStore(pinia);
+    view.setView("w1", "t1");
+    view.focusPane("p1");
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.movePaneToTab("p1", "t9");
+    await flush();
+    expect(view.workspaceId).toBe("w1");
+    expect(view.tabId).toBe("t1");
+  });
+
+  it("movePaneToNewTab: pane.move_to_new_tab を送り、応答の tab（別 workspace の新しい tab）へ表示を切り替える（AC9・AC-I4）", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["pane.move_to_new_tab"] = { ok: true, tab: makeTab("t9", "w2", "p1") };
+    const view = useViewStore(pinia);
+    view.setView("w1", "t1");
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.movePaneToNewTab("p1", "w2");
+    expect(conn.requests).toEqual([["pane.move_to_new_tab", { paneId: "p1", targetWorkspaceId: "w2" }]]);
+    expect(view.workspaceId).toBe("w1");
+    await flush();
+    expect(view.workspaceId).toBe("w2");
+    expect(view.tabId).toBe("t9");
+    expect(view.focusedPaneId).toBe("p1");
+  });
+
+  it("movePaneToNewTab: 応答を待つ間にユーザーが別の tab へ既に移っていたら、応答到着時に view を追わない（review round1 の should 指摘）", async () => {
+    const conn = makeConnection();
+    let resolveMove: (v: unknown) => void = () => undefined;
+    conn.request = function <M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+      this.requests.push([method, params]);
+      return new Promise((r) => (resolveMove = r as (v: unknown) => void));
+    };
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.tabUpserted(makeTab("t9", "w1"));
+    view.setView("w1", "t1");
+    const { dispatcher, registry } = makeDispatcher(conn);
+    const focusSpy = vi.spyOn(registry, "focus");
+
+    dispatcher.movePaneToNewTab("p1", "w2");
+    view.setView("w1", "t9"); // 応答が返る前に、ユーザーが別の tab へ既に移っている
+    resolveMove({ ok: true, tab: makeTab("t-new", "w2", "p1") });
+    await flush();
+
+    expect(view.workspaceId).toBe("w1");
+    expect(view.tabId).toBe("t9");
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("movePaneToNewTab: 応答が ok:false なら表示を切り替えない", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["pane.move_to_new_tab"] = { ok: false };
+    const view = useViewStore(pinia);
+    view.setView("w1", "t1");
+    view.focusPane("p1");
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.movePaneToNewTab("p1", "w9");
+    await flush();
+    expect(view.workspaceId).toBe("w1");
+    expect(view.tabId).toBe("t1");
+  });
+});
+
 describe("ActionDispatcher — navigate", () => {
   it("enterMode(navigate) は現在の workspace を選択の初期値にする", () => {
     const conn = makeConnection();

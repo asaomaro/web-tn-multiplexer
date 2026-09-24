@@ -873,3 +873,49 @@ describe("Sidebar — workspace 行の D&D（20260923-workspace-grouping）", ()
     elementFromPoint.mockRestore();
   });
 });
+
+// 20260924-pane-move-cross-tab（design「クライアント側: ドロップ先の拡張」AC7）。
+describe("Sidebar — pane D&D のドロップ先（サイドバーの workspace 行）", () => {
+  it("workspace を表す行には data-drop-workspace-id が付く", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    const wrapper = mountSidebar(makeConnection());
+    const row = wrapper.get(".sidebar-spaces .sidebar-row");
+    expect(row.attributes("data-drop-workspace-id")).toBe("w1");
+  });
+
+  it("手動グループのヘッダー行には付かないが、メンバー行には付く（特定の workspace を表す行とヘッダー行の混同を防ぐ）", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const wrapper = mountSidebar(makeConnection());
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row");
+    const header = rows[0]!;
+    const member = rows[1]!;
+    expect(header.attributes("data-drop-workspace-id")).toBeUndefined();
+    expect(member.attributes("data-drop-workspace-id")).toBe("w1");
+  });
+
+  it("view.paneDrag.overWorkspaceId に一致する workspace 行だけドロップ候補のハイライトが付く", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.workspaceUpserted(makeWorkspace("w2"));
+    const wrapper = mountSidebar(makeConnection());
+
+    view.startPaneDrag("p9");
+    view.setPaneDragOverWorkspace("w2");
+    await wrapper.vm.$nextTick();
+
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row");
+    expect(rows[0]!.classes()).not.toContain("sidebar-row-pane-drop-target");
+    expect(rows[1]!.classes()).toContain("sidebar-row-pane-drop-target");
+  });
+
+  it("ドラッグしていなければどの行にもハイライトが付かない", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    const wrapper = mountSidebar(makeConnection());
+    expect(wrapper.get(".sidebar-spaces .sidebar-row").classes()).not.toContain("sidebar-row-pane-drop-target");
+  });
+});

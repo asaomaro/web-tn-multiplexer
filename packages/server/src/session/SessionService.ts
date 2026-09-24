@@ -580,6 +580,71 @@ export class SessionService {
     return true;
   }
 
+  /**
+   * 名前ラベルのドラッグを tab バーの既存の tab へドロップしての移動（20260924-pane-move-cross-tab。
+   * design「振る舞いの詳細 > 複数クライアントでの同期」）。移動元 tab が空になれば
+   * `SessionModel.moveToTab` 内部で自動的に閉じる（`closeEmptyTabShell`。research.md R1）。
+   * イベントの順序・集合は `closeTab`/`closePane`（D88）と同じ考え方——`pane.updated` だけが
+   * この操作に固有（decisions.md D3。移動した pane 自身の `tabId` 変化を運ぶ）。
+   */
+  moveToTab(paneId: PaneId, targetTabId: TabId): boolean {
+    const sourceTabId = this.requirePane(paneId).tabId;
+    const sourceWorkspaceId = this.requireTab(sourceTabId).workspaceId;
+    const ok = this.model.moveToTab(paneId, targetTabId);
+    if (!ok) return false;
+    this.bus.publish({ event: "pane.updated", data: { pane: this.requirePane(paneId) } });
+    const sourceTab = this.model.getTab(sourceTabId);
+    if (sourceTab) {
+      this.bus.publish({ event: "layout.updated", data: { tab: sourceTab } });
+    } else {
+      this.bus.publish({ event: "tab.closed", data: { tabId: sourceTabId } });
+      const sourceWs = this.model.getWorkspace(sourceWorkspaceId);
+      if (sourceWs) {
+        this.bus.publish({ event: "workspace.updated", data: { workspace: sourceWs } });
+      } else {
+        this.bus.publish({ event: "workspace.closed", data: { workspaceId: sourceWorkspaceId } });
+        this.labelGen.delete(sourceWorkspaceId);
+      }
+    }
+    this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(targetTabId) } });
+    this.persist.touch();
+    return true;
+  }
+
+  /**
+   * 名前ラベルのドラッグをサイドバーの workspace 行へドロップしての移動（20260924-pane-move-cross-tab。
+   * design「振る舞いの詳細 > 複数クライアントでの同期」）。移動元側の後始末は `moveToTab` と同じ。
+   */
+  moveToNewTab(paneId: PaneId, targetWorkspaceId: WorkspaceId): Tab | null {
+    const sourceTabId = this.requirePane(paneId).tabId;
+    const sourceWorkspaceId = this.requireTab(sourceTabId).workspaceId;
+    const result = this.model.moveToNewTab(paneId, targetWorkspaceId);
+    if (!result) return null;
+    this.bus.publish({ event: "pane.updated", data: { pane: this.requirePane(paneId) } });
+    this.bus.publish({ event: "tab.created", data: { tab: result.tab } });
+    this.bus.publish({ event: "workspace.updated", data: { workspace: this.requireWorkspace(targetWorkspaceId) } });
+    const sourceTab = this.model.getTab(sourceTabId);
+    if (sourceTab) {
+      this.bus.publish({ event: "layout.updated", data: { tab: sourceTab } });
+    } else {
+      this.bus.publish({ event: "tab.closed", data: { tabId: sourceTabId } });
+      const sourceWs = this.model.getWorkspace(sourceWorkspaceId);
+      if (sourceWs) {
+        // 移動元と移動先が同じ workspace なら、直前の `workspace.updated`（移動先向け）が
+        // 既に最終状態（新しい tab が入り、空になった移動元 tab が除かれた後の `tabIds`）を
+        // 運んでいる——二重に同じ内容を発行しない。
+        if (sourceWorkspaceId !== targetWorkspaceId) {
+          this.bus.publish({ event: "workspace.updated", data: { workspace: sourceWs } });
+        }
+      } else {
+        this.bus.publish({ event: "workspace.closed", data: { workspaceId: sourceWorkspaceId } });
+        this.labelGen.delete(sourceWorkspaceId);
+      }
+    }
+    this.persist.touch();
+    return result.tab;
+  }
+
   zoomPane(paneId: PaneId, mode: "toggle" | "on" | "off"): void {
     const pane = this.requirePane(paneId);
     this.model.zoomPane(paneId, mode);

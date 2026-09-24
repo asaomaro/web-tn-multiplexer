@@ -335,6 +335,136 @@ describe("SessionService — tabs and panes", () => {
     expect(persist.touchCount).toBe(0);
   });
 
+  // 20260924-pane-move-cross-tab：D&D での別 tab・別 workspace への移動。
+  // design「振る舞いの詳細 > 複数クライアントでの同期」・decisions.md D3（pane.updated の追加）。
+  describe("moveToTab", () => {
+    it("移動元 tab に他の pane が残るとき: pane.updated → layout.updated（移動元）→ layout.updated（移動先）の順に publish する", async () => {
+      const { pane: p1, tab: t1 } = await service.createWorkspace("/home/u", "api");
+      const { pane: p2 } = await service.splitPane(p1.id, "right", undefined);
+      const { tab: t2 } = await service.createTab(t1.workspaceId, undefined);
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const ok = service.moveToTab(p2.id, t2.id);
+
+      expect(ok).toBe(true);
+      expect(events).toEqual(["pane.updated", "layout.updated", "layout.updated"]);
+      expect(service.snapshot().panes.find((p) => p.id === p2.id)?.tabId).toBe(t2.id);
+      expect(persist.touchCount).toBe(1);
+    });
+
+    it("移動元 tab がその1枚だけの pane を失って空になるとき: workspace が生き残れば tab.closed → workspace.updated を publish する", async () => {
+      const { tab: t1 } = await service.createWorkspace("/home/u", "api");
+      const { tab: t2, pane: p2 } = await service.createTab(t1.workspaceId, undefined);
+      const { tab: t3 } = await service.createTab(t1.workspaceId, undefined);
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const ok = service.moveToTab(p2.id, t3.id);
+
+      expect(ok).toBe(true);
+      expect(events).toEqual(["pane.updated", "tab.closed", "workspace.updated", "layout.updated"]);
+      expect(service.snapshot().tabs.map((t) => t.id)).not.toContain(t2.id);
+      expect(service.snapshot().workspaces.map((w) => w.id)).toContain(t1.workspaceId); // workspace は生き残る
+    });
+
+    it("移動元 workspace も連鎖して空になるとき（D18）: tab.closed → workspace.closed を publish する", async () => {
+      const { workspace: w1, pane: p1, tab: t1 } = await service.createWorkspace("/home/u", "api");
+      const { workspace: w2, tab: t2 } = await service.createWorkspace("/home/u/other", "other");
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const ok = service.moveToTab(p1.id, t2.id);
+
+      expect(ok).toBe(true);
+      expect(events).toEqual(["pane.updated", "tab.closed", "workspace.closed", "layout.updated"]);
+      expect(service.snapshot().tabs.map((t) => t.id)).not.toContain(t1.id);
+      expect(service.snapshot().workspaces.map((w) => w.id)).not.toContain(w1.id);
+      expect(service.snapshot().workspaces.map((w) => w.id)).toContain(w2.id);
+    });
+
+    it("自分自身の tab など何も起きなかったときは publish も保存の予約もしない", async () => {
+      const { pane, tab } = await service.createWorkspace("/home/u", "api");
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const ok = service.moveToTab(pane.id, tab.id); // 自分自身の tab
+
+      expect(ok).toBe(false);
+      expect(events).toEqual([]);
+      expect(persist.touchCount).toBe(0);
+    });
+  });
+
+  describe("moveToNewTab", () => {
+    it("別 workspace への移動: pane.updated → tab.created → workspace.updated（移動先）→ layout.updated（移動元。生きていれば）の順に publish する", async () => {
+      const { pane: p1, tab: t1 } = await service.createWorkspace("/home/u", "api");
+      const { pane: p2 } = await service.splitPane(p1.id, "right", undefined);
+      const { workspace: w2 } = await service.createWorkspace("/home/u/other", "other");
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const newTab = service.moveToNewTab(p2.id, w2.id);
+
+      expect(newTab).not.toBeNull();
+      expect(newTab?.workspaceId).toBe(w2.id);
+      expect(events).toEqual(["pane.updated", "tab.created", "workspace.updated", "layout.updated"]);
+      expect(service.snapshot().panes.find((p) => p.id === p2.id)?.tabId).toBe(newTab?.id);
+      expect(service.snapshot().tabs.map((t) => t.id)).toContain(t1.id); // 移動元 tab は生き残る（p1 が残る）
+    });
+
+    it("同一 workspace 内で、移動元 tab がその1枚だけの pane を失っても正しく畳まれる（他の tab は残る）", async () => {
+      const { workspace: w1, tab: t1, pane: p1 } = await service.createWorkspace("/home/u", "api");
+      const { tab: t2 } = await service.createTab(w1.id, undefined);
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const newTab = service.moveToNewTab(p1.id, w1.id); // 移動先 workspace == 移動元 workspace
+
+      expect(newTab).not.toBeNull();
+      // 移動元と移動先が同じ workspace なので、workspace.updated は1回だけ（二重に発行しない。D3 の続き）。
+      expect(events).toEqual(["pane.updated", "tab.created", "workspace.updated", "tab.closed"]);
+      expect(service.snapshot().tabs.map((t) => t.id)).not.toContain(t1.id); // 唯一の pane を失った移動元 tab は畳まれる
+      expect(service.snapshot().tabs.map((t) => t.id)).toContain(t2.id); // 他の tab は残る
+      expect(service.snapshot().workspaces.map((w) => w.id)).toContain(w1.id);
+    });
+
+    it("存在しない workspace など何も起きなかったときは publish も保存の予約もしない", async () => {
+      const { pane } = await service.createWorkspace("/home/u", "api");
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const newTab = service.moveToNewTab(pane.id, "w-nope");
+
+      expect(newTab).toBeNull();
+      expect(events).toEqual([]);
+      expect(persist.touchCount).toBe(0);
+    });
+
+    it("移動元 workspace も連鎖して空になるとき（D18）: tab.closed → workspace.closed を publish する（moveToTab と同じ分岐。taskcheck 指摘）", async () => {
+      const { workspace: w1, pane: p1, tab: t1 } = await service.createWorkspace("/home/u", "api");
+      const { workspace: w2 } = await service.createWorkspace("/home/u/other", "other");
+      const events: string[] = [];
+      bus.subscribe((e) => events.push(e.event));
+      persist.touchCount = 0;
+
+      const newTab = service.moveToNewTab(p1.id, w2.id); // w1 の唯一の tab の唯一の pane を、別 workspace へ
+
+      expect(newTab).not.toBeNull();
+      expect(events).toEqual(["pane.updated", "tab.created", "workspace.updated", "tab.closed", "workspace.closed"]);
+      expect(service.snapshot().tabs.map((t) => t.id)).not.toContain(t1.id);
+      expect(service.snapshot().workspaces.map((w) => w.id)).not.toContain(w1.id);
+      expect(service.snapshot().workspaces.map((w) => w.id)).toContain(w2.id);
+    });
+  });
+
   it("supports at least 16 panes in one session, each independently addressable (AC17「規模」・test 工程で確認)", async () => {
     const { pane: first, tab } = await service.createWorkspace("/home/u", "api");
     const paneIds = [first.id];

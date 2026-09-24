@@ -270,6 +270,32 @@ export interface PaneReplaceResult {
   ok: boolean;
 }
 
+/**
+ * 既存の pane（`paneId`）を、別の tab（`targetTabId`）へ移す（20260924-pane-move-cross-tab。
+ * ドラッグで tab バーの tab へドロップする用）。対象 tab の focus 中の pane の右へ split で
+ * 加わる（design「振る舞いの詳細」）。新しい pane は作らない。
+ */
+export const PaneMoveToTabParams = z.object({ paneId, targetTabId: tabId });
+export type PaneMoveToTabParams = z.infer<typeof PaneMoveToTabParams>;
+export interface PaneMoveToTabResult {
+  /** 自分自身の tab・存在しない tab 等、何も起きなかったときは false（design「エラー処理」）。 */
+  ok: boolean;
+}
+
+/**
+ * 既存の pane（`paneId`）を、別の workspace（`targetWorkspaceId`）の新しい tab へ移す
+ * （20260924-pane-move-cross-tab。ドラッグでサイドバーの workspace 行へドロップする用）。
+ */
+export const PaneMoveToNewTabParams = z.object({ paneId, targetWorkspaceId: workspaceId });
+export type PaneMoveToNewTabParams = z.infer<typeof PaneMoveToNewTabParams>;
+export interface PaneMoveToNewTabResult {
+  /** 存在しない workspace 等、何も起きなかったときは false（design「エラー処理」。同一
+   *  workspace への移動〈新しい tab へ切り出す〉は有効な操作として許容する）。 */
+  ok: boolean;
+  /** 作られた新しい tab（ok=false のときは無い）。 */
+  tab?: Tab;
+}
+
 export const PaneZoomParams = z.object({ paneId, mode: zoomMode });
 export type PaneZoomParams = z.infer<typeof PaneZoomParams>;
 
@@ -386,6 +412,8 @@ export const METHOD_SCHEMAS = {
   "pane.swap_with": PaneSwapWithParams,
   "pane.move_to_edge": PaneMoveToEdgeParams,
   "pane.replace": PaneReplaceParams,
+  "pane.move_to_tab": PaneMoveToTabParams,
+  "pane.move_to_new_tab": PaneMoveToNewTabParams,
   "pane.zoom": PaneZoomParams,
   "pane.resize": PaneResizeParams,
   "pane.input.set": PaneInputSetParams,
@@ -434,6 +462,8 @@ export interface MethodResultMap {
   "pane.swap_with": PaneSwapWithResult;
   "pane.move_to_edge": PaneMoveToEdgeResult;
   "pane.replace": PaneReplaceResult;
+  "pane.move_to_tab": PaneMoveToTabResult;
+  "pane.move_to_new_tab": PaneMoveToNewTabResult;
   "pane.zoom": Record<string, never>;
   "pane.resize": Record<string, never>;
   "pane.input.set": Record<string, never>;

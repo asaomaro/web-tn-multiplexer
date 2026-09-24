@@ -23,7 +23,7 @@ function makePane(id: string, overrides: Partial<Pane> = {}): Pane {
 }
 
 function mountFrame(opts: { enabled?: boolean; withPinia?: boolean } = {}) {
-  const actions = { openContextMenu: vi.fn(), movePaneToEdge: vi.fn(), replacePaneWithDrag: vi.fn() };
+  const actions = { openContextMenu: vi.fn(), movePaneToEdge: vi.fn(), replacePaneWithDrag: vi.fn(), movePaneToTab: vi.fn(), movePaneToNewTab: vi.fn() };
   const registry = { focus: vi.fn() };
   const wrapper = mount(PaneFrame, {
     attachTo: document.body,
@@ -358,6 +358,22 @@ describe("PaneFrame — 名前ラベルをドラッグしての分割・分割�
     return vi.spyOn(document, "elementFromPoint").mockReturnValue(el);
   }
 
+  /** tab バーの tab をドロップ先に模す（20260924-pane-move-cross-tab）。`[data-pane-id]` には当たらない。 */
+  function mockElementFromPointAsTab(tabId: string) {
+    const el = {
+      closest: (sel: string) => (sel === "[data-tab-id]" ? { dataset: { tabId } } : null),
+    } as unknown as Element;
+    return vi.spyOn(document, "elementFromPoint").mockReturnValue(el);
+  }
+
+  /** サイドバーの workspace 行をドロップ先に模す（20260924-pane-move-cross-tab）。 */
+  function mockElementFromPointAsWorkspace(workspaceId: string) {
+    const el = {
+      closest: (sel: string) => (sel === "[data-drop-workspace-id]" ? { dataset: { dropWorkspaceId: workspaceId } } : null),
+    } as unknown as Element;
+    return vi.spyOn(document, "elementFromPoint").mockReturnValue(el);
+  }
+
   it("閾値未満のまま離すとドラッグにならず、既存のクリック（pane を選ぶ）にフォールバックする（AC-I1・AC-I5）", async () => {
     const settings = useSettingsStore(pinia);
     useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
@@ -387,7 +403,7 @@ describe("PaneFrame — 名前ラベルをドラッグしての分割・分割�
 
     name.dispatchEvent(pointerEvent("pointerdown", { clientX: 0, clientY: 0 }));
     name.dispatchEvent(pointerEvent("pointermove", { clientX: 6, clientY: 0 })); // ちょうど6px
-    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: null, overZone: null });
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: null, overZone: null, overTabId: null, overWorkspaceId: null });
   });
 
   it("縁（右）で離すと movePaneToEdge(自分, 相手, 'right') を呼ぶ（AC1・AC4）", async () => {
@@ -401,7 +417,7 @@ describe("PaneFrame — 名前ラベルをドラッグしての分割・分割�
 
     name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
     name.dispatchEvent(pointerEvent("pointermove", { clientX: 90, clientY: 50 })); // 対象 rect の右端寄り
-    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: "p2", overZone: "right" });
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: "p2", overZone: "right", overTabId: null, overWorkspaceId: null });
     name.dispatchEvent(pointerEvent("pointerup", { clientX: 90, clientY: 50 }));
 
     expect(actions.movePaneToEdge).toHaveBeenCalledWith("p1", "p2", "right");
@@ -421,7 +437,7 @@ describe("PaneFrame — 名前ラベルをドラッグしての分割・分割�
 
     name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
     name.dispatchEvent(pointerEvent("pointermove", { clientX: 50, clientY: 50 })); // 対象 rect の中央
-    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: "p2", overZone: "center" });
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: "p2", overZone: "center", overTabId: null, overWorkspaceId: null });
     name.dispatchEvent(pointerEvent("pointerup", { clientX: 50, clientY: 50 }));
 
     expect(actions.replacePaneWithDrag).toHaveBeenCalledWith("p1", "p2");
@@ -475,6 +491,68 @@ describe("PaneFrame — 名前ラベルをドラッグしての分割・分割�
 
     expect(actions.movePaneToEdge).not.toHaveBeenCalled();
     expect(actions.replacePaneWithDrag).not.toHaveBeenCalled();
+  });
+
+  it("tab バーの tab の上で離すと movePaneToTab(自分, tab) を呼ぶ（20260924-pane-move-cross-tab。AC1・AC-I4）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper, actions, registry } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+    const spy = mockElementFromPointAsTab("t2");
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 50, clientY: 50 }));
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: null, overZone: null, overTabId: "t2", overWorkspaceId: null });
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 50, clientY: 50 }));
+
+    expect(actions.movePaneToTab).toHaveBeenCalledWith("p1", "t2");
+    expect(actions.movePaneToEdge).not.toHaveBeenCalled();
+    expect(actions.replacePaneWithDrag).not.toHaveBeenCalled();
+    // view の切り替え・focus は ActionDispatcher 側の責務（decisions.md D2）。PaneFrame.vue 自身は
+    // 呼ばない——表示中の pane（p1 とは限らない）へ勝手に focus が動くと、画面と食い違う。
+    expect(registry.focus).not.toHaveBeenCalled();
+    expect(useViewStore(pinia).paneDrag).toBeNull();
+    spy.mockRestore();
+  });
+
+  it("自分が今いる tab 自身の上ではハイライトしない（ドロップしても何も起きないため。review round1 の nit 指摘）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" })); // makePane の既定 tabId は "t1"
+    const { wrapper } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+    const spy = mockElementFromPointAsTab("t1"); // 自分自身の tab
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 50, clientY: 50 }));
+
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: null, overZone: null, overTabId: null, overWorkspaceId: null });
+    spy.mockRestore();
+  });
+
+  it("サイドバーの workspace 行の上で離すと movePaneToNewTab(自分, workspace) を呼ぶ（20260924-pane-move-cross-tab。AC5・AC-I4）", async () => {
+    const settings = useSettingsStore(pinia);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper, actions, registry } = mountFrame();
+    settings.setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    const name = wrapper.get(".pane-frame-name").element;
+    const spy = mockElementFromPointAsWorkspace("w2");
+
+    name.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    name.dispatchEvent(pointerEvent("pointermove", { clientX: 50, clientY: 50 }));
+    expect(useViewStore(pinia).paneDrag).toEqual({ sourcePaneId: "p1", overPaneId: null, overZone: null, overTabId: null, overWorkspaceId: "w2" });
+    name.dispatchEvent(pointerEvent("pointerup", { clientX: 50, clientY: 50 }));
+
+    expect(actions.movePaneToNewTab).toHaveBeenCalledWith("p1", "w2");
+    expect(actions.movePaneToEdge).not.toHaveBeenCalled();
+    expect(actions.replacePaneWithDrag).not.toHaveBeenCalled();
+    expect(registry.focus).not.toHaveBeenCalled();
+    expect(useViewStore(pinia).paneDrag).toBeNull();
+    spy.mockRestore();
   });
 
   it("ドラッグ中に Esc を押すと取り消され、離しても何も送らない（AC-I2）", async () => {

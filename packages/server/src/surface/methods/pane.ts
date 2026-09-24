@@ -4,6 +4,8 @@ import {
   PaneFocusParams,
   PaneInputSetParams,
   PaneMoveToEdgeParams,
+  PaneMoveToNewTabParams,
+  PaneMoveToTabParams,
   PaneRenameParams,
   PaneReplaceParams,
   PaneResizeParams,
@@ -102,6 +104,26 @@ export function registerPaneMethods(surface: ControlSurface, deps: MethodDeps): 
       const ok = deps.session.replacePane(params.paneId, params.targetPaneId);
       deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
       return { ok };
+    },
+  });
+
+  // 20260924-pane-move-cross-tab（ドラッグでの別 tab への移動）。
+  surface.register("pane.move_to_tab", {
+    schema: PaneMoveToTabParams,
+    handler: (ctx, params) => {
+      const ok = deps.session.moveToTab(params.paneId, params.targetTabId);
+      deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
+      return { ok };
+    },
+  });
+
+  // 20260924-pane-move-cross-tab（ドラッグでの別 workspace の新しい tab への移動）。
+  surface.register("pane.move_to_new_tab", {
+    schema: PaneMoveToNewTabParams,
+    handler: (ctx, params) => {
+      const tab = deps.session.moveToNewTab(params.paneId, params.targetWorkspaceId);
+      deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
+      return tab ? { ok: true as const, tab } : { ok: false as const };
     },
   });
 

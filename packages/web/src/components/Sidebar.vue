@@ -204,7 +204,7 @@ function cancelWorkspaceDrag(): void {
 
 /**
  * `document.elementFromPoint` から最も近い `[data-workspace-row-key]` 祖先の行 key を求める
- * （`PaneFrame.vue` の `paneIdAt` と同じ形）。**`row.key` を使う**（タスク点検の指摘）——
+ * （`PaneFrame.vue` の `dropTargetAt` と同じ形の `closest` 探索）。**`row.key` を使う**（タスク点検の指摘）——
  * `dropAnchorId`（workspace id）は、手動グループのヘッダー行とその先頭メンバー行で同じ値に
  * なりうる（ヘッダーの `dropAnchorId` は先頭メンバーの id をそのまま使うため）ので、ホバー中の
  * 行を一意に特定できない。`row.key` は常に一意（`group:<id>` または workspace id そのもの）。
@@ -361,8 +361,10 @@ watch(
           'sidebar-row-selected': view.mode === 'navigate' && !!row.workspace && view.navigateSelection === row.workspace.id,
           'sidebar-row-indent': row.indent,
           'sidebar-row-drop-target': view.workspaceDrag?.overRowKey === row.key && !!row.dropAnchorId && !view.workspaceDrag.sourceIds.includes(row.dropAnchorId),
+          'sidebar-row-pane-drop-target': !!row.workspace && view.paneDrag?.overWorkspaceId === row.workspace.id,
         }"
         :data-workspace-row-key="row.key"
+        :data-drop-workspace-id="row.workspace?.id"
         :aria-current="row.isCurrent ? 'true' : undefined"
         @contextmenu="onRowContextMenu($event, row)"
         @pointerdown="onRowPointerDown($event, row)"
@@ -518,6 +520,13 @@ watch(
 /* D&D のドロップ候補（20260923-workspace-grouping。`PaneFrame.vue` の `.pane-frame-edge-drop-target` と同じ考え方）。 */
 .sidebar-row.sidebar-row-drop-target {
   outline: 2px solid var(--wtm-fg, #f8f8f2);
+  outline-offset: -2px;
+}
+/* pane を D&D でこの workspace へ移す（20260924-pane-move-cross-tab。design「クライアント側:
+ * ドロップ先の拡張」）。上の workspace 並べ替え用のドロップ候補とは別の見た目にする
+ * （`PaneFrame.vue`/`TabBar.vue` と同じ accent 色）。 */
+.sidebar-row.sidebar-row-pane-drop-target {
+  outline: 2px dashed var(--wtm-accent, #8be9fd);
   outline-offset: -2px;
 }
 .sidebar-row-line1 {

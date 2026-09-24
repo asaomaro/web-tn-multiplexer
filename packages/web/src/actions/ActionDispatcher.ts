@@ -565,6 +565,56 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     this.sendReplacePane(ctx.paneId, ctx.targetPaneId);
   }
 
+  /**
+   * 名前ラベルのドラッグを、tab バーの既存の tab へドロップしての移動（20260924-pane-move-cross-tab。
+   * `PaneFrame.vue` から直接呼ぶ）。プロセスは終了しないので busy 確認は不要（design R4）。
+   * **RPC の成否を待ってから view を移動先へ切り替える**——`ok: false`（自分自身の tab・
+   * 存在しない tab 等）のときに表示だけ移してしまうと、実際には何も動いていない tab を見せる
+   * ことになる（design「エラー処理」の「失敗時は何もしない」と揃える。AC8・AC-I4）。
+   * **応答を待つ間にユーザーが別の tab/workspace へ既に移っていたら、view は追わない**
+   * （review round1 の should 指摘）——移動自体は成立させるが、応答到着時に無関係な画面から
+   * 強制的に移動先へ視点を引き戻さない。
+   */
+  movePaneToTab(paneId: string, targetTabId: string): void {
+    const originWorkspaceId = this.view.workspaceId;
+    const originTabId = this.view.tabId;
+    void this.conn
+      .request("pane.move_to_tab", { paneId, targetTabId })
+      .then((r) => {
+        if (!r.ok) return;
+        if (this.view.workspaceId !== originWorkspaceId || this.view.tabId !== originTabId) return;
+        const targetTab = this.session.tabs.get(targetTabId);
+        // 移動先 tab がまだ同期されていなければ何もしない（`movePaneToNewTab` の `!r.tab` と対称。
+        // 表示を切り替えないのに focus だけ動くと、キー入力の宛先が画面と食い違う）。
+        if (!targetTab) return;
+        this.view.setView(targetTab.workspaceId, targetTabId);
+        this.view.focusPane(paneId);
+        this.registry.focus(paneId);
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * 名前ラベルのドラッグを、サイドバーの workspace 行へドロップしての移動
+   * （20260924-pane-move-cross-tab。`PaneFrame.vue` から直接呼ぶ）。新しい tab の id は応答が
+   * 返るまで分からないため、`movePaneToTab` と同じく応答を待ってから view を切り替える
+   * （応答を待つ間に view が動いていたら追わないことも含めて同じ。review round1 の should 指摘）。
+   */
+  movePaneToNewTab(paneId: string, targetWorkspaceId: string): void {
+    const originWorkspaceId = this.view.workspaceId;
+    const originTabId = this.view.tabId;
+    void this.conn
+      .request("pane.move_to_new_tab", { paneId, targetWorkspaceId })
+      .then((r) => {
+        if (!r.ok || !r.tab) return;
+        if (this.view.workspaceId !== originWorkspaceId || this.view.tabId !== originTabId) return;
+        this.view.setView(targetWorkspaceId, r.tab.id);
+        this.view.focusPane(paneId);
+        this.registry.focus(paneId);
+      })
+      .catch(() => undefined);
+  }
+
   private cyclePane(delta: 1 | -1): void {
     const tab = this.view.tabId ? this.session.tabs.get(this.view.tabId) : undefined;
     if (!tab) return;

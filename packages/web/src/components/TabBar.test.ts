@@ -401,3 +401,47 @@ describe("TabBar — 位置・右端のほかのエントリ（20260922-tabbar-p
     expect(wrapper.get(".tab-bar-right").text()).toBe("Z | myhost | note");
   });
 });
+
+// 20260924-pane-move-cross-tab（design「クライアント側: ドロップ先の拡張」AC4）。
+describe("TabBar — pane D&D のドロップ先", () => {
+  it("各 tab に data-tab-id が付く", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    const items = wrapper.findAll(".tab-bar-item");
+    expect(items.map((el) => el.attributes("data-tab-id"))).toEqual(["t1", "t2"]);
+  });
+
+  it("view.paneDrag.overTabId に一致する tab だけドロップ候補のハイライトが付く", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+
+    view.startPaneDrag("p9");
+    view.setPaneDragOverTab("t2");
+    await wrapper.vm.$nextTick();
+
+    const items = wrapper.findAll(".tab-bar-item");
+    expect(items[0]!.classes()).not.toContain("tab-bar-item-drop-target");
+    expect(items[1]!.classes()).toContain("tab-bar-item-drop-target");
+  });
+
+  it("ドラッグしていなければどの tab にもハイライトが付かない", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    for (const item of wrapper.findAll(".tab-bar-item")) expect(item.classes()).not.toContain("tab-bar-item-drop-target");
+  });
+});
