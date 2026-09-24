@@ -26,6 +26,7 @@ function makeSnapshot(): SessionSnapshot {
     workspaces: [makeWorkspace("w1")],
     tabs: [makeTab("t1", "w1")],
     panes: [makePane("p1", "t1")],
+    groups: [],
     focus: { workspaceId: "w1", tabId: "t1", paneId: "p1" },
     limits: { scrollbackLines: 5000 },
   };
@@ -51,6 +52,13 @@ describe("useSessionStore", () => {
     expect(store.workspaces.size).toBe(0);
   });
 
+  // 20260923-workspace-grouping。
+  it("applySnapshot: groups を反映する", () => {
+    const store = useSessionStore(pinia);
+    store.applySnapshot({ ...makeSnapshot(), groups: [{ id: "g1", label: "backend", collapsed: false }] }, "c1");
+    expect(store.groups.get("g1")).toEqual({ id: "g1", label: "backend", collapsed: false });
+  });
+
   it("hasSizeAuthority: 自分の clientId が Tab.sizeOwnerClientId と一致するときだけ true", () => {
     const store = useSessionStore(pinia);
     store.applySnapshot(makeSnapshot(), "c1");
@@ -69,6 +77,45 @@ describe("useSessionStore", () => {
     expect(store.workspaces.has("w1")).toBe(true);
     store.workspaceClosed("w1");
     expect(store.workspaces.has("w1")).toBe(false);
+  });
+
+  // 20260923-workspace-grouping（decisions.md D5）。`Map.set` は既存キーの位置を動かさないので、
+  // 並び替えは専用のミューテーションで表す。
+  describe("workspacesReordered", () => {
+    it("並び替える（挿入順＝反復順）", () => {
+      const store = useSessionStore(pinia);
+      store.workspaceUpserted(makeWorkspace("w1"));
+      store.workspaceUpserted(makeWorkspace("w2"));
+      store.workspaceUpserted(makeWorkspace("w3"));
+      store.workspacesReordered(["w3", "w1", "w2"]);
+      expect([...store.workspaces.keys()]).toEqual(["w3", "w1", "w2"]);
+    });
+
+    it("イベントに含まれないローカルの id は末尾に残す（防御的）", () => {
+      const store = useSessionStore(pinia);
+      store.workspaceUpserted(makeWorkspace("w1"));
+      store.workspaceUpserted(makeWorkspace("w2"));
+      store.workspaceUpserted(makeWorkspace("w3"));
+      store.workspacesReordered(["w2"]); // w1・w3 は言及されていない
+      expect([...store.workspaces.keys()]).toEqual(["w2", "w1", "w3"]);
+    });
+
+    it("ローカルにまだ無い id（イベントの競合）は無視する", () => {
+      const store = useSessionStore(pinia);
+      store.workspaceUpserted(makeWorkspace("w1"));
+      store.workspacesReordered(["w1", "w99"]); // w99 はまだローカルに無い
+      expect([...store.workspaces.keys()]).toEqual(["w1"]);
+    });
+  });
+
+  it("groupUpserted/Deleted", () => {
+    const store = useSessionStore(pinia);
+    store.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    expect(store.groups.get("g1")).toEqual({ id: "g1", label: "backend", collapsed: false });
+    store.groupUpserted({ id: "g1", label: "backend", collapsed: true }); // update（同じ id）
+    expect(store.groups.get("g1")?.collapsed).toBe(true);
+    store.groupDeleted("g1");
+    expect(store.groups.has("g1")).toBe(false);
   });
 
   it("tabUpserted/Closed", () => {

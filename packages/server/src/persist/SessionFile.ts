@@ -37,15 +37,26 @@ export interface SessionFileWorkspace {
    * みなす（design D6）。古い版は知らない項目を捨てて読むので、足しても壊れたファイルにはならない。
    */
   autoLabel?: boolean | undefined;
+  /** 手動グループの所属先（20260923-workspace-grouping）。**以前の版の保存には無い**——無ければ
+   *  null（`autoLabel` と同じ「optional 追加」方式）。 */
+  groupId?: string | null | undefined;
   cwd: string;
   activeTabId: string;
   tabs: SessionFileTab[];
+}
+/** 手動グループの実体（20260923-workspace-grouping）。`WorkspaceGroup` の永続化版。 */
+export interface SessionFileGroup {
+  id: string;
+  label: string;
+  collapsed: boolean;
 }
 export interface SessionFileData {
   schema: 1;
   savedAt: string;
   nextId: NextIdCounters;
   workspaces: SessionFileWorkspace[];
+  /** **以前の版の保存には無い**——無ければ空配列（20260923-workspace-grouping）。 */
+  groups: SessionFileGroup[];
   focus: { workspaceId: string; tabId: string; paneId: string } | null;
 }
 
@@ -91,9 +102,16 @@ const SessionFileWorkspaceSchema: z.ZodType<SessionFileWorkspace> = z.object({
   id: z.string(),
   label: z.string(),
   autoLabel: z.boolean().optional(),
+  // 以前の版の保存には無い——無ければ null として読む（20260923-workspace-grouping）。
+  groupId: z.string().nullable().optional(),
   cwd: z.string(),
   activeTabId: z.string(),
   tabs: z.array(SessionFileTabSchema),
+});
+const SessionFileGroupSchema: z.ZodType<SessionFileGroup> = z.object({
+  id: z.string(),
+  label: z.string(),
+  collapsed: z.boolean(),
 });
 const NextIdCountersSchema: z.ZodType<NextIdCounters> = z.object({
   w: z.number(),
@@ -101,11 +119,15 @@ const NextIdCountersSchema: z.ZodType<NextIdCounters> = z.object({
   p: z.number(),
   s: z.number(),
   a: z.number(),
+  // 以前の版の保存には無い——無ければ 1 から採番する（20260923-workspace-grouping）。
+  g: z.number().default(1),
 });
 const SessionFileDataSchema: z.ZodType<SessionFileData> = z.object({
   schema: z.literal(1),
   savedAt: z.string(),
   nextId: NextIdCountersSchema,
+  // 以前の版の保存には無い——無ければ空配列（20260923-workspace-grouping）。
+  groups: z.array(SessionFileGroupSchema).default([]),
   workspaces: z.array(SessionFileWorkspaceSchema),
   focus: z.object({ workspaceId: z.string(), tabId: z.string(), paneId: z.string() }).nullable(),
 });

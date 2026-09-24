@@ -8,7 +8,7 @@ import { useSessionStore } from "../store/session.js";
 import { useAgentIntegrationsStore } from "../store/agentIntegrations.js";
 import { useSeenStore, displayStateFor } from "../store/seen.js";
 import { orderedAgentPaneIds, type AgentOrderEntry } from "../store/agentOrder.js";
-import { orderedWorkspaceIds } from "../store/workspaceOrder.js";
+import { visibleWorkspaceIdsInOrder } from "../store/workspaceGrouping.js";
 import {
   buildNewCwd,
   loadNewCwdPath,
@@ -198,6 +198,10 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
       case "moveTab":
         this.moveTab(action.direction);
         return;
+      // 20260923-workspace-grouping。
+      case "moveWorkspace":
+        this.moveWorkspace(action.direction);
+        return;
       case "agentDelta":
         this.agentDelta(action.delta);
         return;
@@ -313,6 +317,89 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
       });
   }
 
+  // --- 手動グループ（20260923-workspace-grouping。herdr に前例が無い独自拡張）------------------
+
+  /** 「新しいグループを作る…」（`ContextMenu`）。名前を確定したら、右クリック元の workspace を追加する。 */
+  createGroupForWorkspace(workspaceId: string): void {
+    this.view.openDialogWithContext({ kind: "createGroup", workspaceId });
+  }
+
+  /**
+   * `NameDialog` が確定したときに呼ぶ。`group.create` → 作成したグループへ workspace を追加。
+   * **2段階の失敗を区別する**（タスク点検の指摘）：`group.create` 自体が失敗すればグループは
+   * 存在しないので「作成できませんでした」。それが成功した後の `group.add_member` だけが
+   * 失敗した場合はグループ自体は残っている（空のグループとしてサイドバーに出る）ので、
+   * 「作成できませんでした」と伝えると実際の状態と食い違う——別の文言にする（ロールバック＝
+   * 作ったグループを削除する、まではしない。空のグループは無害で design のエラー処理どおり）。
+   */
+  confirmCreateGroup(label: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "createGroup") return;
+    this.view.closeDialog();
+    const trimmed = label.trim();
+    if (!trimmed) return; // 空では確定しない（ボタンも disabled）
+    void this.conn
+      .request("group.create", { label: trimmed })
+      .then((r) =>
+        this.conn
+          .request("group.add_member", { groupId: r.group.id, workspaceId: ctx.workspaceId })
+          .catch(() => this.view.toast("グループは作成しましたが、workspace の追加に失敗しました。")),
+      )
+      .catch(() => this.view.toast("グループを作成できませんでした"));
+  }
+
+  renameGroupById(groupId: string): void {
+    const group = this.session.groups.get(groupId);
+    if (!group) return;
+    this.view.openDialogWithContext({ kind: "renameGroup", groupId, currentLabel: group.label });
+  }
+
+  confirmRenameGroup(label: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "renameGroup") return;
+    this.view.closeDialog();
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    void this.conn.request("group.rename", { groupId: ctx.groupId, label: trimmed }).catch(() => this.view.toast("名前を変更できませんでした"));
+  }
+
+  /** グループを削除する（メンバーの workspace 自体は消えない）。herdr に前例が無いため確認は design どおり無し。 */
+  deleteGroupById(groupId: string): void {
+    void this.conn.request("group.delete", { groupId }).catch(() => this.view.toast("グループを削除できませんでした"));
+  }
+
+  /**
+   * 折りたたみの切り替え（サーバに永続化。`WorkspaceGroup.collapsed`。AC6）。**値をサーバに
+   * 反転させる**（`pane.zoom` の `mode: "toggle"` と同じ考え方。タスク点検の指摘：クライアントが
+   * 今の値を読んで反転して送る形だと、応答前に連続で呼ばれたとき〔すばやい2回クリック〕両方が
+   * 同じ古い値から同じ結果を送ってしまい、2回目が効かなくなる）。
+   */
+  toggleGroupCollapsed(groupId: string): void {
+    void this.conn.request("group.toggle_collapsed", { groupId }).catch(() => undefined);
+  }
+
+  /** 「グループへ追加…」（既存グループが1件以上あるとき）。**空なら開かずに知らせる**（`openWorktree` と同じ形）。 */
+  openGroupPicker(workspaceId: string): void {
+    const groups = [...this.session.groups.values()];
+    if (groups.length === 0) {
+      this.view.toast("まだグループがありません。");
+      return;
+    }
+    this.view.openDialogWithContext({ kind: "addToGroup", workspaceId, groups });
+  }
+
+  confirmAddToGroup(groupId: string): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "addToGroup") return;
+    this.view.closeDialog();
+    void this.conn.request("group.add_member", { groupId, workspaceId: ctx.workspaceId }).catch(() => this.view.toast("グループへ追加できませんでした"));
+  }
+
+  /** 「グループから外す」（`groupId !== null` のときだけ `ContextMenu` が出す）。 */
+  removeWorkspaceFromGroup(workspaceId: string): void {
+    void this.conn.request("group.remove_member", { workspaceId }).catch(() => undefined);
+  }
+
   // --- 公式フック連携（20260923-agent-session-resume）-------------------------
 
   /** 設定画面の「エージェント連携」節を開いたときに呼ぶ（`client.hello` のスナップショットには含まれない）。 */
@@ -375,15 +462,24 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     else hold.cancel();
   }
 
-  /** T24（`ConfirmDialog`）が閉じる確認を確定したときに呼ぶ。 */
-  confirmClose(): void {
+  /**
+   * T24（`ConfirmDialog`）が閉じる確認を確定したときに呼ぶ。`closeLinkedWorktrees`
+   * （20260923-workspace-grouping。herdr の `close_group` 相当）は「束ねた worktree も
+   * 一緒に閉じる」チェックボックスの状態。**`ConfirmDialog.vue` はこのチェックボックスを
+   * workspace 対象が1件のときだけ出す**ので、ここでも workspace 対象が1件のときだけ適用する
+   * （タスク点検の指摘：`targets` の型は複数件を許容するので、将来 workspace 対象が複数になる
+   * 呼び出し元が増えても、意図しない workspace の worktree まで一緒に閉じてしまわないように
+   * 防御する）。
+   */
+  confirmClose(closeLinkedWorktrees = false): void {
     const ctx = this.view.dialogContext;
     if (ctx?.kind !== "confirmClose") return;
     this.view.closeDialog();
+    const singleWorkspaceTarget = ctx.targets.filter((t) => t.type === "workspace").length === 1;
     for (const target of ctx.targets) {
       if (target.type === "pane") void this.conn.request("pane.close", { paneId: target.id }).catch(() => undefined);
       else if (target.type === "tab") void this.conn.request("tab.close", { tabId: target.id }).catch(() => undefined);
-      else void this.conn.request("workspace.close", { workspaceId: target.id }).catch(() => undefined);
+      else void this.conn.request("workspace.close", { workspaceId: target.id, closeLinkedWorktrees: closeLinkedWorktrees && singleWorkspaceTarget }).catch(() => undefined);
     }
   }
 
@@ -526,7 +622,12 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     void this.conn.request("tab.close", { tabId }).catch(() => undefined);
   }
 
-  /** herdr は worktree グループ経由でも busy 以外の追加確認をするが、本製品はグルーピングが対象外（D56 の訂正 2）。 */
+  /**
+   * herdr は worktree グループ経由でも busy 以外の追加確認をする（D56 の訂正 2 の時点では、
+   * 本製品はグルーピングが対象外だった）。**20260923-workspace-grouping で対応**——
+   * `ConfirmDialog.vue` が「束ねた worktree も一緒に閉じる」チェックボックスを、対象が
+   * worktree 自動グループの本体のときだけ追加で出す（`confirmClose` の `closeLinkedWorktrees`）。
+   */
   private closeWorkspace(): void {
     const workspaceId = this.view.workspaceId;
     if (workspaceId) this.closeWorkspaceById(workspaceId);
@@ -561,7 +662,10 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     switch (op) {
       case "up":
       case "down": {
-        const ids = [...this.session.workspaces.keys()];
+        // Sidebar.vue の描画（`groupedWorkspaceRows`）と同じ並び・同じ可視範囲を辿る
+        // （20260923-workspace-grouping レビューの指摘：グループ導入前は素の反復順だったため
+        // 画面の並びと一致していたが、グループ導入後は乖離していた）。
+        const ids = visibleWorkspaceIdsInOrder([...this.session.workspaces.values()], [...this.session.groups.values()], this.view.workspaceSort, this.view.collapsedAutoGroups, this.view.workspaceId);
         if (ids.length === 0) return;
         const current = this.view.navigateSelection ? ids.indexOf(this.view.navigateSelection) : -1;
         const delta = op === "up" ? -1 : 1;
@@ -626,7 +730,9 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   // --- 20260923-missing-keybinding-actions（herdr にあって本製品に操作自体が無かったもの） -------------
 
   private workspaceDelta(delta: 1 | -1): void {
-    const ids = orderedWorkspaceIds([...this.session.workspaces.values()], this.view.workspaceSort);
+    // Sidebar.vue の描画（`groupedWorkspaceRows`）と同じ並び・同じ可視範囲を辿る（上の `navigate`
+    // 「up」「down」と同じ理由。20260923-workspace-grouping レビューの指摘）。
+    const ids = visibleWorkspaceIdsInOrder([...this.session.workspaces.values()], [...this.session.groups.values()], this.view.workspaceSort, this.view.collapsedAutoGroups, this.view.workspaceId);
     if (ids.length <= 1) return; // AC4
     const current = this.view.workspaceId ? ids.indexOf(this.view.workspaceId) : -1;
     const next = ids[(current === -1 ? 0 : current + delta + ids.length) % ids.length];
@@ -646,6 +752,29 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
     // `tabIds` を先読みで並べ替えない（`tabDelta` と違い対象を求めるのに他の tab の情報が要らない。
     // `workspace.updated` が折り返ってから並びが反映される。design「振る舞いの詳細」）。
     void this.conn.request("tab.move", { tabId: tab.id, direction }).catch(() => undefined);
+  }
+
+  /**
+   * `move_workspace_previous`/`move_workspace_next`（20260923-workspace-grouping。`moveTab` と
+   * 同じ形）。対象は現在 focus 中の workspace。グループの内側・外側を問わず、フラットな順序上で
+   * 隣と入れ替わる——キーバインドはグループのまとまりを保つ動きはしない（design「振る舞いの詳細
+   * （キーバインド）」。まとまりを保った移動は D&D の役割＝`moveWorkspacesByDrag`）。
+   */
+  private moveWorkspace(direction: "previous" | "next"): void {
+    const workspaceId = this.view.workspaceId;
+    // `moveTab` と同じく実在を確かめてから送る（タスク点検の指摘：閉じた直後の stale な id で
+    // 空振りの要求を送らない。サーバ側では無視されるだけだが、意図を読める形にそろえる）。
+    if (!workspaceId || !this.session.workspaces.has(workspaceId)) return;
+    void this.conn.request("workspace.move", { workspaceId, direction }).catch(() => undefined);
+  }
+
+  /**
+   * workspace 行・グループのヘッダー行の D&D 確定（20260923-workspace-grouping。design「振る舞いの
+   * 詳細（D&D）」）。`workspaceIds` は動かす対象（通常の行なら1件、グループのヘッダー行ならそのグループの
+   * 全メンバー id）。`Sidebar.vue` の `onRowPointerUp` から呼ぶ。
+   */
+  moveWorkspacesByDrag(workspaceIds: string[], beforeWorkspaceId: string | null): void {
+    void this.conn.request("workspace.move_to", { workspaceIds, beforeWorkspaceId }).catch(() => undefined);
   }
 
   /** `previous_agent`/`next_agent`/`focus_agent` が共有する対象の組み立て（design「振る舞いの詳細」）。 */

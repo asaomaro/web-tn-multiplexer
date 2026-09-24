@@ -299,6 +299,82 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
     expect(ctx.session.snapshot().workspaces.length).toBe(1);
     expect(ctx.session.snapshot().workspaces[0]!.id).not.toBe(workspace.id);
   });
+
+  // 20260923-workspace-grouping。
+  it("workspace.move reorders workspaces (previous/next)", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const r1 = await ctx.surface.invoke(c, "workspace.create", { cwd: "/a", label: "a" });
+    const r2 = await ctx.surface.invoke(c, "workspace.create", { cwd: "/b", label: "b" });
+    if (!r1.ok || !r2.ok) throw new Error("unreachable");
+    const w1 = (r1.result as { workspace: { id: string } }).workspace;
+    const w2 = (r2.result as { workspace: { id: string } }).workspace;
+
+    const moveResult = await ctx.surface.invoke(c, "workspace.move", { workspaceId: w1.id, direction: "next" });
+    expect(moveResult).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().workspaces.map((w) => w.id)).toEqual([w2.id, w1.id]);
+  });
+
+  it("workspace.move_to moves a block of workspace ids together", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const r1 = await ctx.surface.invoke(c, "workspace.create", { cwd: "/a", label: "a" });
+    const r2 = await ctx.surface.invoke(c, "workspace.create", { cwd: "/b", label: "b" });
+    const r3 = await ctx.surface.invoke(c, "workspace.create", { cwd: "/c", label: "c" });
+    if (!r1.ok || !r2.ok || !r3.ok) throw new Error("unreachable");
+    const w1 = (r1.result as { workspace: { id: string } }).workspace;
+    const w2 = (r2.result as { workspace: { id: string } }).workspace;
+    const w3 = (r3.result as { workspace: { id: string } }).workspace;
+
+    const moveResult = await ctx.surface.invoke(c, "workspace.move_to", { workspaceIds: [w2.id, w3.id], beforeWorkspaceId: w1.id });
+    expect(moveResult).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().workspaces.map((w) => w.id)).toEqual([w2.id, w3.id, w1.id]);
+  });
+
+  it("workspace.close with closeLinkedWorktrees=true closes linked worktrees sharing the same repoKey", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const r1 = await ctx.surface.invoke(c, "workspace.create", { cwd: "/repo", label: "main" });
+    const r2 = await ctx.surface.invoke(c, "workspace.create", { cwd: "/repo-wt", label: "wt" });
+    if (!r1.ok || !r2.ok) throw new Error("unreachable");
+    const main = (r1.result as { workspace: { id: string } }).workspace;
+    const wt = (r2.result as { workspace: { id: string } }).workspace;
+    ctx.session.updateWorkspaceGit(main.id, { branch: "main", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: false });
+    ctx.session.updateWorkspaceGit(wt.id, { branch: "feature", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+
+    const closeResult = await ctx.surface.invoke(c, "workspace.close", { workspaceId: main.id, closeLinkedWorktrees: true });
+    expect(closeResult).toEqual({ ok: true, result: {} });
+    const remainingIds = ctx.session.snapshot().workspaces.map((w) => w.id);
+    expect(remainingIds).not.toContain(main.id);
+    expect(remainingIds).not.toContain(wt.id);
+  });
+
+  it("group.create / rename / add_member / remove_member / toggle_collapsed / delete round-trip", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const wsResult = await ctx.surface.invoke(c, "workspace.create", { cwd: "/home/u", label: "api" });
+    if (!wsResult.ok) throw new Error("unreachable");
+    const { workspace } = wsResult.result as { workspace: { id: string } };
+
+    const createResult = await ctx.surface.invoke(c, "group.create", { label: "backend" });
+    if (!createResult.ok) throw new Error("unreachable");
+    const group = (createResult.result as { group: { id: string; label: string; collapsed: boolean } }).group;
+    expect(group).toEqual({ id: "g1", label: "backend", collapsed: false });
+
+    expect(await ctx.surface.invoke(c, "group.rename", { groupId: group.id, label: "frontend" })).toEqual({ ok: true, result: {} });
+    expect(await ctx.surface.invoke(c, "group.toggle_collapsed", { groupId: group.id })).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().groups.find((g) => g.id === group.id)?.collapsed).toBe(true);
+    expect(await ctx.surface.invoke(c, "group.add_member", { groupId: group.id, workspaceId: workspace.id })).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().workspaces.find((w) => w.id === workspace.id)?.groupId).toBe(group.id);
+
+    expect(await ctx.surface.invoke(c, "group.remove_member", { workspaceId: workspace.id })).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().workspaces.find((w) => w.id === workspace.id)?.groupId).toBeNull();
+
+    expect(await ctx.surface.invoke(c, "group.delete", { groupId: group.id })).toEqual({ ok: true, result: {} });
+    expect(ctx.session.snapshot().groups).toEqual([]);
+  });
+
+  it("group.rename on an unknown group returns not_found", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const result = await ctx.surface.invoke(c, "group.rename", { groupId: "g999", label: "x" });
+    expect(result).toEqual({ ok: false, error: { code: "not_found", message: expect.stringContaining("g999") } });
+  });
 });
 
 // 入口が `newCwd` を落とさず `SessionService` へ渡すこと（20260921-new-terminal-cwd の T4）。場所を決める規則そのものは

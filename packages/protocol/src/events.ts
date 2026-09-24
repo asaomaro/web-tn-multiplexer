@@ -1,4 +1,4 @@
-import type { AgentInfo, Pane, SessionFocus, Tab, Workspace } from "./model.js";
+import type { AgentInfo, Pane, SessionFocus, Tab, Workspace, WorkspaceGroup } from "./model.js";
 import type { AgentIntegrationStatusResult } from "./messages.js";
 
 /**
@@ -16,6 +16,32 @@ export interface WorkspaceUpdatedEvent {
 export interface WorkspaceClosedEvent {
   event: "workspace.closed";
   data: { workspaceId: string };
+}
+/**
+ * workspace の並び順が変わった（20260923-workspace-grouping。decisions.md D5）。`workspace.move`/
+ * `workspace.move_to` は動いた workspace 自身のフィールドを変えない（サーバ側 Map の並びを
+ * 作り直すだけ）ので、既存の `WorkspaceUpdatedEvent` だけでは並び替えを伝えられない——この
+ * イベントで新しい全順序（workspace id の配列）を明示的に配る。
+ */
+export interface WorkspaceOrderChangedEvent {
+  event: "workspace.order_changed";
+  data: { workspaceIds: string[] };
+}
+/** 手動グループを作った（20260923-workspace-grouping）。 */
+export interface GroupCreatedEvent {
+  event: "group.created";
+  data: { group: WorkspaceGroup };
+}
+/** 手動グループの名前変更・折りたたみ状態が変わった。 */
+export interface GroupUpdatedEvent {
+  event: "group.updated";
+  data: { group: WorkspaceGroup };
+}
+/** 手動グループを削除した（メンバーの workspace 自体は消えない。個々の groupId の変更は
+ *  `WorkspaceUpdatedEvent` で配る）。 */
+export interface GroupDeletedEvent {
+  event: "group.deleted";
+  data: { groupId: string };
 }
 export interface TabCreatedEvent {
   event: "tab.created";
@@ -75,6 +101,10 @@ export type ServerEvent =
   | WorkspaceCreatedEvent
   | WorkspaceUpdatedEvent
   | WorkspaceClosedEvent
+  | WorkspaceOrderChangedEvent
+  | GroupCreatedEvent
+  | GroupUpdatedEvent
+  | GroupDeletedEvent
   | TabCreatedEvent
   | TabUpdatedEvent
   | TabClosedEvent

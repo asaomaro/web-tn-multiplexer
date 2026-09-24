@@ -185,6 +185,21 @@ export const ACTIONS = [
     defaults: [],
     action: { type: "moveTab", direction: "next" },
   },
+  // 20260923-workspace-grouping。`move_tab_previous`/`move_tab_next` と同じ「既定キー無し」の流儀。
+  {
+    id: "move_workspace_previous",
+    label: "workspace を前へ動かす",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "moveWorkspace", direction: "previous" },
+  },
+  {
+    id: "move_workspace_next",
+    label: "workspace を後ろへ動かす",
+    group: "workspace / tab",
+    defaults: [],
+    action: { type: "moveWorkspace", direction: "next" },
+  },
   {
     id: "previous_agent",
     label: "前の agent へフォーカス",

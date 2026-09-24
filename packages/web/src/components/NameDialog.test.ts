@@ -18,6 +18,9 @@ function makeActions() {
     confirmRenamePane: vi.fn(),
     confirmRenameTab: vi.fn(),
     confirmRenameWorkspace: vi.fn(),
+    // 20260923-workspace-grouping。
+    confirmCreateGroup: vi.fn(),
+    confirmRenameGroup: vi.fn(),
   };
 }
 
@@ -60,6 +63,21 @@ describe("NameDialog — 表示と入力初期値", () => {
     const input = wrapper.get("input").element as HTMLInputElement;
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe(3);
+  });
+
+  // 20260923-workspace-grouping。
+  it("createGroup は空から始まり、renameGroup は今の名前を入力済みにする", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "createGroup", workspaceId: "w1" });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect((wrapper.get("input").element as HTMLInputElement).value).toBe("");
+
+    view.openDialogWithContext({ kind: "renameGroup", groupId: "g1", currentLabel: "backend" });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect((wrapper.get("input").element as HTMLInputElement).value).toBe("backend");
   });
 
   it("対象外の dialogContext（confirmClose 等）では閉じたまま", async () => {
@@ -122,6 +140,25 @@ describe("NameDialog — 確定・取り消し", () => {
     await wrapper.get("input").setValue("new-ws-name");
     await wrapper.get("form").trigger("submit");
     expect(actions.confirmRenameWorkspace).toHaveBeenCalledWith("new-ws-name");
+  });
+
+  // 20260923-workspace-grouping。
+  it("Enter（submit）で該当する confirm* を呼ぶ（createGroup/renameGroup）", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    const wrapper = mountDialog(actions);
+
+    view.openDialogWithContext({ kind: "createGroup", workspaceId: "w1" });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("input").setValue("backend");
+    await wrapper.get("form").trigger("submit");
+    expect(actions.confirmCreateGroup).toHaveBeenCalledWith("backend");
+
+    view.openDialogWithContext({ kind: "renameGroup", groupId: "g1", currentLabel: "backend" });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("input").setValue("frontend");
+    await wrapper.get("form").trigger("submit");
+    expect(actions.confirmRenameGroup).toHaveBeenCalledWith("frontend");
   });
 
   it("キャンセルボタンで取り消し、confirm* を呼ばずに閉じて元の pane へフォーカスを戻す", async () => {

@@ -424,6 +424,42 @@ describe("ActionDispatcher — 閉じる前の確認（D23。busy な pane を�
     expect(conn.requests).toEqual([["pane.close", { paneId: "p1" }]]);
     expect(view.dialogContext).toBeNull();
   });
+
+  // 20260923-workspace-grouping（herdr の close_group 相当）。
+  it("confirmClose: workspace 対象には closeLinkedWorktrees を渡す（既定 false）", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "workspace", id: "w1" }] });
+    makeDispatcher(conn).dispatcher.confirmClose();
+    expect(conn.requests).toEqual([["workspace.close", { workspaceId: "w1", closeLinkedWorktrees: false }]]);
+  });
+
+  it("confirmClose: チェックボックスの状態（true）を workspace.close にそのまま渡す", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmClose", targets: [{ type: "workspace", id: "w1" }] });
+    makeDispatcher(conn).dispatcher.confirmClose(true);
+    expect(conn.requests).toEqual([["workspace.close", { workspaceId: "w1", closeLinkedWorktrees: true }]]);
+  });
+
+  // タスク点検の指摘：`ConfirmDialog.vue` のチェックボックスは workspace 対象1件のときだけ出るので、
+  // 万一 workspace 対象が複数になる呼び出し元が現れても、誤って全部に closeLinkedWorktrees を適用しない。
+  it("confirmClose: workspace 対象が複数あるときは closeLinkedWorktrees を適用しない", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({
+      kind: "confirmClose",
+      targets: [
+        { type: "workspace", id: "w1" },
+        { type: "workspace", id: "w2" },
+      ],
+    });
+    makeDispatcher(conn).dispatcher.confirmClose(true);
+    expect(conn.requests).toEqual([
+      ["workspace.close", { workspaceId: "w1", closeLinkedWorktrees: false }],
+      ["workspace.close", { workspaceId: "w2", closeLinkedWorktrees: false }],
+    ]);
+  });
 });
 
 describe("ActionDispatcher — navigate", () => {
@@ -456,6 +492,25 @@ describe("ActionDispatcher — navigate", () => {
     expect(view.navigateSelection).toBe("w1");
     dispatcher.run({ type: "navigate", op: "up" });
     expect(view.navigateSelection).toBe("w2");
+  });
+
+  // レビューの指摘（must）：`workspaceDelta` と同じ回帰。`navigate`（サイドバーの選択ジャンプ）の
+  // up/down も画面の並び（`Sidebar.vue` の `sidebar-row-selected` が乗る行）を辿る対象なので、
+  // グループを考慮しない素の反復順のままでは選択が画面上の隣と食い違う。
+  it("up/down はグループがあっても画面上の並び（グループはまとめて1ブロック）を辿る", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    // 開いた順（flat）は A, C, B。A・B は手動グループ g1 のメンバー、C は無所属。
+    // 画面には「A（グループ先頭）→ B（グループ2番目）→ C（グループ外）」の順で表示される。
+    session.workspaceUpserted(makeWorkspace("A", [], { groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("C"));
+    session.workspaceUpserted(makeWorkspace("B", [], { groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "grp", collapsed: false });
+    const view = useViewStore(pinia);
+    view.setNavigateSelection("A");
+    const { dispatcher } = makeDispatcher(conn);
+    dispatcher.run({ type: "navigate", op: "down" });
+    expect(view.navigateSelection).toBe("B"); // 画面上の隣（C ではない）
   });
 
   it("activate: 選択中の workspace の activeTabId へ切り替え、workspace.focus を送る", () => {
@@ -1005,6 +1060,166 @@ describe("ActionDispatcher — worktree", () => {
   });
 });
 
+// 20260923-workspace-grouping。
+describe("ActionDispatcher — workspace の並べ替え", () => {
+  it("moveWorkspace: 表示中の workspace を対象に workspace.move を送る", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    view.setView("w1", "t1");
+    makeDispatcher(conn).dispatcher.run({ type: "moveWorkspace", direction: "next" });
+    expect(conn.requests).toEqual([["workspace.move", { workspaceId: "w1", direction: "next" }]]);
+  });
+
+  it("moveWorkspace: 表示中の workspace が無ければ何も送らない", () => {
+    const conn = makeConnection();
+    makeDispatcher(conn).dispatcher.run({ type: "moveWorkspace", direction: "previous" });
+    expect(conn.requests).toEqual([]);
+  });
+
+  // タスク点検の指摘：`moveTab` と同じく、閉じた直後の stale な id では送らない。
+  it("moveWorkspace: 表示中とされている workspace がもう session に存在しなければ何も送らない", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.setView("w9", "t9"); // session には無い id
+    makeDispatcher(conn).dispatcher.run({ type: "moveWorkspace", direction: "next" });
+    expect(conn.requests).toEqual([]);
+  });
+
+  it("moveWorkspacesByDrag: 渡した id 配列と beforeWorkspaceId をそのまま workspace.move_to へ送る（グループ一括も同じ経路）", () => {
+    const conn = makeConnection();
+    makeDispatcher(conn).dispatcher.moveWorkspacesByDrag(["w1", "w2"], "w3");
+    expect(conn.requests).toEqual([["workspace.move_to", { workspaceIds: ["w1", "w2"], beforeWorkspaceId: "w3" }]]);
+  });
+
+  it("moveWorkspacesByDrag: beforeWorkspaceId が null なら末尾へ", () => {
+    const conn = makeConnection();
+    makeDispatcher(conn).dispatcher.moveWorkspacesByDrag(["w1"], null);
+    expect(conn.requests).toEqual([["workspace.move_to", { workspaceIds: ["w1"], beforeWorkspaceId: null }]]);
+  });
+});
+
+describe("ActionDispatcher — 手動グループ（herdr に前例が無い独自拡張）", () => {
+  it("createGroupForWorkspace: createGroup ダイアログを開く", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    makeDispatcher(conn).dispatcher.createGroupForWorkspace("w1");
+    expect(view.dialogContext).toEqual({ kind: "createGroup", workspaceId: "w1" });
+  });
+
+  it("confirmCreateGroup: group.create してから、返ってきた id で group.add_member を送る", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["group.create"] = { group: { id: "g9", label: "backend", collapsed: false } };
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "createGroup", workspaceId: "w1" });
+    makeDispatcher(conn).dispatcher.confirmCreateGroup("backend");
+    expect(view.dialogContext).toBeNull(); // 応答を待たずに閉じる
+    await flush();
+    expect(conn.requests).toEqual([
+      ["group.create", { label: "backend" }],
+      ["group.add_member", { groupId: "g9", workspaceId: "w1" }],
+    ]);
+  });
+
+  it("confirmCreateGroup: 空欄では確定しない", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "createGroup", workspaceId: "w1" });
+    makeDispatcher(conn).dispatcher.confirmCreateGroup("   ");
+    expect(conn.requests).toEqual([]);
+  });
+
+  // タスク点検の指摘：group.create 自体の失敗と、それに続く group.add_member だけの失敗を
+  // 別の文言にする（後者はグループ自体は作成済みなので「作成できませんでした」は誤り）。
+  it("confirmCreateGroup: group.create が失敗したら「作成できませんでした」と知らせる", async () => {
+    const conn = makeConnection();
+    conn.rejectWith["group.create"] = "not_found";
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "createGroup", workspaceId: "w1" });
+    makeDispatcher(conn).dispatcher.confirmCreateGroup("backend");
+    await flush();
+    expect(view.toasts.map((t) => t.message)).toContain("グループを作成できませんでした");
+  });
+
+  it("confirmCreateGroup: group.create は成功したが group.add_member が失敗したら、別の文言で知らせる", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["group.create"] = { group: { id: "g9", label: "backend", collapsed: false } };
+    conn.rejectWith["group.add_member"] = "not_found";
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "createGroup", workspaceId: "w1" });
+    makeDispatcher(conn).dispatcher.confirmCreateGroup("backend");
+    await flush();
+    expect(view.toasts.map((t) => t.message)).toContain("グループは作成しましたが、workspace の追加に失敗しました。");
+    expect(view.toasts.map((t) => t.message)).not.toContain("グループを作成できませんでした");
+  });
+
+  it("renameGroupById: 現在の名前を入れて renameGroup ダイアログを開く", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    makeDispatcher(conn).dispatcher.renameGroupById("g1");
+    expect(useViewStore(pinia).dialogContext).toEqual({ kind: "renameGroup", groupId: "g1", currentLabel: "backend" });
+  });
+
+  it("confirmRenameGroup: group.rename を送る。空欄では確定しない", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "renameGroup", groupId: "g1", currentLabel: "backend" });
+    makeDispatcher(conn).dispatcher.confirmRenameGroup("frontend");
+    expect(conn.requests).toEqual([["group.rename", { groupId: "g1", label: "frontend" }]]);
+
+    view.openDialogWithContext({ kind: "renameGroup", groupId: "g1", currentLabel: "backend" });
+    makeDispatcher(conn).dispatcher.confirmRenameGroup("  ");
+    expect(conn.requests).toHaveLength(1); // 増えていない
+  });
+
+  it("deleteGroupById: group.delete を送る（確認は無し。design どおり）", () => {
+    const conn = makeConnection();
+    makeDispatcher(conn).dispatcher.deleteGroupById("g1");
+    expect(conn.requests).toEqual([["group.delete", { groupId: "g1" }]]);
+  });
+
+  // タスク点検の指摘：値を計算して送るのではなく、サーバに反転させる（`pane.zoom` の
+  // `mode: "toggle"` と同じ考え方。二重クリックの競合を避ける）。
+  it("toggleGroupCollapsed: groupId だけを渡し、値の計算はサーバに任せる（group.toggle_collapsed）", () => {
+    const conn = makeConnection();
+    makeDispatcher(conn).dispatcher.toggleGroupCollapsed("g1");
+    expect(conn.requests).toEqual([["group.toggle_collapsed", { groupId: "g1" }]]);
+  });
+
+  it("openGroupPicker: グループが1件以上あれば addToGroup ダイアログを開く", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    makeDispatcher(conn).dispatcher.openGroupPicker("w1");
+    expect(useViewStore(pinia).dialogContext).toEqual({ kind: "addToGroup", workspaceId: "w1", groups: [{ id: "g1", label: "backend", collapsed: false }] });
+  });
+
+  it("openGroupPicker: グループが0件ならダイアログを開かず知らせる", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    makeDispatcher(conn).dispatcher.openGroupPicker("w1");
+    expect(view.dialogContext).toBeNull();
+    expect(view.toasts.length).toBeGreaterThan(0);
+  });
+
+  it("confirmAddToGroup: group.add_member を送り、ダイアログを閉じる", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "addToGroup", workspaceId: "w1", groups: [] });
+    makeDispatcher(conn).dispatcher.confirmAddToGroup("g1");
+    expect(conn.requests).toEqual([["group.add_member", { groupId: "g1", workspaceId: "w1" }]]);
+    expect(view.dialogContext).toBeNull();
+  });
+
+  it("removeWorkspaceFromGroup: group.remove_member を送る", () => {
+    const conn = makeConnection();
+    makeDispatcher(conn).dispatcher.removeWorkspaceFromGroup("w1");
+    expect(conn.requests).toEqual([["group.remove_member", { workspaceId: "w1" }]]);
+  });
+});
+
 describe("ActionDispatcher — 公式フック連携（20260923-agent-session-resume）", () => {
   it("refreshAgentIntegrationStatus：agent_integration.status を呼び、store へ反映する", async () => {
     const conn = makeConnection();
@@ -1293,6 +1508,29 @@ describe("ActionDispatcher — workspaceDelta（previous_workspace/next_workspac
     dispatcher.run({ type: "workspaceDelta", delta: 1 });
     expect(view.workspaceId).toBe("w1");
     expect(conn.requests).toEqual([]);
+  });
+
+  // レビューの指摘（must）：`Sidebar.vue` は 20260923-workspace-grouping でグループを1ブロックとして
+  // まとめる描画（`groupedWorkspaceRows`）に切り替わったが、`workspaceDelta` は素の「開いた順」
+  // （`orderedWorkspaceIds`）のままだったため、画面上の隣と実際に切り替わる先が食い違っていた。
+  it("画面上の並び（グループはまとめて1ブロック）を辿る——開いた順が A, C, B でも次は画面上隣の B", () => {
+    const conn = makeConnection();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    // 開いた順（flat）は A, C, B。A・B は手動グループ g1 のメンバー、C は無所属。
+    // 画面には「A（グループ先頭）→ B（グループ2番目）→ C（グループ外）」の順で表示される。
+    session.workspaceUpserted({ ...makeWorkspace("A", ["ta"]), activeTabId: "ta", groupId: "g1" });
+    session.workspaceUpserted({ ...makeWorkspace("C", ["tc"]), activeTabId: "tc" });
+    session.workspaceUpserted({ ...makeWorkspace("B", ["tb"]), activeTabId: "tb", groupId: "g1" });
+    session.groupUpserted({ id: "g1", label: "grp", collapsed: false });
+    session.tabUpserted(makeTab("ta", "A", "pa"));
+    session.tabUpserted(makeTab("tc", "C", "pc"));
+    session.tabUpserted(makeTab("tb", "B", "pb"));
+    view.setView("A", "ta");
+    const { dispatcher } = makeDispatcher(conn);
+
+    dispatcher.run({ type: "workspaceDelta", delta: 1 });
+    expect(view.workspaceId).toBe("B"); // 画面上の隣（C ではない）
   });
 });
 

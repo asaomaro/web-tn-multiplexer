@@ -4,6 +4,7 @@ import type {
   AgentSessionRef,
   Dir,
   GitInfo,
+  GroupId,
   HostInfo,
   IdKind,
   NextIdCounters,
@@ -19,11 +20,12 @@ import type {
   Tab,
   TabId,
   Workspace,
+  WorkspaceGroup,
   WorkspaceId,
 } from "@wtm/protocol";
 import { formatId } from "@wtm/protocol";
 import * as Layout from "./LayoutTree.js";
-import type { SessionFileWorkspace } from "../persist/SessionFile.js";
+import type { SessionFileGroup, SessionFileWorkspace } from "../persist/SessionFile.js";
 
 /** 新しい pane を作るときに、呼び出し側（SessionService）が用意して渡す実行時の情報。 */
 export interface NewPaneInit {
@@ -75,7 +77,8 @@ export class SessionModel {
   private readonly workspaces = new Map<WorkspaceId, Workspace>();
   private readonly tabs = new Map<TabId, Tab>();
   private readonly panes = new Map<PaneId, Pane>();
-  private nextIdCounters: NextIdCounters = { w: 1, t: 1, p: 1, s: 1, a: 1 };
+  private readonly groups = new Map<GroupId, WorkspaceGroup>();
+  private nextIdCounters: NextIdCounters = { w: 1, t: 1, p: 1, s: 1, a: 1, g: 1 };
   private focus: SessionFocus | null = null;
 
   // --- id -----------------------------------------------------------------
@@ -109,6 +112,12 @@ export class SessionModel {
   listWorkspaces(): Workspace[] {
     return [...this.workspaces.values()];
   }
+  getGroup(id: GroupId): WorkspaceGroup | undefined {
+    return this.groups.get(id);
+  }
+  listGroups(): WorkspaceGroup[] {
+    return [...this.groups.values()];
+  }
   listTabs(): Tab[] {
     return [...this.tabs.values()];
   }
@@ -133,6 +142,11 @@ export class SessionModel {
     const pane = this.panes.get(id);
     if (!pane) throw new NotFoundError("pane", id);
     return pane;
+  }
+  private requireGroup(id: GroupId): WorkspaceGroup {
+    const group = this.groups.get(id);
+    if (!group) throw new NotFoundError("group", id);
+    return group;
   }
 
   // --- creation ---------------------------------------------------------------
@@ -353,6 +367,147 @@ export class SessionModel {
     return updated;
   }
 
+  // --- groups & workspace ordering (20260923-workspace-grouping) --------------
+
+  createGroup(label: string): WorkspaceGroup {
+    const id = this.nextId("g");
+    const group: WorkspaceGroup = { id, label, collapsed: false };
+    this.groups.set(id, group);
+    return group;
+  }
+
+  renameGroup(id: GroupId, label: string): WorkspaceGroup {
+    const group = this.requireGroup(id);
+    const updated = { ...group, label };
+    this.groups.set(id, updated);
+    return updated;
+  }
+
+  /** decisions.md D7：design のデータ構造（`collapsed`）にはあったが、design には変更用の
+   *  メソッドが無かったための追加。**値ではなく反転を返す**（タスク点検の指摘：クライアントに
+   *  今の値を読ませて反転させて送らせる形だと、応答前に連続で呼ばれたとき両方が同じ古い値から
+   *  同じ結果を送ってしまう。サーバが最新の値から反転するのでその競合が起きない）。 */
+  toggleGroupCollapsed(id: GroupId): WorkspaceGroup {
+    const group = this.requireGroup(id);
+    const updated = { ...group, collapsed: !group.collapsed };
+    this.groups.set(id, updated);
+    return updated;
+  }
+
+  /** メンバーの groupId を null に戻す（design「server（SessionModel）」）。グループ自体の
+   *  実体だけを消す——`Workspace` は消えない。 */
+  deleteGroup(id: GroupId): void {
+    this.requireGroup(id);
+    this.groups.delete(id);
+    for (const ws of this.workspaces.values()) {
+      if (ws.groupId === id) this.workspaces.set(ws.id, { ...ws, groupId: null });
+    }
+  }
+
+  addToGroup(workspaceId: WorkspaceId, groupId: GroupId): Workspace {
+    const ws = this.requireWorkspace(workspaceId);
+    this.requireGroup(groupId);
+    const updated = { ...ws, groupId };
+    this.workspaces.set(workspaceId, updated);
+    return updated;
+  }
+
+  /** 現在のグループから外す（groupId を null に戻す）。既にどのグループにも属していなくても
+   *  無害（同じ結果を返すだけ）。 */
+  removeFromGroup(workspaceId: WorkspaceId): Workspace {
+    const ws = this.requireWorkspace(workspaceId);
+    const updated = { ...ws, groupId: null };
+    this.workspaces.set(workspaceId, updated);
+    return updated;
+  }
+
+  /**
+   * id が worktree 自動グループの本体（親）なら、束ねられた linked worktree の id 一覧を返す
+   * （副作用なしの問い合わせ）。一括クローズ（`closeLinkedWorktrees`）の対象を求めるのに使う
+   * （design「振る舞いの詳細（一括クローズ）」）。本体でなければ・git 情報が無ければ・束ねられた
+   * worktree が無ければ `[]`。
+   *
+   * **`packages/web/src/store/workspaceGrouping.ts` の `autoGroupsOf` と全く同じ判定を行う**
+   * （cross-check の指摘：以前は `groupId`（手動グループ優先。design「設計方針」）を見ておらず、
+   * `ConfirmDialog` が表示する「束ねた worktree」の件数〔クライアント側の計算〕と、実際にここが
+   * 閉じる件数〔サーバ側の計算〕が食い違っていた。GitInfoPoller の周期の谷間で本体が候補に
+   * 無いときに先頭を暫定的に親にするフォールバックも、クライアント側にしか無く、サーバ側は
+   * `isLinkedWorktree` を理由に本体でないと判定して空を返していた——`closeLinkedWorktrees` の
+   * チェックが実際には何も束ねずに終わる無言の不整合になっていた）。サーバとクライアントは別
+   * ランタイムで実装を共有できないので、**判定のロジック自体をここに書き写して揃える**。
+   */
+  linkedWorktreeGroupMembers(id: WorkspaceId): WorkspaceId[] {
+    const ws = this.workspaces.get(id);
+    const repoKey = ws?.git?.repoKey;
+    if (!ws || !repoKey || ws.groupId !== null) return [];
+    const allWorkspaces = [...this.workspaces.values()];
+    // 手動グループが優先（design「設計方針」）——groupId が付いている workspace は候補から外す。
+    const candidates = allWorkspaces.filter((w) => w.groupId === null && w.git?.repoKey === repoKey);
+    if (candidates.length < 2) return [];
+    const explicitParent = candidates.find((w) => w.git!.isLinkedWorktree === false);
+    if (!explicitParent) {
+      // 本体は実在するが候補から外れている（手動グループに入っている等）——誤って暫定親の
+      // フォールバックへ進まない（client 側 `autoGroupsOf` と同じガード。cross-check round2 の
+      // 指摘：ここが抜けていて「候補の中に本体が無ければ無条件に先頭へフォールバック」していた
+      // ため、本体が手動グループにあるケースで client は「束ねるものは無い」と判断するのに
+      // server 単体は「束ねるものがある」と答える食い違いが残っていた）。
+      const realMainExistsElsewhere = allWorkspaces.some((w) => w.git?.repoKey === repoKey && w.git.isLinkedWorktree === false);
+      if (realMainExistsElsewhere) return [];
+    }
+    const parentId = explicitParent ? explicitParent.id : candidates[0]!.id;
+    if (parentId !== id) return []; // id は本体（親）ではない
+    return candidates.filter((w) => w.id !== id).map((w) => w.id);
+  }
+
+  /**
+   * 対象 workspace を1つ隣へ（巡回込み）。`moveTab`（直上）と同じ splice remove→insert
+   * （decisions.md D10 と同じ理由）。workspace が1個以下なら意味の無い変化なので null
+   * （design「エラー処理 / 異常系」。SessionService はこのとき配布しない）。
+   */
+  moveWorkspace(id: WorkspaceId, direction: "previous" | "next"): Workspace[] | null {
+    this.requireWorkspace(id);
+    const ids = [...this.workspaces.keys()];
+    if (ids.length <= 1) return null;
+    const idx = ids.indexOf(id);
+    const last = ids.length - 1;
+    const newIdx = direction === "next" ? (idx === last ? 0 : idx + 1) : idx === 0 ? last : idx - 1;
+    ids.splice(idx, 1);
+    ids.splice(newIdx, 0, id);
+    this.reorderWorkspaces(ids);
+    return this.listWorkspaces();
+  }
+
+  /**
+   * `workspaceIds` をまとめて `beforeWorkspaceId` の直前へ（null なら末尾）。相対順序は保つ
+   * （herdr の `WorkspaceMoveBlockParams` 相当。design「振る舞いの詳細（D&D）」）。
+   * `beforeWorkspaceId` が動かす対象自身を指す場合（グループの一括移動で、ドロップ先が
+   * そのグループ自身のメンバーだった等）は意味の無い要求として null（design には無い
+   * エッジケース——`moveTab`/`moveWorkspace` の「無変化なら null」と同じ扱いに揃えた）。
+   */
+  moveWorkspacesTo(workspaceIds: WorkspaceId[], beforeWorkspaceId: WorkspaceId | null): Workspace[] | null {
+    for (const id of workspaceIds) this.requireWorkspace(id);
+    if (beforeWorkspaceId !== null) this.requireWorkspace(beforeWorkspaceId);
+    const moving = new Set(workspaceIds);
+    if (beforeWorkspaceId !== null && moving.has(beforeWorkspaceId)) return null;
+    const before = [...this.workspaces.keys()];
+    const rest = before.filter((id) => !moving.has(id));
+    const insertAt = beforeWorkspaceId === null ? rest.length : rest.indexOf(beforeWorkspaceId);
+    const after = [...rest.slice(0, insertAt), ...workspaceIds, ...rest.slice(insertAt)];
+    // 実質無変化（ドロップ先が既に今の位置と同じ）なら null（`moveTab`/`moveWorkspace` と同じ規約。
+    // タスク点検の指摘——揃っていないと、意味の無い `workspace.order_changed` 配布と永続化書き込みが起きる）。
+    if (after.every((id, i) => id === before[i])) return null;
+    this.reorderWorkspaces(after);
+    return this.listWorkspaces();
+  }
+
+  /** `[...map.entries()]` を並べ替えてから作り直す（design「設計方針」）。個々の `Workspace`
+   *  オブジェクトは変えない——Map の反復順（＝「開いた順」の実体）だけを変える。 */
+  private reorderWorkspaces(order: WorkspaceId[]): void {
+    const entries = order.map((id) => [id, this.workspaces.get(id)!] as const);
+    this.workspaces.clear();
+    for (const [id, ws] of entries) this.workspaces.set(id, ws);
+  }
+
   private closeTabInternal(id: TabId): RemovalResult {
     const tab = this.requireTab(id);
     const ws = this.requireWorkspace(tab.workspaceId);
@@ -565,6 +720,7 @@ export class SessionModel {
       workspaces: this.listWorkspaces(),
       tabs: this.listTabs(),
       panes: this.listPanes(),
+      groups: this.listGroups(),
       focus: this.focus,
       limits,
     };
@@ -586,7 +742,9 @@ export class SessionModel {
       cwd: data.cwd,
       tabIds: data.tabs.map((t) => t.id),
       activeTabId: data.activeTabId,
-      groupId: null,
+      // 以前の版の保存には無い——無ければ null（`autoLabel`/`agentSession` と同じ「optional 追加」方式。
+      // 20260923-workspace-grouping）。
+      groupId: data.groupId ?? null,
       git: null,
       autoLabel, // 呼ぶ側（`SessionService.restore`）が決める
     };
@@ -626,5 +784,11 @@ export class SessionModel {
         this.panes.set(pane.id, pane);
       }
     }
+  }
+
+  /** `session.json` の `groups` から、保存されていた id をそのまま使って組み立てる（副作用なし。
+   *  id は払い出さない。`restoreWorkspace` と同じ形。20260923-workspace-grouping）。 */
+  restoreGroup(data: SessionFileGroup): void {
+    this.groups.set(data.id, { id: data.id, label: data.label, collapsed: data.collapsed });
   }
 }

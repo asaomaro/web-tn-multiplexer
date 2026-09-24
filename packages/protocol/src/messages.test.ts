@@ -2,12 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   AgentIntegrationInstallParams,
   ClientThemeParams,
+  GroupAddMemberParams,
+  GroupCreateParams,
+  GroupDeleteParams,
+  GroupRemoveMemberParams,
+  GroupRenameParams,
+  GroupToggleCollapsedParams,
   METHOD_SCHEMAS,
   NewCwd,
   PaneSplitParams,
   TabCreateParams,
   TabMoveParams,
+  WorkspaceCloseParams,
   WorkspaceCreateParams,
+  WorkspaceMoveParams,
+  WorkspaceMoveToParams,
   WorkspaceRenameParams,
 } from "./messages.js";
 import { THEME_NAMES } from "./theme.js";
@@ -35,6 +44,52 @@ describe("messages", () => {
       expect(AgentIntegrationInstallParams.parse({ kind })).toEqual({ kind });
     }
     expect(() => AgentIntegrationInstallParams.parse({ kind: "gemini" })).toThrow();
+  });
+
+  // 20260923-workspace-grouping。herdr の close_group 相当。省略可（既定は呼び出し側で決める。
+  // タスク点検の指摘：`.default(false)` だと z.infer の TS 型が必須になり既存の呼び出し元が壊れる）。
+  it("workspace.close の closeLinkedWorktrees は省略可", () => {
+    expect(WorkspaceCloseParams.parse({ workspaceId: "w1" })).toEqual({ workspaceId: "w1" });
+    expect(WorkspaceCloseParams.parse({ workspaceId: "w1", closeLinkedWorktrees: true })).toEqual({
+      workspaceId: "w1",
+      closeLinkedWorktrees: true,
+    });
+  });
+
+  // 20260923-workspace-grouping（キーバインド用。tab.move と同じ delta 指定の形）。
+  it("validates workspace.move params (direction is previous/next only)", () => {
+    expect(WorkspaceMoveParams.parse({ workspaceId: "w1", direction: "previous" })).toEqual({
+      workspaceId: "w1",
+      direction: "previous",
+    });
+    expect(() => WorkspaceMoveParams.parse({ workspaceId: "w1", direction: "up" })).toThrow();
+  });
+
+  // 20260923-workspace-grouping（D&D 用。anchor 指定。複数 ID で単一ドラッグ・グループ一括移動を両方表す）。
+  it("validates workspace.move_to params", () => {
+    expect(WorkspaceMoveToParams.parse({ workspaceIds: ["w1", "w2"], beforeWorkspaceId: "w3" })).toEqual({
+      workspaceIds: ["w1", "w2"],
+      beforeWorkspaceId: "w3",
+    });
+    // 末尾へ移す（anchor 無し）
+    expect(WorkspaceMoveToParams.parse({ workspaceIds: ["w1"], beforeWorkspaceId: null })).toEqual({
+      workspaceIds: ["w1"],
+      beforeWorkspaceId: null,
+    });
+    // 空配列は弾く（動かす対象が無い要求は不正）
+    expect(() => WorkspaceMoveToParams.parse({ workspaceIds: [], beforeWorkspaceId: null })).toThrow();
+  });
+
+  // 20260923-workspace-grouping（手動グループの CRUD）。
+  it("validates group.* params", () => {
+    expect(GroupCreateParams.parse({ label: "backend" })).toEqual({ label: "backend" });
+    expect(() => GroupCreateParams.parse({ label: "" })).toThrow(); // 空の名前は弾く
+    expect(GroupRenameParams.parse({ groupId: "g1", label: "frontend" })).toEqual({ groupId: "g1", label: "frontend" });
+    expect(() => GroupRenameParams.parse({ groupId: "g1", label: "" })).toThrow();
+    expect(GroupDeleteParams.parse({ groupId: "g1" })).toEqual({ groupId: "g1" });
+    expect(GroupAddMemberParams.parse({ groupId: "g1", workspaceId: "w1" })).toEqual({ groupId: "g1", workspaceId: "w1" });
+    expect(GroupRemoveMemberParams.parse({ workspaceId: "w1" })).toEqual({ workspaceId: "w1" });
+    expect(GroupToggleCollapsedParams.parse({ groupId: "g1" })).toEqual({ groupId: "g1" });
   });
 
   it("registers a schema for every method the WebSocket table defines", () => {

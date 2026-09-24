@@ -307,6 +307,236 @@ describe("SessionModel — misc mutations", () => {
     });
   });
 
+  // 20260923-workspace-grouping。
+  describe("groups", () => {
+    it("createGroup / renameGroup / toggleGroupCollapsed / deleteGroup", () => {
+      const model = new SessionModel();
+      const group = model.createGroup("backend");
+      expect(group).toEqual({ id: "g1", label: "backend", collapsed: false });
+      expect(model.listGroups()).toEqual([group]);
+
+      const renamed = model.renameGroup(group.id, "frontend");
+      expect(renamed.label).toBe("frontend");
+
+      expect(model.toggleGroupCollapsed(group.id).collapsed).toBe(true);
+      expect(model.toggleGroupCollapsed(group.id).collapsed).toBe(false); // もう一度で戻る
+
+      model.deleteGroup(group.id);
+      expect(model.getGroup(group.id)).toBeUndefined();
+      expect(model.listGroups()).toEqual([]);
+    });
+
+    it("addToGroup / removeFromGroup set and clear Workspace.groupId", () => {
+      const model = new SessionModel();
+      const { workspace } = model.createWorkspace("/home/u", "api", init);
+      const group = model.createGroup("backend");
+      expect(model.addToGroup(workspace.id, group.id).groupId).toBe(group.id);
+      expect(model.getWorkspace(workspace.id)?.groupId).toBe(group.id);
+      expect(model.removeFromGroup(workspace.id).groupId).toBeNull();
+      expect(model.getWorkspace(workspace.id)?.groupId).toBeNull();
+    });
+
+    it("deleteGroup clears groupId on every member, but leaves the workspace itself", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      const { workspace: w2 } = model.createWorkspace("/b", "b", init);
+      const group = model.createGroup("backend");
+      model.addToGroup(w1.id, group.id);
+      model.addToGroup(w2.id, group.id);
+      model.deleteGroup(group.id);
+      expect(model.getWorkspace(w1.id)?.groupId).toBeNull();
+      expect(model.getWorkspace(w2.id)?.groupId).toBeNull();
+      expect(model.getWorkspace(w1.id)).not.toBeUndefined(); // workspace 自体は消えない
+    });
+
+    it("addToGroup/renameGroup/toggleGroupCollapsed/deleteGroup throw NotFoundError for an unknown group", () => {
+      const model = new SessionModel();
+      const { workspace } = model.createWorkspace("/home/u", "api", init);
+      expect(() => model.addToGroup(workspace.id, "g99")).toThrow(NotFoundError);
+      expect(() => model.renameGroup("g99", "x")).toThrow(NotFoundError);
+      expect(() => model.toggleGroupCollapsed("g99")).toThrow(NotFoundError);
+      expect(() => model.deleteGroup("g99")).toThrow(NotFoundError);
+    });
+
+    it("restoreGroup rebuilds a group with its saved id (no new id is allocated)", () => {
+      const model = new SessionModel();
+      model.restoreGroup({ id: "g7", label: "restored", collapsed: true });
+      expect(model.getGroup("g7")).toEqual({ id: "g7", label: "restored", collapsed: true });
+    });
+  });
+
+  // 20260923-workspace-grouping。`moveTab` と同じ splice remove→insert（decisions D10 と同じ理由）。
+  describe("moveWorkspace", () => {
+    it("single workspace: no-op (returns null)", () => {
+      const model = new SessionModel();
+      const { workspace } = model.createWorkspace("/home/u", "api", init);
+      expect(model.moveWorkspace(workspace.id, "next")).toBeNull();
+    });
+
+    it("wraps around at the ends", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      const { workspace: w2 } = model.createWorkspace("/b", "b", init);
+      const { workspace: w3 } = model.createWorkspace("/c", "c", init);
+      expect(model.listWorkspaces().map((w) => w.id)).toEqual([w1.id, w2.id, w3.id]);
+
+      expect(model.moveWorkspace(w1.id, "previous")?.map((w) => w.id)).toEqual([w2.id, w3.id, w1.id]);
+      expect(model.moveWorkspace(w1.id, "next")?.map((w) => w.id)).toEqual([w1.id, w2.id, w3.id]);
+    });
+
+    it("throws NotFoundError for an unknown workspace id", () => {
+      const model = new SessionModel();
+      expect(() => model.moveWorkspace("w99", "next")).toThrow(NotFoundError);
+    });
+  });
+
+  // 20260923-workspace-grouping（D&D。anchor 指定。単一・グループ一括の両方を同じ経路で扱う）。
+  describe("moveWorkspacesTo", () => {
+    it("moves a single workspace before another (anchor)", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      const { workspace: w2 } = model.createWorkspace("/b", "b", init);
+      const { workspace: w3 } = model.createWorkspace("/c", "c", init);
+      expect(model.moveWorkspacesTo([w3.id], w1.id)?.map((w) => w.id)).toEqual([w3.id, w1.id, w2.id]);
+    });
+
+    it("moves a block of workspace ids together, preserving their relative order (group block move)", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      const { workspace: w2 } = model.createWorkspace("/b", "b", init);
+      const { workspace: w3 } = model.createWorkspace("/c", "c", init);
+      const { workspace: w4 } = model.createWorkspace("/d", "d", init);
+      // w1・w3 を w4 の前へまとめて動かす → 相対順序（w1 の方が w3 より前）は保たれる。
+      expect(model.moveWorkspacesTo([w1.id, w3.id], w4.id)?.map((w) => w.id)).toEqual([w2.id, w1.id, w3.id, w4.id]);
+    });
+
+    it("null beforeWorkspaceId moves to the end", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      const { workspace: w2 } = model.createWorkspace("/b", "b", init);
+      expect(model.moveWorkspacesTo([w1.id], null)?.map((w) => w.id)).toEqual([w2.id, w1.id]);
+    });
+
+    it("returns null when beforeWorkspaceId is itself one of the ids being moved (no-op)", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      const { workspace: w2 } = model.createWorkspace("/b", "b", init);
+      expect(model.moveWorkspacesTo([w1.id, w2.id], w2.id)).toBeNull();
+      expect(model.listWorkspaces().map((w) => w.id)).toEqual([w1.id, w2.id]); // 変化していない
+    });
+
+    // タスク点検の指摘：`moveTab`/`moveWorkspace` と同じ「無変化なら null」規約に揃える。
+    it("returns null when the drop target already matches the current position (no-op)", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      const { workspace: w2 } = model.createWorkspace("/b", "b", init);
+      const { workspace: w3 } = model.createWorkspace("/c", "c", init);
+      // w2 を w3 の直前へ——既にその位置にいる（実質無変化）。
+      expect(model.moveWorkspacesTo([w2.id], w3.id)).toBeNull();
+      expect(model.listWorkspaces().map((w) => w.id)).toEqual([w1.id, w2.id, w3.id]); // 変化していない
+    });
+
+    it("throws NotFoundError for an unknown id in workspaceIds or beforeWorkspaceId", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/a", "a", init);
+      expect(() => model.moveWorkspacesTo(["w99"], w1.id)).toThrow(NotFoundError);
+      expect(() => model.moveWorkspacesTo([w1.id], "w99")).toThrow(NotFoundError);
+    });
+  });
+
+  // 20260923-workspace-grouping（一括クローズの対象を求める純粋な問い合わせ）。
+  describe("linkedWorktreeGroupMembers", () => {
+    it("returns the other linked-worktree ids sharing the same repoKey when id is the main checkout", () => {
+      const model = new SessionModel();
+      const { workspace: main } = model.createWorkspace("/repo", "main", init);
+      const { workspace: wt1 } = model.createWorkspace("/repo-wt1", "wt1", init);
+      const { workspace: wt2 } = model.createWorkspace("/repo-wt2", "wt2", init);
+      model.updateWorkspaceGit(main.id, { branch: "main", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: false });
+      model.updateWorkspaceGit(wt1.id, { branch: "feature", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      model.updateWorkspaceGit(wt2.id, { branch: "other", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      expect(new Set(model.linkedWorktreeGroupMembers(main.id))).toEqual(new Set([wt1.id, wt2.id]));
+    });
+
+    it("returns [] when id is itself a linked worktree (not the parent)", () => {
+      const model = new SessionModel();
+      const { workspace: wt1 } = model.createWorkspace("/repo-wt1", "wt1", init);
+      model.updateWorkspaceGit(wt1.id, { branch: "feature", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      expect(model.linkedWorktreeGroupMembers(wt1.id)).toEqual([]);
+    });
+
+    it("returns [] when the workspace has no git info at all", () => {
+      const model = new SessionModel();
+      const { workspace } = model.createWorkspace("/plain", "plain", init);
+      expect(model.linkedWorktreeGroupMembers(workspace.id)).toEqual([]);
+    });
+
+    it("returns [] when the workspace is the main checkout of a repo with no linked worktrees", () => {
+      const model = new SessionModel();
+      const { workspace } = model.createWorkspace("/repo", "repo", init);
+      model.updateWorkspaceGit(workspace.id, { branch: "main", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: false });
+      expect(model.linkedWorktreeGroupMembers(workspace.id)).toEqual([]);
+    });
+
+    // cross-check の指摘：クライアント側 `workspaceGrouping.ts` の `autoGroupsOf` と同じ判定に
+    // 揃える（以前はここだけ `groupId` を見ておらず、`ConfirmDialog` の表示件数とサーバが実際に
+    // 閉じる件数が食い違っていた）。
+    it("excludes workspaces that are in a manual group (手動グループ優先。decisions D2)", () => {
+      const model = new SessionModel();
+      const { workspace: main } = model.createWorkspace("/repo", "main", init);
+      const { workspace: wt1 } = model.createWorkspace("/repo-wt1", "wt1", init);
+      const { workspace: wt2 } = model.createWorkspace("/repo-wt2", "wt2", init);
+      model.updateWorkspaceGit(main.id, { branch: "main", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: false });
+      model.updateWorkspaceGit(wt1.id, { branch: "feature", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      model.updateWorkspaceGit(wt2.id, { branch: "other", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      const group = model.createGroup("backend");
+      model.addToGroup(wt2.id, group.id); // wt2 は手動グループに入っている
+      expect(model.linkedWorktreeGroupMembers(main.id)).toEqual([wt1.id]); // wt2 は含まれない
+    });
+
+    it("returns [] when the main checkout itself is in a manual group", () => {
+      const model = new SessionModel();
+      const { workspace: main } = model.createWorkspace("/repo", "main", init);
+      const { workspace: wt1 } = model.createWorkspace("/repo-wt1", "wt1", init);
+      model.updateWorkspaceGit(main.id, { branch: "main", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: false });
+      model.updateWorkspaceGit(wt1.id, { branch: "feature", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      const group = model.createGroup("backend");
+      model.addToGroup(main.id, group.id);
+      expect(model.linkedWorktreeGroupMembers(main.id)).toEqual([]);
+    });
+
+    // GitInfoPoller の周期の谷間で本体がまだ見つからない（全員 isLinkedWorktree===true）ケース。
+    // クライアント側の暫定親フォールバックと同じ判定をサーバ側でも行う（cross-check の指摘）。
+    it("falls back to the first candidate as the tentative parent when no explicit main checkout is present", () => {
+      const model = new SessionModel();
+      const { workspace: w1 } = model.createWorkspace("/repo-wt1", "wt1", init);
+      const { workspace: w2 } = model.createWorkspace("/repo-wt2", "wt2", init);
+      model.updateWorkspaceGit(w1.id, { branch: "a", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      model.updateWorkspaceGit(w2.id, { branch: "b", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      expect(model.linkedWorktreeGroupMembers(w1.id)).toEqual([w2.id]); // w1（先頭）が暫定的な親
+      expect(model.linkedWorktreeGroupMembers(w2.id)).toEqual([]); // w2 は親ではない
+    });
+
+    // cross-check round2 の指摘：本体が手動グループに入っていて候補から外れているだけなら、
+    // 「候補の中に本体が無い」を理由に別の linked worktree を暫定親にしてはいけない
+    // （client 側 `autoGroupsOf` と同じガード。`main` 自身への問い合わせは既に別のテストで
+    // カバー済み——ここでは `main` 以外〔候補に残る linked worktree 側〕への問い合わせを確かめる）。
+    it("does not fall back to a tentative parent among linked worktrees when the real main checkout exists elsewhere (in a manual group)", () => {
+      const model = new SessionModel();
+      const { workspace: main } = model.createWorkspace("/repo", "main", init);
+      const { workspace: wt1 } = model.createWorkspace("/repo-wt1", "wt1", init);
+      const { workspace: wt2 } = model.createWorkspace("/repo-wt2", "wt2", init);
+      model.updateWorkspaceGit(main.id, { branch: "main", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: false });
+      model.updateWorkspaceGit(wt1.id, { branch: "a", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      model.updateWorkspaceGit(wt2.id, { branch: "b", ahead: 0, behind: 0, repoKey: "/repo/.git", isLinkedWorktree: true });
+      const group = model.createGroup("backend");
+      model.addToGroup(main.id, group.id); // 本体だけ手動グループに入る（wt1・wt2 は groupId===null のまま）
+      // wt1・wt2 は候補に残るが、候補の中に本体が無い——本体は「実在するが候補から外れている」だけ
+      // なので、wt1・wt2 のどちらかを暫定親にしてはいけない。
+      expect(model.linkedWorktreeGroupMembers(wt1.id)).toEqual([]);
+      expect(model.linkedWorktreeGroupMembers(wt2.id)).toEqual([]);
+    });
+  });
+
   // 20260921-workspace-auto-label：以前は workspace の名前に印が無く、どれも付けた名前と同じ扱いだった。
   it("autoLabel は作成・名前変更・復元で呼ぶ側が決めたとおりに入る", () => {
     const model = new SessionModel();
@@ -387,8 +617,8 @@ describe("SessionModel — misc mutations", () => {
   it("updateWorkspaceGit sets the git info", () => {
     const model = new SessionModel();
     const { workspace } = model.createWorkspace("/home/u", "api", init);
-    model.updateWorkspaceGit(workspace.id, { branch: "main", ahead: 1, behind: 0 });
-    expect(model.getWorkspace(workspace.id)?.git).toEqual({ branch: "main", ahead: 1, behind: 0 });
+    model.updateWorkspaceGit(workspace.id, { branch: "main", ahead: 1, behind: 0, repoKey: "/home/u/.git", isLinkedWorktree: false });
+    expect(model.getWorkspace(workspace.id)?.git).toEqual({ branch: "main", ahead: 1, behind: 0, repoKey: "/home/u/.git", isLinkedWorktree: false });
   });
 
   it("setSplitRatio and resizeByDirection change the layout ratio", () => {
@@ -426,7 +656,7 @@ describe("SessionModel — snapshot and id counters", () => {
 
   it("setNextIdCounters lets restore continue numbering without collisions", () => {
     const model = new SessionModel();
-    model.setNextIdCounters({ w: 5, t: 5, p: 5, s: 5, a: 5 });
+    model.setNextIdCounters({ w: 5, t: 5, p: 5, s: 5, a: 5, g: 5 });
     const { workspace } = model.createWorkspace("/home/u", "api", init);
     expect(workspace.id).toBe("w5");
     expect(model.getNextIdCounters().w).toBe(6);

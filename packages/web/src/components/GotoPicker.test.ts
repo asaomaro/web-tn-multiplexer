@@ -112,7 +112,7 @@ describe("GotoPicker — 文字の絞り込み", () => {
   it("名前・cwd・tab の名前・workspace のブランチで絞り込む", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", ["t1"], { git: { branch: "feature-x", ahead: 0, behind: 0 } }));
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"], { git: { branch: "feature-x", ahead: 0, behind: 0, repoKey: null, isLinkedWorktree: false } }));
     session.tabUpserted(makeTab("t1", "w1", "p1"));
     session.paneUpserted(makePane("p1", "t1", { cwd: "/work/p1" }));
     session.workspaceUpserted(makeWorkspace("w2", ["t2"]));

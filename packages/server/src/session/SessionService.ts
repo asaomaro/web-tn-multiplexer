@@ -3,6 +3,7 @@ import type {
   AgentIntegrationKind,
   Dir,
   GitInfo,
+  GroupId,
   HostInfo,
   NewCwd,
   Pane,
@@ -14,6 +15,7 @@ import type {
   Tab,
   TabId,
   Workspace,
+  WorkspaceGroup,
   WorkspaceId,
 } from "@wtm/protocol";
 import { RpcError } from "@wtm/protocol";
@@ -272,7 +274,21 @@ export class SessionService {
     this.persist.touch(); // focus は session.json に永続化される（レビュー指摘：抜けていた）
   }
 
-  async closeWorkspace(id: WorkspaceId): Promise<void> {
+  /**
+   * `closeLinkedWorktrees`（20260923-workspace-grouping。herdr の `close_group` 相当）：true かつ
+   * `id` が worktree 自動グループの本体なら、束ねられた worktree も連鎖して閉じる。対象を
+   * **モデルを書き換える前に**問い合わせる（`linkedWorktreeGroupMembers` は副作用なし）——
+   * 本体を先に閉じてから子を探すと git 情報の手掛かりが失われる。それぞれの workspace は
+   * 既存の1件ずつのクローズ処理をそのまま繰り返す（design には無いエッジケース。
+   * 複数 workspace の確認は client 側の `confirmClose` が既に同じ形でループしている）。
+   */
+  async closeWorkspace(id: WorkspaceId, closeLinkedWorktrees = false): Promise<void> {
+    const targets = closeLinkedWorktrees ? [id, ...this.model.linkedWorktreeGroupMembers(id)] : [id];
+    for (const targetId of targets) await this.closeWorkspaceOne(targetId);
+    await this.recreateIfEmpty(); // D24
+  }
+
+  private async closeWorkspaceOne(id: WorkspaceId): Promise<void> {
     const result = this.model.closeWorkspace(id);
     for (const paneId of result.removedPaneIds) this.terminals.dispose(paneId);
     // design「連鎖して閉じるときは pane.closed → tab.closed → workspace.closed の順」（D42 で漏れを修正）。
@@ -281,7 +297,73 @@ export class SessionService {
     this.bus.publish({ event: "workspace.closed", data: { workspaceId: id } });
     this.labelGen.delete(id);
     this.persist.touch();
-    await this.recreateIfEmpty(); // D24
+  }
+
+  // --- workspace の並べ替えとグループ（20260923-workspace-grouping） ----------------------
+
+  /** `workspace.move`。無変化（`model.moveWorkspace` が null）なら何も配布しない
+   *  （`moveTab` と同じ形。design「エラー処理 / 異常系」）。動いた全順序を
+   *  `workspace.order_changed` で配る（decisions.md D5：個々の Workspace は変わらないため）。 */
+  moveWorkspace(id: WorkspaceId, direction: "previous" | "next"): void {
+    const updated = this.model.moveWorkspace(id, direction);
+    if (updated) {
+      this.bus.publish({ event: "workspace.order_changed", data: { workspaceIds: updated.map((w) => w.id) } });
+      this.persist.touch();
+    }
+  }
+
+  /** `workspace.move_to`（D&D。単一・グループ一括の両方を同じ経路で扱う）。 */
+  moveWorkspacesTo(workspaceIds: WorkspaceId[], beforeWorkspaceId: WorkspaceId | null): void {
+    const updated = this.model.moveWorkspacesTo(workspaceIds, beforeWorkspaceId);
+    if (updated) {
+      this.bus.publish({ event: "workspace.order_changed", data: { workspaceIds: updated.map((w) => w.id) } });
+      this.persist.touch();
+    }
+  }
+
+  createGroup(label: string): WorkspaceGroup {
+    const group = this.model.createGroup(label);
+    this.bus.publish({ event: "group.created", data: { group } });
+    this.persist.touch();
+    return group;
+  }
+
+  renameGroup(id: GroupId, label: string): void {
+    const group = this.model.renameGroup(id, label);
+    this.bus.publish({ event: "group.updated", data: { group } });
+    this.persist.touch();
+  }
+
+  toggleGroupCollapsed(id: GroupId): void {
+    const group = this.model.toggleGroupCollapsed(id);
+    this.bus.publish({ event: "group.updated", data: { group } });
+    this.persist.touch();
+  }
+
+  /** メンバーの `groupId` が null に戻る（`SessionModel.deleteGroup`）ので、それぞれ
+   *  `workspace.updated` で知らせる——**削除する前に**対象を控える（削除後は `groupId` が
+   *  既に外れていて探せない）。 */
+  deleteGroup(id: GroupId): void {
+    const members = this.model.listWorkspaces().filter((w) => w.groupId === id);
+    this.model.deleteGroup(id);
+    this.bus.publish({ event: "group.deleted", data: { groupId: id } });
+    for (const ws of members) {
+      const updated = this.model.getWorkspace(ws.id);
+      if (updated) this.bus.publish({ event: "workspace.updated", data: { workspace: updated } });
+    }
+    this.persist.touch();
+  }
+
+  addToGroup(workspaceId: WorkspaceId, groupId: GroupId): void {
+    const updated = this.model.addToGroup(workspaceId, groupId);
+    this.bus.publish({ event: "workspace.updated", data: { workspace: updated } });
+    this.persist.touch();
+  }
+
+  removeFromGroup(workspaceId: WorkspaceId): void {
+    const updated = this.model.removeFromGroup(workspaceId);
+    this.bus.publish({ event: "workspace.updated", data: { workspace: updated } });
+    this.persist.touch();
   }
 
   // --- tab --------------------------------------------------------------------
@@ -630,6 +712,7 @@ export class SessionService {
   /** `session.json` から復元する。失敗した pane は閉じずに `status: 'failed'` にする。 */
   async restore(data: SessionFileData): Promise<void> {
     this.model.setNextIdCounters(data.nextId);
+    for (const groupData of data.groups) this.model.restoreGroup(groupData); // 20260923-workspace-grouping
     // 名前を先に決めてから入れる（20260921-workspace-auto-label の design D6・D10）。自動の名前はその場所から決め直し（保存した後に git の状態が
     // 変わっていれば新しい名前になる）、付けた名前はそのまま。**1 つずつ決める**——一度に始めると上限のタイマーも一斉に始まって workspace が
     // 多いと全部が上限に達し（T6 の点検）、応答しないマウントの上に並んでいると止まった stat が libuv のスレッドを塞ぎ合う（review ラウンド 1）。
@@ -764,7 +847,11 @@ async function raceSpawn(
 function sameGit(a: GitInfo | null, b: GitInfo | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.branch === b.branch && a.ahead === b.ahead && a.behind === b.behind;
+  // repoKey/isLinkedWorktree も比較する（20260923-workspace-grouping。タスク点検の指摘）——
+  // branch/ahead/behind が変わらず repoKey/isLinkedWorktree だけ変わる場合（worktree 自動グループの
+  // 判定に使う中心的なフィールド）を早期リターンで握りつぶすと、サーバの状態更新・
+  // `workspace.updated` の配布ごと止まってしまう。
+  return a.branch === b.branch && a.ahead === b.ahead && a.behind === b.behind && a.repoKey === b.repoKey && a.isLinkedWorktree === b.isLinkedWorktree;
 }
 
 /** `AgentInfo`（公開している側の全フィールド）が実際に変わったかを見る（`updatePaneRuntime` のレビュー指摘）。 */

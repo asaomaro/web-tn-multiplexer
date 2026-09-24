@@ -168,7 +168,7 @@ describe("TerminalPane", () => {
   it("サイズ権限が無ければ terminal-pane-scaled クラスがつく", () => {
     const registry = makeRegistry();
     useSessionStore(pinia).applySnapshot(
-      { protocol: 1, serverVersion: "t", host: { os: "linux", windowsBuild: null, hostname: "h" }, workspaces: [], tabs: [], panes: [], focus: null, limits: { scrollbackLines: 5000 } },
+      { protocol: 1, serverVersion: "t", host: { os: "linux", windowsBuild: null, hostname: "h" }, workspaces: [], tabs: [], panes: [], groups: [], focus: null, limits: { scrollbackLines: 5000 } },
       "me",
     );
     useSessionStore(pinia).tabUpserted(makeTab("t1", "someone-else"));
@@ -181,7 +181,7 @@ describe("TerminalPane", () => {
   it("サイズ権限を持っていれば terminal-pane-scaled クラスがつかない", () => {
     const registry = makeRegistry();
     useSessionStore(pinia).applySnapshot(
-      { protocol: 1, serverVersion: "t", host: { os: "linux", windowsBuild: null, hostname: "h" }, workspaces: [], tabs: [], panes: [], focus: null, limits: { scrollbackLines: 5000 } },
+      { protocol: 1, serverVersion: "t", host: { os: "linux", windowsBuild: null, hostname: "h" }, workspaces: [], tabs: [], panes: [], groups: [], focus: null, limits: { scrollbackLines: 5000 } },
       "me",
     );
     useSessionStore(pinia).tabUpserted(makeTab("t1", "me"));
