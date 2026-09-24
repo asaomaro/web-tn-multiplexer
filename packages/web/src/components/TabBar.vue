@@ -144,7 +144,8 @@ function onWheel(ev: WheelEvent): void {
         type="button"
         role="tab"
         class="tab-bar-item"
-        :class="{ 'tab-bar-item-active': tab.id === view.tabId }"
+        :class="{ 'tab-bar-item-active': tab.id === view.tabId, 'tab-bar-item-drop-target': view.paneDrag?.overTabId === tab.id }"
+        :data-tab-id="tab.id"
         :aria-selected="tab.id === view.tabId"
         @click="selectTab(tab.id)"
         @contextmenu="onContextMenu($event, tab.id)"
@@ -217,6 +218,12 @@ function onWheel(ev: WheelEvent): void {
 }
 .tab-bar-item-active {
   background: var(--wtm-menu-active-bg, #44475a);
+}
+/* D&D でのドロップ候補（20260924-pane-move-cross-tab。design「クライアント側: ドロップ先の拡張」）。
+ * `PaneFrame.vue` の `.pane-frame-edge-drop-target` と同じ強調色。 */
+.tab-bar-item-drop-target {
+  outline: 2px dashed var(--wtm-accent, #8be9fd);
+  outline-offset: -2px;
 }
 .tab-bar-zoomed {
   opacity: 0.7;

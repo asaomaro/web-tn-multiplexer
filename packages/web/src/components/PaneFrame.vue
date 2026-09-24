@@ -95,28 +95,29 @@ function cancelDrag(): void {
   window.removeEventListener("keydown", onEscapeDuringDrag);
 }
 
-/** `document.elementFromPoint` から最も近い `[data-pane-id]` 祖先の要素を求める。 */
-function paneElementAt(x: number, y: number): HTMLElement | null {
-  const el = document.elementFromPoint(x, y);
-  return (el?.closest("[data-pane-id]") as HTMLElement | null) ?? null;
-}
-
-/** `document.elementFromPoint` から最も近い `[data-pane-id]` 祖先の pane id を求める。 */
-function paneIdAt(x: number, y: number): string | null {
-  return paneElementAt(x, y)?.dataset.paneId ?? null;
-}
+/** ドロップ先の3種（20260924-pane-move-cross-tab。design「クライアント側: ドロップ先の拡張」）。 */
+type DropHit = { kind: "pane"; paneId: string; zone: Zone } | { kind: "tab"; tabId: string } | { kind: "workspace"; workspaceId: string };
 
 /**
- * ドロップ候補の pane とゾーン（縁/中央）を同時に求める（20260924-pane-dnd-split-move。
- * design「振る舞いの詳細 > クライアント側: ゾーン判定」）。対象の要素が見つからなければ null。
- * `paneIdAt`（対象の特定）と同じ要素の `getBoundingClientRect()` を使う——別々に探すと、
- * その間に描き直しが起きた場合に対象がずれうる。
+ * ドロップ先を優先順位付きで探す（`20260924-pane-dnd-split-move` で確立した pane 縁/中央の判定を、
+ * `20260924-pane-move-cross-tab` で tab バー・サイドバーの workspace 行にも拡張。design「クライアント側:
+ * ドロップ先の拡張」）: `[data-pane-id]`（同一 tab 内の入れ替え/分割/分割解除）→ `[data-tab-id]`
+ * （tab バーの tab）→ `[data-drop-workspace-id]`（サイドバーの workspace 行）。`closest` は最も近い
+ * 祖先を返すため、実際にドロップした DOM 位置によって自然にどれか1つだけが見つかる（3つが同時に
+ * 候補になることは無い——pane の枠と tab バー・サイドバーは別の DOM 領域）。
  */
-function dropTargetAt(x: number, y: number): { paneId: string; zone: Zone } | null {
-  const el = paneElementAt(x, y);
-  const paneId = el?.dataset.paneId;
-  if (!el || !paneId) return null;
-  return { paneId, zone: zoneAt(el.getBoundingClientRect(), x, y) };
+function dropTargetAt(x: number, y: number): DropHit | null {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const paneEl = el.closest("[data-pane-id]") as HTMLElement | null;
+  if (paneEl?.dataset.paneId) {
+    return { kind: "pane", paneId: paneEl.dataset.paneId, zone: zoneAt(paneEl.getBoundingClientRect(), x, y) };
+  }
+  const tabEl = el.closest("[data-tab-id]") as HTMLElement | null;
+  if (tabEl?.dataset.tabId) return { kind: "tab", tabId: tabEl.dataset.tabId };
+  const wsEl = el.closest("[data-drop-workspace-id]") as HTMLElement | null;
+  if (wsEl?.dataset.dropWorkspaceId) return { kind: "workspace", workspaceId: wsEl.dataset.dropWorkspaceId };
+  return null;
 }
 
 /** 名前ラベルの押し下げ。まだドラッグ扱いにしない（閾値を超えるまでは「ただのクリック」。AC-I1・AC-I5）。 */
@@ -135,7 +136,13 @@ function onNamePointerMove(ev: PointerEvent): void {
     window.addEventListener("keydown", onEscapeDuringDrag);
   }
   const hit = dropTargetAt(ev.clientX, ev.clientY);
-  view?.setPaneDragOver(hit?.paneId ?? null, hit?.zone ?? null);
+  // 自分が今いる tab 自身は、ドロップしても何も起きない（サーバ側の自分自身ガード。AC9）ので
+  // 候補として光らせない（review round1 の nit 指摘——見た目と実際の挙動を一致させる）。
+  const ownTabId = session?.panes.get(props.paneId)?.tabId;
+  if (hit?.kind === "tab" && hit.tabId !== ownTabId) view?.setPaneDragOverTab(hit.tabId);
+  else if (hit?.kind === "workspace") view?.setPaneDragOverWorkspace(hit.workspaceId);
+  else if (hit?.kind === "pane") view?.setPaneDragOver(hit.paneId, hit.zone);
+  else view?.setPaneDragOver(null, null);
 }
 
 /** 離した：ドラッグ済みならドロップを確定、閾値未満ならクリック（枠を押したのと同じ扱い。AC-I5）。 */
@@ -150,7 +157,7 @@ function onNamePointerUp(ev: PointerEvent): void {
   if (wasDragging) {
     view?.endPaneDrag();
     window.removeEventListener("keydown", onEscapeDuringDrag);
-    if (hit && hit.paneId !== props.paneId) {
+    if (hit?.kind === "pane" && hit.paneId !== props.paneId) {
       if (hit.zone === "center") {
         actions?.replacePaneWithDrag(props.paneId, hit.paneId);
       } else {
@@ -162,6 +169,11 @@ function onNamePointerUp(ev: PointerEvent): void {
       // design の申し送り）。
       view?.focusPane(props.paneId);
       registry?.focus(props.paneId);
+    } else if (hit?.kind === "tab") {
+      // view の切り替え・focus は `ActionDispatcher` 側（RPC の応答を待ってから。decisions.md D2）。
+      actions?.movePaneToTab(props.paneId, hit.tabId);
+    } else if (hit?.kind === "workspace") {
+      actions?.movePaneToNewTab(props.paneId, hit.workspaceId);
     }
   } else {
     view?.focusPane(props.paneId);

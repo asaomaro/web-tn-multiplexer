@@ -220,8 +220,20 @@ export const useViewStore = defineStore("view", () => {
   /**
    * `overZone`（20260924-pane-dnd-split-move。design「クライアント状態」）: ホバー中の pane 内の
    * どこ（縁/中央）に反応しているか。`overPaneId` が null のときは無意味なので併せて null にする。
+   *
+   * `overTabId`/`overWorkspaceId`（20260924-pane-move-cross-tab。design「クライアント側:
+   * ドロップ先の拡張」）: ドロップ先が tab バーの tab・サイドバーの workspace 行のとき。
+   * `overPaneId`・`overTabId`・`overWorkspaceId` は**同時に高々1つだけ非 null**
+   * （ドロップ候補は常にどれか1種類——`setPaneDragOver`/`setPaneDragOverTab`/
+   * `setPaneDragOverWorkspace` がそれぞれ他の2つを null にリセットする）。
    */
-  const paneDrag = ref<{ sourcePaneId: string; overPaneId: string | null; overZone: Zone | null } | null>(null);
+  const paneDrag = ref<{
+    sourcePaneId: string;
+    overPaneId: string | null;
+    overZone: Zone | null;
+    overTabId: string | null;
+    overWorkspaceId: string | null;
+  } | null>(null);
   /**
    * workspace 行・グループのヘッダー行の D&D の一時状態（20260923-workspace-grouping。`paneDrag` と
    * 同じ流儀）。`sourceIds` は動かす対象——通常の行なら `[workspace.id]`、グループのヘッダー行なら
@@ -344,17 +356,37 @@ export const useViewStore = defineStore("view", () => {
 
   /** ドラッグ開始（20260923-pane-name-dnd-swap。閾値を超えて初めて呼ぶ。design「5.」）。 */
   function startPaneDrag(paneId: string): void {
-    paneDrag.value = { sourcePaneId: paneId, overPaneId: null, overZone: null };
+    paneDrag.value = { sourcePaneId: paneId, overPaneId: null, overZone: null, overTabId: null, overWorkspaceId: null };
   }
 
   /**
    * ポインタ直下の pane・ゾーンが変わるたびに呼ぶ（20260924-pane-dnd-split-move で `zone` 引数を
    * 追加。呼び出し元は `PaneFrame.vue` の1箇所のみなので破壊的な拡張で問題ない。design D14 相当）。
-   * 無駄な再描画を避けるため両方とも同値なら何もしない。
+   * `overTabId`/`overWorkspaceId` も併せて null にする（ドロップ候補は同時に1種類だけ。
+   * 20260924-pane-move-cross-tab）。無駄な再描画を避けるため全て同値なら何もしない。
    */
   function setPaneDragOver(paneId: string | null, zone: Zone | null = null): void {
-    if (!paneDrag.value || (paneDrag.value.overPaneId === paneId && paneDrag.value.overZone === zone)) return;
-    paneDrag.value = { ...paneDrag.value, overPaneId: paneId, overZone: paneId ? zone : null };
+    if (!paneDrag.value) return;
+    const d = paneDrag.value;
+    if (d.overPaneId === paneId && d.overZone === zone && d.overTabId === null && d.overWorkspaceId === null) return;
+    paneDrag.value = { ...d, overPaneId: paneId, overZone: paneId ? zone : null, overTabId: null, overWorkspaceId: null };
+  }
+
+  /** ポインタ直下が tab バーの tab になったときに呼ぶ（20260924-pane-move-cross-tab。
+   *  `setPaneDragOver` と同じ形——他の2種類を null にリセットする）。 */
+  function setPaneDragOverTab(tabId: string | null): void {
+    if (!paneDrag.value) return;
+    const d = paneDrag.value;
+    if (d.overTabId === tabId && d.overPaneId === null && d.overWorkspaceId === null) return;
+    paneDrag.value = { ...d, overPaneId: null, overZone: null, overTabId: tabId, overWorkspaceId: null };
+  }
+
+  /** ポインタ直下がサイドバーの workspace 行になったときに呼ぶ（20260924-pane-move-cross-tab）。 */
+  function setPaneDragOverWorkspace(workspaceId: string | null): void {
+    if (!paneDrag.value) return;
+    const d = paneDrag.value;
+    if (d.overWorkspaceId === workspaceId && d.overPaneId === null && d.overTabId === null) return;
+    paneDrag.value = { ...d, overPaneId: null, overZone: null, overTabId: null, overWorkspaceId: workspaceId };
   }
 
   function endPaneDrag(): void {
@@ -482,6 +514,8 @@ export const useViewStore = defineStore("view", () => {
     closeContextMenu,
     startPaneDrag,
     setPaneDragOver,
+    setPaneDragOverTab,
+    setPaneDragOverWorkspace,
     endPaneDrag,
     startWorkspaceDrag,
     setWorkspaceDragOver,

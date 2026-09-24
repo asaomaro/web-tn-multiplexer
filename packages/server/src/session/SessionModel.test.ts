@@ -348,6 +348,157 @@ describe("SessionModel — focus / navigation", () => {
     });
   });
 
+  // 20260924-pane-move-cross-tab：ドラッグで tab バーの tab へ移動。
+  describe("moveToTab", () => {
+    it("対象 tab の focus 中の pane の右へ split で加わる", () => {
+      const model = new SessionModel();
+      const { workspace, pane } = model.createWorkspace("/home/u", "api", init);
+      const { tab: otherTab, pane: otherPane } = model.createTab(workspace.id, "logs", init);
+
+      const ok = model.moveToTab(pane.id, otherTab.id);
+
+      expect(ok).toBe(true);
+      expect(model.getTab(otherTab.id)?.layout).toMatchObject({ dir: "right", a: { paneId: otherPane.id }, b: { paneId: pane.id } });
+      expect(model.getPane(pane.id)?.tabId).toBe(otherTab.id); // pane.tabId が書き換わる
+      expect(model.getTab(otherTab.id)?.focusedPaneId).toBe(pane.id); // AC8: 移動先で focus される
+    });
+
+    it("移動元の tab に他の pane が残っていれば、そこの split は畳まれるだけで tab 自体は残る", () => {
+      const model = new SessionModel();
+      const { workspace, tab: sourceTab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+      const { tab: otherTab } = model.createTab(workspace.id, "logs", init);
+
+      model.moveToTab(p2, otherTab.id);
+
+      expect(model.getTab(sourceTab.id)?.layout).toEqual({ type: "pane", paneId: pane.id });
+      expect(model.getWorkspace(workspace.id)?.tabIds).toContain(sourceTab.id); // tab 自体は残る
+    });
+
+    it("移動元の tab が空になったら自動的に閉じる（pane は消えない）", () => {
+      const model = new SessionModel();
+      const { workspace, tab: sourceTab, pane } = model.createWorkspace("/home/u", "api", init);
+      const { tab: otherTab } = model.createTab(workspace.id, "logs", init);
+
+      const ok = model.moveToTab(pane.id, otherTab.id);
+
+      expect(ok).toBe(true);
+      expect(model.getTab(sourceTab.id)).toBeUndefined(); // 空になった tab は閉じる
+      expect(model.getWorkspace(workspace.id)?.tabIds).not.toContain(sourceTab.id);
+      expect(model.getPane(pane.id)).toBeDefined(); // pane 自体は消えない（closeTabInternal の落とし穴の回帰）
+      expect(model.getPane(pane.id)?.tabId).toBe(otherTab.id);
+    });
+
+    it("自分自身の tab へは何もしない", () => {
+      const model = new SessionModel();
+      const { tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getTab(tab.id)?.layout;
+
+      expect(model.moveToTab(pane.id, tab.id)).toBe(false);
+      expect(model.getTab(tab.id)?.layout).toEqual(before);
+    });
+
+    it("存在しない tab へは何もしない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+
+      expect(model.moveToTab(pane.id, "t-nonexistent")).toBe(false);
+    });
+
+    it("移動先 tab の zoom は解除される（D100）", () => {
+      const model = new SessionModel();
+      const { workspace, pane } = model.createWorkspace("/home/u", "api", init);
+      const { tab: otherTab, pane: otherPane } = model.createTab(workspace.id, "logs", init);
+      model.zoomPane(otherPane.id, "on");
+
+      model.moveToTab(pane.id, otherTab.id);
+
+      expect(model.getTab(otherTab.id)?.zoomedPaneId).toBeNull();
+    });
+  });
+
+  // 20260924-pane-move-cross-tab：ドラッグでサイドバーの workspace 行へ移動。
+  describe("moveToNewTab", () => {
+    it("対象 workspace に新しい tab を作り、pane を運ぶ", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const { workspace: otherWs } = model.createWorkspace("/home/u", "other", init);
+
+      const result = model.moveToNewTab(pane.id, otherWs.id);
+
+      expect(result).not.toBeNull();
+      expect(result?.tab.workspaceId).toBe(otherWs.id);
+      expect(result?.tab.layout).toEqual({ type: "pane", paneId: pane.id });
+      expect(model.getPane(pane.id)?.tabId).toBe(result?.tab.id);
+      expect(model.getWorkspace(otherWs.id)?.tabIds).toContain(result?.tab.id);
+      expect(model.getWorkspace(otherWs.id)?.activeTabId).toBe(result?.tab.id); // 新しい tab を表示中にする
+    });
+
+    it("移動元の tab が空になったら自動的に閉じる（pane は消えない。移動元 workspace には他の tab を残しておく）", () => {
+      const model = new SessionModel();
+      const { workspace, tab: sourceTab, pane } = model.createWorkspace("/home/u", "api", init);
+      model.createTab(workspace.id, "logs", init); // 移動元 workspace が cascade で消えないようにしておく
+      const { workspace: otherWs } = model.createWorkspace("/home/u", "other", init);
+
+      model.moveToNewTab(pane.id, otherWs.id);
+
+      expect(model.getTab(sourceTab.id)).toBeUndefined();
+      expect(model.getWorkspace(workspace.id)?.tabIds).not.toContain(sourceTab.id);
+      expect(model.getPane(pane.id)).toBeDefined();
+    });
+
+    it("同一 workspace への移動（新しい tab へ切り出す）も有効な操作として許容する", () => {
+      const model = new SessionModel();
+      const { workspace, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+
+      const result = model.moveToNewTab(p2, workspace.id);
+
+      expect(result).not.toBeNull();
+      expect(model.getWorkspace(workspace.id)?.tabIds.length).toBe(2); // 元の tab ＋ 新しい tab
+      expect(model.getWorkspace(workspace.id)?.activeTabId).toBe(result?.tab.id);
+    });
+
+    // taskcheck 指摘（should）：この work が存在する理由そのもの（research.md R1）に最も近い、
+    // 「移動元 tab がその1枚だけの pane を失って空になり、かつ移動先が同じ workspace」という
+    // 組み合わせが、上のテストでは（p2 が唯一の pane ではないため）実際には通っていなかった。
+    it("同一 workspace 内で、移動元 tab がその1枚だけの pane を失っても正しく畳まれる（他の tab は残る）", () => {
+      const model = new SessionModel();
+      const { workspace, tab: sourceTab, pane } = model.createWorkspace("/home/u", "api", init);
+      // 移動元 workspace が cascade で消えないよう、あらかじめ他の tab を作っておく。
+      model.createTab(workspace.id, "logs", init);
+
+      const result = model.moveToNewTab(pane.id, workspace.id);
+
+      expect(result).not.toBeNull();
+      expect(model.getTab(sourceTab.id)).toBeUndefined(); // 空になった元の tab は閉じる
+      expect(model.getWorkspace(workspace.id)?.tabIds).not.toContain(sourceTab.id);
+      expect(model.getWorkspace(workspace.id)?.tabIds).toContain(result?.tab.id);
+      expect(model.getWorkspace(workspace.id)?.activeTabId).toBe(result?.tab.id); // 上書きされていない
+      expect(model.getPane(pane.id)).toBeDefined();
+      expect(model.getPane(pane.id)?.tabId).toBe(result?.tab.id);
+    });
+
+    it("存在しない workspace へは何もしない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+
+      expect(model.moveToNewTab(pane.id, "w-nonexistent")).toBeNull();
+    });
+
+    it("移動元の workspace も空になれば連鎖して閉じる（既存の D18 規則。closeTabInternal と同じ）", () => {
+      const model = new SessionModel();
+      const { workspace, pane } = model.createWorkspace("/home/u", "api", init); // tab 1つ・pane 1つだけ
+      const { workspace: otherWs } = model.createWorkspace("/home/u", "other", init);
+
+      model.moveToNewTab(pane.id, otherWs.id);
+
+      expect(model.getWorkspace(workspace.id)).toBeUndefined();
+    });
+  });
+
   it("cyclePane focuses the next pane in depth-first order, wrapping at the ends", () => {
     const model = new SessionModel();
     const { pane } = model.createWorkspace("/home/u", "api", init);

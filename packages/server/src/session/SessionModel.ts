@@ -572,6 +572,98 @@ export class SessionModel {
     };
   }
 
+  /**
+   * tab の器だけを消す（pane は削除しない）。`closeTabInternal` の変種
+   * （20260924-pane-move-cross-tab。design「サーバ側: SessionModel」。research.md R1）——
+   * `closeTabInternal` は tab の全ての葉を `this.panes` から削除するため、移動系の後始末に
+   * そのまま使うと移動中の pane 自体を消してしまう。**呼び出し側が、この tab の全ての pane を
+   * 既に別の場所へ移し終えていることが前提**（この関数自身は空かどうかを検査しない）。
+   */
+  private closeEmptyTabShell(tabId: TabId): { removedTabId: TabId; closedWorkspaceId: WorkspaceId | null } {
+    const tab = this.requireTab(tabId);
+    const ws = this.requireWorkspace(tab.workspaceId);
+    this.tabs.delete(tabId);
+    const remainingTabIds = ws.tabIds.filter((t) => t !== tabId);
+    if (remainingTabIds.length === 0) {
+      // 最後の tab だった → workspace も閉じる（closeTabInternal と同じ規則）。
+      // `skipTabCleanup: true` を渡すため、closeWorkspaceInternal 側の pane 削除ループ自体が
+      // 実行されない（「pane が残っていないから安全」ではなく、そもそもそこを通らない——
+      // このメソッドが pane を一切削除しないという R1 の契約を保つのはこの skip による）。
+      this.closeWorkspaceInternal(ws.id, { skipTabCleanup: true });
+      return { removedTabId: tabId, closedWorkspaceId: ws.id };
+    }
+    const activeTabId = ws.activeTabId === tabId ? remainingTabIds[0]! : ws.activeTabId;
+    this.workspaces.set(ws.id, { ...ws, tabIds: remainingTabIds, activeTabId });
+    if (activeTabId !== ws.activeTabId) {
+      const nextTab = this.requireTab(activeTabId);
+      this.setFocus(ws.id, activeTabId, nextTab.focusedPaneId);
+    }
+    return { removedTabId: tabId, closedWorkspaceId: null };
+  }
+
+  /**
+   * 既存の pane（`paneId`）を、別の tab（`targetTabId`）へ移す（20260924-pane-move-cross-tab。
+   * design「振る舞いの詳細」）。対象 tab の focus 中の pane の右へ split で加わる。新しい pane は
+   * 作らない。移動元の tab が空になったら `closeEmptyTabShell` で自動的に閉じる。
+   */
+  moveToTab(paneId: PaneId, targetTabId: TabId): boolean {
+    const pane = this.requirePane(paneId);
+    if (pane.tabId === targetTabId) return false; // 自分自身の tab（AC9）
+    const targetTab = this.tabs.get(targetTabId); // 未検証のドロップ先。requireTab ではなく .get()
+    if (!targetTab) return false;
+    const sourceTab = this.requireTab(pane.tabId);
+
+    const withoutPane = Layout.remove(sourceTab.layout, paneId);
+    const splitId = this.nextId("s");
+    const newLayout = Layout.insertAtEdge(targetTab.layout, targetTab.focusedPaneId, "right", paneId, splitId);
+    this.panes.set(paneId, { ...pane, tabId: targetTabId });
+    this.tabs.set(targetTabId, { ...targetTab, layout: newLayout, focusedPaneId: paneId, zoomedPaneId: null });
+
+    if (withoutPane === null) {
+      this.closeEmptyTabShell(sourceTab.id);
+    } else {
+      const nextFocused = sourceTab.focusedPaneId === paneId ? Layout.leaves(withoutPane)[0]! : sourceTab.focusedPaneId;
+      this.tabs.set(sourceTab.id, { ...sourceTab, layout: withoutPane, focusedPaneId: nextFocused, zoomedPaneId: null });
+    }
+    return true;
+  }
+
+  /**
+   * 既存の pane（`paneId`）を、別の workspace（`targetWorkspaceId`）の新しい tab へ移す
+   * （20260924-pane-move-cross-tab。design「振る舞いの詳細」）。`reserveTab`/`commitTab` と
+   * 同じ label 既定値ロジックを使うが、新しい pane は作らない（既存の pane をそのまま運ぶ）。
+   */
+  moveToNewTab(paneId: PaneId, targetWorkspaceId: WorkspaceId): { tab: Tab } | null {
+    const pane = this.requirePane(paneId);
+    const ws = this.workspaces.get(targetWorkspaceId); // 未検証のドロップ先
+    if (!ws) return null;
+    const sourceTab = this.requireTab(pane.tabId);
+
+    const withoutPane = Layout.remove(sourceTab.layout, paneId);
+    const newTabId = this.nextId("t");
+    const newTab: Tab = {
+      id: newTabId,
+      workspaceId: targetWorkspaceId,
+      label: String(ws.tabIds.length + 1),
+      layout: { type: "pane", paneId },
+      focusedPaneId: paneId,
+      zoomedPaneId: null,
+      sizeOwnerClientId: null,
+    };
+    this.panes.set(paneId, { ...pane, tabId: newTabId });
+    this.tabs.set(newTabId, newTab);
+    this.workspaces.set(targetWorkspaceId, { ...ws, tabIds: [...ws.tabIds, newTabId], activeTabId: newTabId });
+    this.setFocus(targetWorkspaceId, newTabId, paneId);
+
+    if (withoutPane === null) {
+      this.closeEmptyTabShell(sourceTab.id);
+    } else {
+      const nextFocused = sourceTab.focusedPaneId === paneId ? Layout.leaves(withoutPane)[0]! : sourceTab.focusedPaneId;
+      this.tabs.set(sourceTab.id, { ...sourceTab, layout: withoutPane, focusedPaneId: nextFocused, zoomedPaneId: null });
+    }
+    return { tab: newTab };
+  }
+
   // --- pane operations --------------------------------------------------------
 
   focusPane(paneId: PaneId): void {

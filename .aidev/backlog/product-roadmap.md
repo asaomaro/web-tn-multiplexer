@@ -92,9 +92,16 @@ parent: 20260918-web-terminal-multiplexer
       実測: `pnpm -s test` 2837 passed / 0 failed（161ファイル）・`aidev coverage --strict`
       ac=16 gaps=0（`.aidev/works/20260924-pane-dnd-split-move/test-result.md`）。
       **別 tab / 新規 workspace への移動は下の行に残っている**
-- [ ] D&D による pane の別 tab・別 workspace への移動（Web 固有の操作。同一 tab 内の入れ替え・分割・
+- [x] D&D による pane の別 tab・別 workspace への移動（Web 固有の操作。同一 tab 内の入れ替え・分割・
       分割解除は上の行で対応済み） (needs: 20260918-web-terminal-multiplexer)（出典:
       .aidev/works/20260924-pane-dnd-split-move/decisions.md D1）
+      tab バーの tab・サイドバーの workspace 行へのドロップに対応（`pane.move_to_tab`・
+      `pane.move_to_new_tab`）。移動元 tab が空になれば自動的に閉じる（D18 の既存規則を踏襲）。
+      実測: `pnpm -s typecheck` exit 0（3パッケージ）・protocol/server/web 合計 2743 passed /
+      0 failed・`aidev coverage --strict` ac=16 gaps=0
+      （`.aidev/works/20260924-pane-move-cross-tab/test-result.md`）。
+      review round1 で見つかった「セッション全体のグローバル focus を更新しない」制約は
+      backlog に別途追加済み（下記「レイアウトだけを書き換える pane 操作」の行。decisions.md D4）。
 - [ ] エージェント対応の拡充: 主要数種以外の検出、herdr の integrations / plugins 相当 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] 複数ホストの集約: herdr の remote / several machines 相当。複数ホストのセッションを 1 画面に (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] ノードによるオーケストレーション: セッションをノード表示し、マウスで繋いで状態トリガ・出力受け渡し・監督関係を設定（外部操作 API の後） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
@@ -258,3 +265,4 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] キーバインドでの workspace 並べ替え（AC8: move_workspace_previous/next）は flat な隣接1件だけを入れ替える実装のため、手動グループの非アンカーメンバーを動かすと、隣が別グループ/無所属の workspace の場合に画面上は何も変化しないことがある（20260923-workspace-grouping レビューで発見。D&D 側は同レビューで修正済み。キーバインド側は workspace.move の delta 方式を anchor 方式へ変えるプロトコル改修が要るため今回は見送り）。（出典: .aidev/works/20260923-workspace-grouping/review.md）
 - [ ] クリップボード画像のリモート貼り付け: herdr は `remote_image_paste`（既定 Ctrl+V、`herdr --remote` 使用時だけ有効）でクライアントの画像クリップボードをリモートのペインへ貼り付けられるが、web-tn-multiplexer にはこれに相当する実装が無い（`packages/web/src/term/clipboard.ts` はテキストの readText/writeText のみ、画像用の navigator.clipboard.read()・ClipboardItem・サーバー側の画像アップロード経路とも未実装）。サーバーとブラウザが別マシンの構成（WSL2 のようにOSクリップボードが共有される環境を除く、純粋なリモート接続）では、pane 内のプロセスがクライアント側の画像クリップボードに触れる手段が無い。（出典: .aidev/works/20260923-workspace-grouping/review.md）
 - [ ] 複数クライアントで同じtabを見ているとき、片方のD&Dによる pane 分割解除（pane.replace）でドロップ先が閉じられると、そのpaneへローカルでfocusしていた別クライアントの focus 復帰先が想定とずれる: viewRepair.ts のフォールバック規則（閉じたpaneの代わりはレイアウト木の最初の葉。SessionModel.closePaneの規則をそのまま写したもの）は、SessionModel.replacePaneの「後継は必ずドラッグした pane 自身」という規則を知らない（pane.closed/layout.updated イベントに推奨後継のヒントが無いため、クライアント側では区別できない）。20260924-pane-dnd-split-move の cross-check で発見。直すには protocol（イベントへの後継ヒント追加）とviewRepair.ts双方の変更が要る。（出典: .aidev/works/20260924-pane-dnd-split-move/review.md）
+- [ ] レイアウトだけを書き換える pane 操作（swapPaneWith/moveToEdge/replacePane/moveToTab/moveToNewTab）はセッション全体のグローバル focus（this.focus）を更新しない: ローカル保存 view の無い新規クライアントが直後に再接続すると、移動先ではなく元の focus が指す pane へ復元されうる（20260924-pane-move-cross-tab decisions.md D4）
