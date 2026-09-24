@@ -31,6 +31,11 @@ export class DefaultTerminalManager implements TerminalManager {
      * 省けば今までどおり dracula。
      */
     private readonly paletteFor?: (paneId: PaneId) => TerminalPalette,
+    /**
+     * pane ごとに、明暗の問い合わせに答える appearance を引く（20260924-dark-mode-report。
+     * `composeServer.ts` が `createPaletteSource` を渡す）。省けば今までどおり dark（dracula）。
+     */
+    private readonly appearanceFor?: (paneId: PaneId) => "light" | "dark",
   ) {}
 
   get(paneId: PaneId): TerminalHost | undefined {
@@ -55,6 +60,7 @@ export class DefaultTerminalManager implements TerminalManager {
       rows: opts.rows,
     });
     const paletteFor = this.paletteFor;
+    const appearanceFor = this.appearanceFor;
     const host = new DefaultTerminalHost(
       paneId,
       proc,
@@ -62,6 +68,7 @@ export class DefaultTerminalManager implements TerminalManager {
       opts.rows,
       this.scrollbackLines,
       paletteFor ? () => paletteFor(paneId) : undefined,
+      appearanceFor ? () => appearanceFor(paneId) : undefined,
     );
     this.hosts.set(paneId, host);
     // シェルが自分で終了したとき、`SessionService` が明示的に `dispose(paneId)` を呼ぶ前に

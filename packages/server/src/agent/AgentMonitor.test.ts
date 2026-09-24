@@ -46,6 +46,7 @@ class FakeMirror implements Mirror {
   }
   resize(): void {}
   dispose(): void {}
+  notifyAppearanceMayHaveChanged(): void {}
 }
 
 let nextPid = 1000;

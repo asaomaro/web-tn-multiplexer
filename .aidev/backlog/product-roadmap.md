@@ -265,7 +265,14 @@ parent: 20260918-web-terminal-multiplexer
   結線（`ThemeController` の watch・store の返り値）を外して落ちることを確かめ、生出力を
   `.aidev/works/20260922-theme-custom-overrides/test-result.md` に貼った。独立 review 2 ラウンド（must 0・should 1・
   nit 3 を解消）。
-- [ ] 明暗の変化を端末の中のアプリへ知らせる: DSR 996（`CSI ? 996 n` → `CSI ? 997 ; 1|2 n`）への応答と mode 2031 の通知（herdr の `src/terminal_theme.rs` の `HostAppearance::color_scheme_report`）。サーバの Mirror が、その pane の tab の大きさを決めているブラウザのテーマの明暗で答え、テーマや OS の明暗が変わったら通知する。いまは応えていない（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
+- [x] 明暗の変化を端末の中のアプリへ知らせる: DSR 996（`CSI ? 996 n` → `CSI ? 997 ; 1|2 n`）への応答と mode 2031 の通知（herdr の `src/terminal_theme.rs` の `HostAppearance::color_scheme_report`）。サーバの Mirror が、その pane の tab の大きさを決めているブラウザのテーマの明暗で答え、テーマや OS の明暗が変わったら通知する。いまは応えていない（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
+  → 着地: 20260924-dark-mode-report（feature/dark-mode-report）。`Mirror.ts` に CSI ハンドラ（`?996n`・`?2031h`・`?2031l`）と
+  ESC（RIS）ハンドラを追加し、「どちらの明暗か」は色の問い合わせ（`answerPaletteFor`）と同じ4段階優先順位を共有する
+  `resolveThemeFor`/`answerAppearanceFor`（`answerPalette.ts`）で解決。push のトリガーは `client.theme` RPC だけに絞り、
+  OS の自動切替も既存の `ThemeController.apply()` の経路にそのまま乗るため web パッケージは無改修。
+  実測: server 796 本・ルート一括 2937 本・smoke pass・`aidev coverage --strict` gaps=0。独立 review 2 ラウンド
+  （must 1・should 2・nit 2 を解消——CSI ハンドラが複数 Pm の束ね（例 `?2031;1049h`）に対応しておらず、束ねられた
+  他のモードを無効化するバグを発見・修正。生ログは `.aidev/works/20260924-dark-mode-report/decisions.md` D2 参照）。
 - [ ] 端末の選択の背景を見えるようにする: 上流の配色の選択の背景と端末の背景の比が低いテーマがあり（one-light 1.11・solarized-light 1.14・solarized 1.15・rose-pine-dawn 1.27・one-dark 1.31）、copy モードやマウスで選んだ範囲がほとんど見えない。`finalizePalette`（packages/protocol/src/theme.ts）に「選択の背景を端末の背景から寄せる」規則を足す案。20260921-theme-settings では「上流の値のまま、選んだ文字とカーソルだけ直す」（decisions D5）の内側として見送った（出典: .aidev/works/20260921-theme-settings/review.md）
 - [ ] エージェント自動化 API / CLI: herdr の agent start／agent prompt --wait／agent wait／agent read 相当（pane とは別の「エージェント」という名前付きの対象・状態遷移の待ち合わせ・agent skill ファイルの検討を含む） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）
 - [ ] pane 直接接続・制御ストリーム: herdr の terminal attach／session observe／session control 相当（pane 単体への直接接続・書き込み権限の排他制御・閲覧専用の購読ストリーム。既存の pane.subscribe は複数購読者を許す設計のため前提が異なる） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）

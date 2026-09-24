@@ -1,7 +1,7 @@
 import { DEFAULT_THEME, TERMINAL_PALETTES, type Pane, type Tab, type ThemeName } from "@wtm/protocol";
 import { describe, expect, it } from "vitest";
 import type { ClientRecord } from "./ClientRegistry.js";
-import { answerPaletteFor, createPaletteSource, type AnswerPaletteDeps } from "./answerPalette.js";
+import { answerAppearanceFor, answerPaletteFor, createPaletteSource, type AnswerPaletteDeps } from "./answerPalette.js";
 
 /** pane p1 は tab t1 にある。t2 は別の tab。 */
 const PANE = { id: "p1", tabId: "t1" } as Pane;
@@ -110,5 +110,41 @@ describe("createPaletteSource（composeServer の後から埋める箱）", () =
     expect(src.paletteFor("p1")).toBe(DEFAULT_THEME);
     src.attach(deps("owner", [client("owner", { theme: "tokyo-night-day", viewTab: "t1" })]));
     expect(src.paletteFor("p1")).toBe(TERMINAL_PALETTES["tokyo-night-day"]);
+  });
+
+  it("attach されるまでは dark（dracula）、attach 後は answerAppearanceFor の答え（20260924-dark-mode-report）", () => {
+    const src = createPaletteSource();
+    expect(src.appearanceFor("p1")).toBe("dark");
+    src.attach(deps("owner", [client("owner", { theme: "tokyo-night-day", viewTab: "t1" })]));
+    expect(src.appearanceFor("p1")).toBe("light"); // tokyo-night-day は light
+  });
+});
+
+// 20260924-dark-mode-report。resolveThemeFor（answerPaletteFor と共有）は既に上のテストで
+// 網羅されているので、ここでは「同じ優先順位を辿ること」と「ThemeName→明暗の変換」だけを確認する。
+describe("answerAppearanceFor（design「設計方針」: resolveThemeFor を answerPaletteFor と共有）", () => {
+  it("1. サイズを決めているクライアントのテーマの明暗で答える", () => {
+    const d = deps("owner", [
+      client("owner", { theme: "catppuccin-latte", viewTab: "t1", at: 1 }), // light
+      client("other", { theme: "nord", viewTab: "t1", at: 99 }), // dark
+    ]);
+    expect(answerAppearanceFor("p1", d)).toBe("light");
+  });
+
+  it("2. 権限者がいなければ、その tab を表示していて最後に操作した人の明暗", () => {
+    const d = deps(null, [client("v", { theme: "one-light", viewTab: "t1", at: 5 })]);
+    expect(answerAppearanceFor("p1", d)).toBe("light");
+  });
+
+  it("4. 誰もテーマを伝えていなければ dark（dracula の明暗）", () => {
+    expect(answerAppearanceFor("p1", deps(null, []))).toBe("dark");
+  });
+
+  it("毎回引き直す：テーマが変われば明暗の答えも変わる", () => {
+    const owner = client("owner", { theme: "nord", viewTab: "t1" }); // dark
+    const d = deps("owner", [owner]);
+    expect(answerAppearanceFor("p1", d)).toBe("dark");
+    owner.theme = "solarized-light"; // light
+    expect(answerAppearanceFor("p1", d)).toBe("light");
   });
 });

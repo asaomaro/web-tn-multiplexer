@@ -37,8 +37,10 @@ export class DefaultTerminalHost implements TerminalHost {
     scrollbackLines: number,
     /** 色の問い合わせに答える配色（20260921-theme-settings の design D6）。省けば今までどおり dracula。 */
     palette?: () => TerminalPalette,
+    /** 明暗の問い合わせに答える appearance（20260924-dark-mode-report）。省けば今までどおり dark（dracula）。 */
+    appearance?: () => "light" | "dark",
   ) {
-    this.mirror = new XtermMirror(cols, rows, scrollbackLines, palette);
+    this.mirror = new XtermMirror(cols, rows, scrollbackLines, palette, appearance);
     this.fanout = new DefaultOutputFanout(paneId, this.mirror);
 
     // PTY の出力は、同じ呼び出しの中で Mirror と OutputFanout の両方に渡す（design「流量制御と文字列の変換」）。

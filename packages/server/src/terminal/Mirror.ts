@@ -5,7 +5,7 @@
 import xtermHeadless from "@xterm/headless";
 import xtermAddonSerialize from "@xterm/addon-serialize";
 import { win32 } from "node:path";
-import { DEFAULT_THEME, type TerminalPalette } from "@wtm/protocol";
+import { DEFAULT_THEME, DEFAULT_THEME_NAME, THEME_APPEARANCE, type TerminalPalette } from "@wtm/protocol";
 import type { Disposable } from "../util/Disposable.js";
 
 const { Terminal } = xtermHeadless;
@@ -35,6 +35,11 @@ export interface Mirror {
   onResponse(cb: (data: string) => void): Disposable;
   resize(cols: number, rows: number): void;
   dispose(): void;
+  /**
+   * 20260924-dark-mode-report。継続通知（`CSI ? 2031 h` で要求される）が有効な pane へ、
+   * appearance が前回伝えた値と変わっていれば通知する。無効なら・変わっていなければ何もしない。
+   */
+  notifyAppearanceMayHaveChanged(): void;
 }
 
 const DRAIN_LOW_WATERMARK = 256 * 1024; // 256KB（design「流量制御」）
@@ -49,17 +54,23 @@ export class XtermMirror implements Mirror {
   private latestProgress: string | null = null;
   private latestCwd: string | null = null;
   private readonly disposables: Disposable[] = [];
+  /** 20260924-dark-mode-report。`CSI ? 2031 h`/`l` で有効・無効を切り替える。 */
+  private mode2031Enabled = false;
+  /** 最後に問い合わせ・通知で伝えた明暗（変わったときだけ通知するための基準点）。 */
+  private lastReportedAppearance: "light" | "dark" | null = null;
 
   /**
    * `palette` は色の問い合わせに答える配色を返す関数（20260921-theme-settings の design D6）。**答える瞬間に呼ぶ**——その pane を操作している
    * ブラウザがテーマを変えたら次の答えから変わる。既定は今までの答え（dracula）。**投げてはならない**——xterm headless は OSC のハンドラを
    * try/catch で囲わないので、投げると書き込みの列が止まり（PTY は pause されたまま戻らない）、サーバも落ちる（`answerPaletteFor` は投げない）。
+   * `appearance` は同じ形で明暗を返す関数（20260924-dark-mode-report。`answerAppearanceFor`）。
    */
   constructor(
     cols: number,
     rows: number,
     scrollback: number,
     private readonly palette: () => TerminalPalette = () => DEFAULT_THEME,
+    private readonly appearance: () => "light" | "dark" = () => THEME_APPEARANCE[DEFAULT_THEME_NAME],
   ) {
     this.term = new Terminal({ cols, rows, scrollback, allowProposedApi: true });
     this.serializeAddon = new SerializeAddon();
@@ -90,6 +101,25 @@ export class XtermMirror implements Mirror {
       this.term.parser.registerOscHandler(7, (data) => {
         this.latestCwd = parseOsc7(data);
         return true;
+      }),
+    );
+
+    // 明暗の問い合わせ・継続通知（CSI ?996n・CSI ?2031h/l。20260924-dark-mode-report。
+    // design「振る舞いの詳細」）。**常に false を返して委譲する**——CSI は複数の Pm を束ねて
+    // 送れる（例 `CSI ?2031;1049h`）うえ、ハンドラの登録は LIFO で `true` を返すと連鎖が
+    // そこで止まる。単純に「対象 Ps なら true」にすると、束ねられた他のモード（例 1049＝
+    // オルタネートスクリーン）が黙って無効化される（review round1 must で発覚・実証済み）。
+    // xterm 内蔵の `setModePrivate`/`resetModePrivate` は未知のモード番号を無条件で無視する
+    // だけなので、false を返して委譲しても 996/2031 の処理自体は失われない。
+    this.disposables.push(this.term.parser.registerCsiHandler({ prefix: "?", final: "n" }, (params) => this.handleAppearanceQuery(params)));
+    this.disposables.push(this.term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => this.handleMode2031(params, true)));
+    this.disposables.push(this.term.parser.registerCsiHandler({ prefix: "?", final: "l" }, (params) => this.handleMode2031(params, false)));
+    // RIS（端末の完全リセット）で継続通知の登録もリセットする（herdr と同じ挙動。design「振る舞いの詳細」手順6）。
+    // xterm 自身の RIS 処理は妨げない（false を返して委譲する）。
+    this.disposables.push(
+      this.term.parser.registerEscHandler({ final: "c" }, () => {
+        this.mode2031Enabled = false;
+        return false;
       }),
     );
   }
@@ -146,6 +176,14 @@ export class XtermMirror implements Mirror {
     return { dispose: () => this.responseListeners.delete(cb) };
   }
 
+  notifyAppearanceMayHaveChanged(): void {
+    if (!this.mode2031Enabled) return;
+    const next = this.appearance();
+    if (next === this.lastReportedAppearance) return;
+    this.lastReportedAppearance = next;
+    this.emitResponse(appearanceReport(next));
+  }
+
   resize(cols: number, rows: number): void {
     this.term.resize(Math.max(1, cols), Math.max(1, rows));
   }
@@ -184,6 +222,43 @@ export class XtermMirror implements Mirror {
     }
     return matched;
   }
+
+  /**
+   * `CSI ? 996 n`（20260924-dark-mode-report）。他の Pm と束ねられていてもよいよう `params`
+   * 全体を走査する。**常に false を返して委譲する**（review round1 must。上の登録箇所の
+   * コメント参照）——ここで true を返すと、同じ CSI に束ねられた他の私用モードの処理を
+   * 止めてしまう。
+   */
+  private handleAppearanceQuery(params: (number | number[])[]): boolean {
+    if (params.includes(996)) {
+      const current = this.appearance();
+      this.lastReportedAppearance = current; // 問い合わせでも「最後に伝えた値」を更新する（設計方針）
+      this.emitResponse(appearanceReport(current));
+    }
+    return false;
+  }
+
+  /**
+   * `CSI ? 2031 h`/`l`（20260924-dark-mode-report）。他の Pm と束ねられていてもよいよう
+   * `params` 全体を走査する。**常に false を返して委譲する**（review round1 must。上の登録
+   * 箇所のコメント参照）。
+   */
+  private handleMode2031(params: (number | number[])[], enable: boolean): boolean {
+    if (params.includes(2031)) {
+      this.mode2031Enabled = enable;
+      // 有効化した時点の値を基準にする（通知はしない。design「設計方針」。herdr と同じ）——
+      // これが無いと、事前に CSI ?996n で問い合わせていない場合に `lastReportedAppearance` が
+      // null のままで、次の notifyAppearanceMayHaveChanged が「変わった」と誤検知してしまう
+      // （coding 中にテストで発見。decisions.md D1）。
+      if (enable) this.lastReportedAppearance = this.appearance();
+    }
+    return false;
+  }
+}
+
+/** `CSI ? 997 ; 1|2 n`（1=dark、2=light。20260924-dark-mode-report）。 */
+function appearanceReport(a: "light" | "dark"): string {
+  return a === "dark" ? "\x1b[?997;1n" : "\x1b[?997;2n";
 }
 
 /** `#RRGGBB` → `rgb:RRRR/GGGG/BBBB`（xterm の色応答の慣習。各バイトを 16 bit に複製する）。 */

@@ -145,11 +145,11 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   const model = new SessionModel();
   const bus = new EventBus();
   const processInspector = pickProcessInspector();
-  // 色の問い合わせの答え（20260921-theme-settings の design D6）は `session`（pane・tab）と `clients` から引くが、`session` は `terminals` を受けて
+  // 色・明暗の問い合わせの答え（20260921-theme-settings の design D6・20260924-dark-mode-report）は `session`（pane・tab）と `clients` から引くが、`session` は `terminals` を受けて
   // 作る（`clients` もその下）——先に箱を渡し、`clients` を作った直後に埋める。pane を作る（復元する）のは `listen()` の中で、埋めた後になる。
-  // 埋まる前に問い合わせが来ても dracula で答える（投げない）。
+  // 埋まる前に問い合わせが来ても dracula（明暗は dark）で答える（投げない）。
   const palettes = createPaletteSource();
-  const terminals = new DefaultTerminalManager(new NodePtyBackend(), processInspector, options.scrollbackLines, palettes.paletteFor);
+  const terminals = new DefaultTerminalManager(new NodePtyBackend(), processInspector, options.scrollbackLines, palettes.paletteFor, palettes.appearanceFor);
   const sessionFile = new FsSessionFile(options.stateDir);
   const persist = new DefaultPersistScheduler(async () => {
     await sessionFile.save(toSessionFileData(session));

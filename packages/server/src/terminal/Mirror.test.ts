@@ -144,3 +144,149 @@ describe("XtermMirror — flow control", () => {
     mirror.dispose();
   });
 });
+
+// 20260924-dark-mode-report。design「振る舞いの詳細」参照。
+describe("XtermMirror — appearance report (CSI ?996n / mode 2031)", () => {
+  it("CSI ?996n に、appearance() が dark なら ?997;1n、light なら ?997;2n で答える", async () => {
+    let appearance: "light" | "dark" = "dark";
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => appearance);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+
+    await writeAndWait(mirror, "\x1b[?996n");
+    expect(responses.join("")).toBe("\x1b[?997;1n");
+
+    responses.length = 0;
+    appearance = "light";
+    await writeAndWait(mirror, "\x1b[?996n");
+    expect(responses.join("")).toBe("\x1b[?997;2n");
+    mirror.dispose();
+  });
+
+  it("appearance を渡さなければ既定（dracula=dark）で答える", async () => {
+    const mirror = new XtermMirror(80, 24, 1000);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    await writeAndWait(mirror, "\x1b[?996n");
+    expect(responses.join("")).toBe("\x1b[?997;1n");
+    mirror.dispose();
+  });
+
+  it("CSI ?2031h の直後は、appearance が変わっていなければ通知しない（herdr と同じ。design「設計方針」）", async () => {
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => "dark");
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    await writeAndWait(mirror, "\x1b[?2031h");
+    expect(responses.join("")).toBe(""); // 有効化そのものでは通知しない
+    mirror.notifyAppearanceMayHaveChanged(); // 値は変わっていない（まだ dark のまま）
+    expect(responses.join("")).toBe("");
+    mirror.dispose();
+  });
+
+  it("CSI ?2031h を送っていれば、appearance が変わったときに notifyAppearanceMayHaveChanged で通知される", async () => {
+    let appearance: "light" | "dark" = "dark";
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => appearance);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    await writeAndWait(mirror, "\x1b[?2031h");
+
+    appearance = "light";
+    mirror.notifyAppearanceMayHaveChanged();
+    expect(responses.join("")).toBe("\x1b[?997;2n");
+
+    // 同じ値のまま再度呼んでも、二重には通知しない。
+    responses.length = 0;
+    mirror.notifyAppearanceMayHaveChanged();
+    expect(responses.join("")).toBe("");
+    mirror.dispose();
+  });
+
+  it("CSI ?2031l を送ると、以後 appearance が変わっても通知しない", async () => {
+    let appearance: "light" | "dark" = "dark";
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => appearance);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    await writeAndWait(mirror, "\x1b[?2031h");
+    await writeAndWait(mirror, "\x1b[?2031l");
+
+    appearance = "light";
+    mirror.notifyAppearanceMayHaveChanged();
+    expect(responses.join("")).toBe("");
+    mirror.dispose();
+  });
+
+  it("mode 2031 を一度も有効にしていなければ、notifyAppearanceMayHaveChanged は何もしない", () => {
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => "light");
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    mirror.notifyAppearanceMayHaveChanged();
+    expect(responses.join("")).toBe("");
+    mirror.dispose();
+  });
+
+  it("RIS（ESC c）で継続通知の登録がリセットされる（herdr と同じ挙動。design「振る舞いの詳細」手順6）", async () => {
+    let appearance: "light" | "dark" = "dark";
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => appearance);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    await writeAndWait(mirror, "\x1b[?2031h");
+    await writeAndWait(mirror, "\x1bc"); // RIS
+
+    appearance = "light";
+    mirror.notifyAppearanceMayHaveChanged();
+    expect(responses.join("")).toBe(""); // リセットされたので通知しない
+    mirror.dispose();
+  });
+
+  it("CSI ?2031h が他のモードと同じ CSI に束ねられても、束ねられた側（1049＝オルタネートスクリーン）を無効化しない（review round1 must）", async () => {
+    let appearance: "light" | "dark" = "dark";
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => appearance);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+
+    await writeAndWait(mirror, "main-buffer-marker");
+    expect(mirror.bottomLines(24).join("")).toContain("main-buffer-marker");
+
+    // 2031（継続通知の有効化）と 1049（オルタネートスクリーン）を同じ CSI に束ねて送る。
+    await writeAndWait(mirror, "\x1b[?2031;1049h");
+    // 1049 が適用されていれば、画面はオルタネートバッファ（空）に切り替わっているはず。
+    expect(mirror.bottomLines(24).join("")).not.toContain("main-buffer-marker");
+
+    // 2031 も適用されているなら、継続通知が機能しているはず。
+    appearance = "light";
+    mirror.notifyAppearanceMayHaveChanged();
+    expect(responses.join("")).toBe("\x1b[?997;2n");
+
+    await writeAndWait(mirror, "\x1b[?1049l"); // 後始末（メインバッファへ戻す）
+    mirror.dispose();
+  });
+
+  it("CSI ?2031h が他のモードの後ろに束ねられても、2031 自体が無視されない（review round1 must）", async () => {
+    let appearance: "light" | "dark" = "dark";
+    const mirror = new XtermMirror(80, 24, 1000, undefined, () => appearance);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+
+    // 25（カーソル可視化。既存の私用モード）の後ろに 2031 を束ねて送る。
+    await writeAndWait(mirror, "\x1b[?25;2031h");
+
+    appearance = "light";
+    mirror.notifyAppearanceMayHaveChanged();
+    expect(responses.join("")).toBe("\x1b[?997;2n"); // 2031 が認識されていれば通知される
+    mirror.dispose();
+  });
+
+  it("CSI ?996n/?2031h/?2031l 以外の私用 CSI（?25h・6n 等）には関与しない（既存の応答を壊さない）", async () => {
+    const mirror = new XtermMirror(80, 24, 1000);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    // ?25h（カーソル可視化。headless が既定で処理する私用モード）と 6n（CPR。prefix 無し）は
+    // 新しいハンドラの登録先（{prefix:"?", final:"h"}・{final:"n"} 無 prefix）とは別の識別子な
+    // ので、素通りして既存どおり動く。
+    await writeAndWait(mirror, "\x1b[?25h\x1b[6n");
+    // eslint-disable-next-line no-control-regex -- CPR の形を確かめる
+    expect(responses.join("")).toMatch(/\x1b\[\d+;\d+R/);
+    expect(responses.join("")).not.toContain("?997"); // 明暗の応答は混ざらない
+    mirror.dispose();
+  });
+});

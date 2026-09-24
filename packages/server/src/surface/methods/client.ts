@@ -38,6 +38,11 @@ export function registerClientMethods(surface: ControlSurface, deps: MethodDeps)
     // 覚えるだけ（保存も配布もしない）。色の問い合わせに答える瞬間に `answerPalette.ts` が引く（20260921-theme-settings の design D6）。
     handler: (ctx, params) => {
       deps.clients.setTheme(ctx.clientId, params.theme);
+      // 継続通知（mode 2031）を要求している pane へ、明暗が変わっていれば知らせる
+      // （20260924-dark-mode-report。design「設計方針」——push のトリガーはこの RPC だけ）。
+      for (const pane of deps.session.snapshot().panes) {
+        deps.terminals.get(pane.id)?.mirror.notifyAppearanceMayHaveChanged();
+      }
       return {};
     },
   });

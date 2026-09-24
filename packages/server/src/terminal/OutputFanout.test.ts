@@ -53,6 +53,9 @@ class FakeMirror implements Mirror {
   dispose(): void {
     // no-op
   }
+  notifyAppearanceMayHaveChanged(): void {
+    // no-op
+  }
 }
 
 class FakeSink implements ClientSink {
