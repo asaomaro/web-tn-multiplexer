@@ -246,6 +246,30 @@ export interface PaneSwapWithResult {
   ok: boolean;
 }
 
+/**
+ * 既存の pane（`paneId`）を、別の pane（`targetPaneId`）の縁へ移して分割する
+ * （20260924-pane-dnd-split-move。ドラッグでの分割用）。新しい pane は作らない
+ * （`pane.split` は新しい PTY を作るのに対し、こちらは既存の pane を動かすだけ。design「対象範囲」）。
+ */
+export const PaneMoveToEdgeParams = z.object({ paneId, targetPaneId: paneId, edge: z.enum(["top", "bottom", "left", "right"]) });
+export type PaneMoveToEdgeParams = z.infer<typeof PaneMoveToEdgeParams>;
+export interface PaneMoveToEdgeResult {
+  /** 自分自身・同一 tab でない等、何も起きなかったときは false（design「エラー処理」）。 */
+  ok: boolean;
+}
+
+/**
+ * `paneId`（ドラッグした pane。生き残る）が `targetPaneId`（ドロップ先。閉じる）の位置と
+ * スペースを引き継ぐ（20260924-pane-dnd-split-move。ドラッグでの分割解除用）。`targetPaneId` の
+ * プロセスは実際に終了する（design「振る舞いの詳細」）。
+ */
+export const PaneReplaceParams = z.object({ paneId, targetPaneId: paneId });
+export type PaneReplaceParams = z.infer<typeof PaneReplaceParams>;
+export interface PaneReplaceResult {
+  /** 自分自身・同一 tab でない等、何も起きなかったときは false（design「エラー処理」）。 */
+  ok: boolean;
+}
+
 export const PaneZoomParams = z.object({ paneId, mode: zoomMode });
 export type PaneZoomParams = z.infer<typeof PaneZoomParams>;
 
@@ -360,6 +384,8 @@ export const METHOD_SCHEMAS = {
   "pane.focus_direction": PaneFocusDirectionParams,
   "pane.swap": PaneSwapParams,
   "pane.swap_with": PaneSwapWithParams,
+  "pane.move_to_edge": PaneMoveToEdgeParams,
+  "pane.replace": PaneReplaceParams,
   "pane.zoom": PaneZoomParams,
   "pane.resize": PaneResizeParams,
   "pane.input.set": PaneInputSetParams,
@@ -406,6 +432,8 @@ export interface MethodResultMap {
   "pane.focus_direction": PaneFocusDirectionResult;
   "pane.swap": PaneSwapResult;
   "pane.swap_with": PaneSwapWithResult;
+  "pane.move_to_edge": PaneMoveToEdgeResult;
+  "pane.replace": PaneReplaceResult;
   "pane.zoom": Record<string, never>;
   "pane.resize": Record<string, never>;
   "pane.input.set": Record<string, never>;

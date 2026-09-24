@@ -65,6 +65,28 @@ export function remove(node: LayoutNode, paneId: PaneId): LayoutNode | null {
   return { ...node, a, b };
 }
 
+export type Edge = "top" | "bottom" | "left" | "right";
+
+/**
+ * `targetPaneId` の葉を、`edge` 側に `newPaneId` を置く形の split に置き換える
+ * （20260924-pane-dnd-split-move。design「インターフェース / データ構造」）。`split()` は常に
+ * target=a・new=b だが、こちらは `edge` に応じて target/new のどちらを a（左/上）に置くかを決める：
+ * "right"|"bottom" は target=a・new=b（`split()` と同じ結果）、"left"|"top" は new=a・target=b
+ * （a/b の中身だけが入れ替わる。dir は同じ軸の "right"|"down" のまま）。ratio は常に 0.5 固定
+ * （この work の対象。比率調整は既存のリサイズに任せる）。
+ */
+export function insertAtEdge(node: LayoutNode, targetPaneId: PaneId, edge: Edge, newPaneId: PaneId, newSplitId: SplitId): LayoutNode {
+  if (isPaneNode(node)) {
+    if (node.paneId !== targetPaneId) return node;
+    const dir: SplitDirection = edge === "left" || edge === "right" ? "right" : "down";
+    const targetNode: LayoutNode = { type: "pane", paneId: targetPaneId };
+    const newNode: LayoutNode = { type: "pane", paneId: newPaneId };
+    const [a, b] = edge === "left" || edge === "top" ? [newNode, targetNode] : [targetNode, newNode];
+    return { type: "split", id: newSplitId, dir, ratio: 0.5, a, b };
+  }
+  return { ...node, a: insertAtEdge(node.a, targetPaneId, edge, newPaneId, newSplitId), b: insertAtEdge(node.b, targetPaneId, edge, newPaneId, newSplitId) };
+}
+
 /** 2 つの pane の位置を入れ替える（レイアウトの形は変えない）。 */
 export function swap(node: LayoutNode, paneIdA: PaneId, paneIdB: PaneId): LayoutNode {
   if (isPaneNode(node)) {

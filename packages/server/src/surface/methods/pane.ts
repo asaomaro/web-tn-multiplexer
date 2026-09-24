@@ -3,7 +3,9 @@ import {
   PaneFocusDirectionParams,
   PaneFocusParams,
   PaneInputSetParams,
+  PaneMoveToEdgeParams,
   PaneRenameParams,
+  PaneReplaceParams,
   PaneResizeParams,
   PaneSplitParams,
   PaneSwapParams,
@@ -78,6 +80,26 @@ export function registerPaneMethods(surface: ControlSurface, deps: MethodDeps): 
     schema: PaneSwapWithParams,
     handler: (ctx, params) => {
       const ok = deps.session.swapPaneWith(params.paneId, params.otherPaneId);
+      deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
+      return { ok };
+    },
+  });
+
+  // 20260924-pane-dnd-split-move（ドラッグでの分割）。
+  surface.register("pane.move_to_edge", {
+    schema: PaneMoveToEdgeParams,
+    handler: (ctx, params) => {
+      const ok = deps.session.moveToEdge(params.paneId, params.targetPaneId, params.edge);
+      deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
+      return { ok };
+    },
+  });
+
+  // 20260924-pane-dnd-split-move（ドラッグでの分割解除）。
+  surface.register("pane.replace", {
+    schema: PaneReplaceParams,
+    handler: (ctx, params) => {
+      const ok = deps.session.replacePane(params.paneId, params.targetPaneId);
       deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
       return { ok };
     },

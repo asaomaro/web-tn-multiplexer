@@ -75,11 +75,26 @@ parent: 20260918-web-terminal-multiplexer
       （20260923-missing-keybinding-actions で別途対応済み）。
       （出典: .aidev/works/20260923-workspace-grouping/test-result.md）
 - [x] D&D による pane の入れ替え（Web 固有の操作。上の項目のうち入れ替えだけ）: 20260923-pane-name-dnd-swap で対応。
-      pane 名ラベルを別の pane の上へドラッグ＆ドロップすると同一 tab 内の2つの pane が入れ替わる
-      （`pane.swap_with`。`packages/server/src/session/SessionModel.ts` の `swapPaneWith`）。
+      ~~pane 名ラベルを別の pane の上へドラッグ＆ドロップすると同一 tab 内の2つの pane が入れ替わる
+      （`pane.swap_with`。`packages/server/src/session/SessionModel.ts` の `swapPaneWith`）。~~
+      **20260924-pane-dnd-split-move（decisions D4）で、この「ドロップ先を問わず入れ替え」という
+      挙動は縁/中央のゾーン方式（分割/分割解除）に置き換わった**——安全な入れ替えと、プロセスを
+      実際に終了させる分割解除を同じジェスチャの中に両立できないため。`pane.swap_with` RPC 自体・
+      `SessionModel.swapPaneWith` は変更・削除していない（呼び出し元が無くなっただけ）。
       実測: 実装 11 ファイル・単体 2372 件 pass（`packages/web/src/components/PaneFrame.test.ts` 34 件含む）。
-      **分割・分割解除・別 tab / 新規 workspace への移動は下の行に残っている**
-- [ ] D&D による pane の分割 / 分割解除 / 移動（Web 固有の操作） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
+      **分割・分割解除は下の行、別 tab / 新規 workspace への移動はさらに下の行に残っている**
+- [x] D&D による pane の分割・分割解除（Web 固有の操作。上の項目のうち分割・分割解除）: 20260924-pane-dnd-split-move で対応。
+      pane 名ラベルを別の pane の縁へドラッグ＆ドロップするとその方向に分割してドラッグした pane が
+      移り、中央へドロップするとドロップ先を閉じてドラッグした pane がそのスペースを引き継ぐ
+      （`pane.move_to_edge`/`pane.replace`。`LayoutTree.insertAtEdge`・`SessionModel.moveToEdge`/
+      `replacePane`）。ドロップ先が busy なら確認ダイアログを経由する（D23 の既存パターン。
+      review 指摘 must で追加）。
+      実測: `pnpm -s test` 2837 passed / 0 failed（161ファイル）・`aidev coverage --strict`
+      ac=16 gaps=0（`.aidev/works/20260924-pane-dnd-split-move/test-result.md`）。
+      **別 tab / 新規 workspace への移動は下の行に残っている**
+- [ ] D&D による pane の別 tab・別 workspace への移動（Web 固有の操作。同一 tab 内の入れ替え・分割・
+      分割解除は上の行で対応済み） (needs: 20260918-web-terminal-multiplexer)（出典:
+      .aidev/works/20260924-pane-dnd-split-move/decisions.md D1）
 - [ ] エージェント対応の拡充: 主要数種以外の検出、herdr の integrations / plugins 相当 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] 複数ホストの集約: herdr の remote / several machines 相当。複数ホストのセッションを 1 画面に (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
 - [ ] ノードによるオーケストレーション: セッションをノード表示し、マウスで繋いで状態トリガ・出力受け渡し・監督関係を設定（外部操作 API の後） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
@@ -242,3 +257,4 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] pane 直接接続・制御ストリーム: herdr の terminal attach／session observe／session control 相当（pane 単体への直接接続・書き込み権限の排他制御・閲覧専用の購読ストリーム。既存の pane.subscribe は複数購読者を許す設計のため前提が異なる） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）
 - [ ] キーバインドでの workspace 並べ替え（AC8: move_workspace_previous/next）は flat な隣接1件だけを入れ替える実装のため、手動グループの非アンカーメンバーを動かすと、隣が別グループ/無所属の workspace の場合に画面上は何も変化しないことがある（20260923-workspace-grouping レビューで発見。D&D 側は同レビューで修正済み。キーバインド側は workspace.move の delta 方式を anchor 方式へ変えるプロトコル改修が要るため今回は見送り）。（出典: .aidev/works/20260923-workspace-grouping/review.md）
 - [ ] クリップボード画像のリモート貼り付け: herdr は `remote_image_paste`（既定 Ctrl+V、`herdr --remote` 使用時だけ有効）でクライアントの画像クリップボードをリモートのペインへ貼り付けられるが、web-tn-multiplexer にはこれに相当する実装が無い（`packages/web/src/term/clipboard.ts` はテキストの readText/writeText のみ、画像用の navigator.clipboard.read()・ClipboardItem・サーバー側の画像アップロード経路とも未実装）。サーバーとブラウザが別マシンの構成（WSL2 のようにOSクリップボードが共有される環境を除く、純粋なリモート接続）では、pane 内のプロセスがクライアント側の画像クリップボードに触れる手段が無い。（出典: .aidev/works/20260923-workspace-grouping/review.md）
+- [ ] 複数クライアントで同じtabを見ているとき、片方のD&Dによる pane 分割解除（pane.replace）でドロップ先が閉じられると、そのpaneへローカルでfocusしていた別クライアントの focus 復帰先が想定とずれる: viewRepair.ts のフォールバック規則（閉じたpaneの代わりはレイアウト木の最初の葉。SessionModel.closePaneの規則をそのまま写したもの）は、SessionModel.replacePaneの「後継は必ずドラッグした pane 自身」という規則を知らない（pane.closed/layout.updated イベントに推奨後継のヒントが無いため、クライアント側では区別できない）。20260924-pane-dnd-split-move の cross-check で発見。直すには protocol（イベントへの後継ヒント追加）とviewRepair.ts双方の変更が要る。（出典: .aidev/works/20260924-pane-dnd-split-move/review.md）

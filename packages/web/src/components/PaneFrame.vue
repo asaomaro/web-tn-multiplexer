@@ -5,6 +5,7 @@ import { paneNameOf } from "../store/paneName.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
+import { zoneAt, type Zone } from "../term/paneDragZone.js";
 
 /**
  * pane の枠（design M7 の後半「pane の枠の右クリックは常にメニューを開く」。D110）。`PaneLayout` が葉（測る要素）の外側を
@@ -72,6 +73,11 @@ const isDropTarget = computed(() => {
   const drag = view?.paneDrag;
   return !!drag && drag.overPaneId === props.paneId && drag.sourcePaneId !== props.paneId;
 });
+/**
+ * ドロップ候補になっているとき、ホバー中のゾーン（縁/中央。20260924-pane-dnd-split-move）。
+ * `isDropTarget` が false のときは無意味なので null。
+ */
+const overZone = computed<Zone | null>(() => (isDropTarget.value ? (view?.paneDrag?.overZone ?? null) : null));
 /** 自分がドラッグ元か（ドラッグ中は自分の名前を薄くする等の見た目に使う）。 */
 const isDragSource = computed(() => view?.paneDrag?.sourcePaneId === props.paneId);
 
@@ -89,10 +95,28 @@ function cancelDrag(): void {
   window.removeEventListener("keydown", onEscapeDuringDrag);
 }
 
+/** `document.elementFromPoint` から最も近い `[data-pane-id]` 祖先の要素を求める。 */
+function paneElementAt(x: number, y: number): HTMLElement | null {
+  const el = document.elementFromPoint(x, y);
+  return (el?.closest("[data-pane-id]") as HTMLElement | null) ?? null;
+}
+
 /** `document.elementFromPoint` から最も近い `[data-pane-id]` 祖先の pane id を求める。 */
 function paneIdAt(x: number, y: number): string | null {
-  const el = document.elementFromPoint(x, y);
-  return (el?.closest("[data-pane-id]") as HTMLElement | null)?.dataset.paneId ?? null;
+  return paneElementAt(x, y)?.dataset.paneId ?? null;
+}
+
+/**
+ * ドロップ候補の pane とゾーン（縁/中央）を同時に求める（20260924-pane-dnd-split-move。
+ * design「振る舞いの詳細 > クライアント側: ゾーン判定」）。対象の要素が見つからなければ null。
+ * `paneIdAt`（対象の特定）と同じ要素の `getBoundingClientRect()` を使う——別々に探すと、
+ * その間に描き直しが起きた場合に対象がずれうる。
+ */
+function dropTargetAt(x: number, y: number): { paneId: string; zone: Zone } | null {
+  const el = paneElementAt(x, y);
+  const paneId = el?.dataset.paneId;
+  if (!el || !paneId) return null;
+  return { paneId, zone: zoneAt(el.getBoundingClientRect(), x, y) };
 }
 
 /** 名前ラベルの押し下げ。まだドラッグ扱いにしない（閾値を超えるまでは「ただのクリック」。AC-I1・AC-I5）。 */
@@ -110,23 +134,32 @@ function onNamePointerMove(ev: PointerEvent): void {
     view?.startPaneDrag(props.paneId);
     window.addEventListener("keydown", onEscapeDuringDrag);
   }
-  view?.setPaneDragOver(paneIdAt(ev.clientX, ev.clientY));
+  const hit = dropTargetAt(ev.clientX, ev.clientY);
+  view?.setPaneDragOver(hit?.paneId ?? null, hit?.zone ?? null);
 }
 
 /** 離した：ドラッグ済みならドロップを確定、閾値未満ならクリック（枠を押したのと同じ扱い。AC-I5）。 */
 function onNamePointerUp(ev: PointerEvent): void {
   if (!dragStart || ev.pointerId !== dragStart.pointerId) return;
   const wasDragging = !!view?.paneDrag;
-  const target = wasDragging ? paneIdAt(ev.clientX, ev.clientY) : null;
+  // `view.paneDrag.overZone` は使わない（直前の pointermove 時点のもので、離した瞬間の座標とは
+  // 理論上ずれうる。ハイライトと実際に呼ぶ RPC が食い違わないよう、pointerup の実座標からその場で
+  // 再計算する（design「クライアント側: ドロップ確定」。20260924-pane-dnd-split-move）。
+  const hit = wasDragging ? dropTargetAt(ev.clientX, ev.clientY) : null;
   dragStart = null;
   if (wasDragging) {
     view?.endPaneDrag();
     window.removeEventListener("keydown", onEscapeDuringDrag);
-    if (target && target !== props.paneId) {
-      actions?.swapPanesByDrag(props.paneId, target);
-      // ドラッグした pane にフォーカスを残す（AC-I4）。入れ替え前にフォーカスが別の pane に
+    if (hit && hit.paneId !== props.paneId) {
+      if (hit.zone === "center") {
+        actions?.replacePaneWithDrag(props.paneId, hit.paneId);
+      } else {
+        actions?.movePaneToEdge(props.paneId, hit.paneId, hit.zone);
+      }
+      // ドラッグした pane にフォーカスを残す（AC-I4・AC8）。入れ替え前にフォーカスが別の pane に
       // あった場合、`focusedPaneId` を書き換えないと、そちらの pane が新しい位置にフォーカスを
-      // 持ち続けてしまう（`swapPaneWith` は id の参照を変えないため。design の申し送り）。
+      // 持ち続けてしまう（`swapPaneWith`/`moveToEdge`/`replacePane` は id の参照を変えないため。
+      // design の申し送り）。
       view?.focusPane(props.paneId);
       registry?.focus(props.paneId);
     }
@@ -228,6 +261,10 @@ function onKeydown(ev: KeyboardEvent): void {
     <div class="pane-frame-body">
       <slot />
     </div>
+    <!-- ドロップ先のゾーン（縁/中央）表示（20260924-pane-dnd-split-move。design「振る舞いの詳細 >
+         視覚フィードバック」AC4）。`.pane-frame-body`（端末）より後に置く理由は下の `.pane-frame-name`
+         と同じ（z-index:auto は DOM 順で決まる）。 -->
+    <div v-if="overZone" class="pane-frame-zone" :class="`pane-frame-zone-${overZone}`" aria-hidden="true" />
     <!-- `.pane-frame-body`（端末。DOM 順で後）より後に置く——z-index:auto の重なりは DOM 順で
          後のものが上に来るため、`.pane-frame-edge` の中に置くと端末の不透明な内容の下に隠れて
          見えなくなる（taskcheck が実際のスクリーンショットで発見。review.md 参照）。 -->
@@ -306,6 +343,41 @@ function onKeydown(ev: KeyboardEvent): void {
 .pane-frame-edge-drop-target {
   outline: 2px dashed var(--wtm-accent, #8be9fd);
   outline-offset: -2px;
+}
+/*
+ * ドロップ先のゾーン表示（20260924-pane-dnd-split-move。design「振る舞いの詳細 > 視覚フィードバック」
+ * AC4）。縁は `paneDragZone.ts` の EDGE_RATIO（30%）と同じ割合の帯、中央はそれ以外の全域。
+ * **下の `70%`（`.pane-frame-zone-top`等）は `EDGE_RATIO` の値と手動で同期している**——
+ * `EDGE_RATIO` を変えたらここも合わせて直すこと（review 指摘 nit）。
+ * `pointer-events: none`——このオーバーレイ自体が `elementFromPoint`/ドロップ判定の対象にならない
+ * ようにする（`.pane-frame-name` の上に乗っても掴み手を妨げない）。
+ * **中央（分割解除）だけ色を変える**（`--wtm-error-fg` の赤系）——縁（分割。プロセスは失われない）
+ * と違い、中央はドロップ先の pane のプロセスを実際に終了させる破壊的な操作なので、`swap`（常に
+ * 安全）から置き換わったこの区別を見た目で伝える（decisions.md D4 の安全面の検討）。
+ */
+.pane-frame-zone {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--wtm-accent, #8be9fd) 25%, transparent);
+  border: 2px solid var(--wtm-accent, #8be9fd);
+  box-sizing: border-box;
+}
+.pane-frame-zone-top {
+  bottom: 70%;
+}
+.pane-frame-zone-bottom {
+  top: 70%;
+}
+.pane-frame-zone-left {
+  right: 70%;
+}
+.pane-frame-zone-right {
+  left: 70%;
+}
+.pane-frame-zone-center {
+  background: color-mix(in srgb, var(--wtm-error-fg, #ff5555) 25%, transparent);
+  border-color: var(--wtm-error-fg, #ff5555);
 }
 .pane-frame-edge:focus-visible {
   outline: 1px solid var(--wtm-fg, #f8f8f2);

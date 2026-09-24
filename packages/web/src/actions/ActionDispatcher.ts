@@ -527,12 +527,42 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
   }
 
   /**
-   * 名前ラベルのドラッグでの入れ替え（20260923-pane-name-dnd-swap。`PaneFrame.vue` から直接呼ぶ）。
-   * 既存の方向ベースの `swap`/`pane.swap` とは別の RPC（`pane.swap_with`）を使う（decisions.md D4）。
-   * サーバの `layout.updated` で各クライアントの表示が揃うので、応答は待たない（`pane.swap` と同じ形）。
+   * 名前ラベルのドラッグを、別の pane の縁へドロップしての分割（20260924-pane-dnd-split-move。
+   * `PaneFrame.vue` から直接呼ぶ）。`swapPanesByDrag`（20260923-pane-name-dnd-swap。ドロップ先を
+   * 問わず入れ替え）はこの work で縁/中央のゾーン方式に置き換わったため削除した
+   * （`pane.swap_with` RPC 自体・`SessionModel`/`SessionService` 側は変更していない。decisions.md
+   * D4）。サーバの `layout.updated` で各クライアントの表示が揃うので、応答は待たない
+   * （`pane.swap` と同じ形）。
    */
-  swapPanesByDrag(paneId: string, otherPaneId: string): void {
-    void this.conn.request("pane.swap_with", { paneId, otherPaneId }).catch(() => undefined);
+  movePaneToEdge(paneId: string, targetPaneId: string, edge: "top" | "bottom" | "left" | "right"): void {
+    void this.conn.request("pane.move_to_edge", { paneId, targetPaneId, edge }).catch(() => undefined);
+  }
+
+  /**
+   * 名前ラベルのドラッグを、別の pane の中央へドロップしての分割解除（20260924-pane-dnd-split-move。
+   * `PaneFrame.vue` から直接呼ぶ）。**`targetPaneId` が busy なら、`closePaneById`/`closeTabById`
+   * と同じ D23 の安全策で確認ダイアログを挟む**（review 指摘 must：中央ドロップはプロセスを実際に
+   * 終了させる破壊的操作だが、確認なしに即座に実行していた）。
+   */
+  replacePaneWithDrag(paneId: string, targetPaneId: string): void {
+    const target = this.session.panes.get(targetPaneId);
+    if (target?.busy) {
+      this.view.openDialogWithContext({ kind: "confirmReplacePane", paneId, targetPaneId });
+      return;
+    }
+    this.sendReplacePane(paneId, targetPaneId);
+  }
+
+  private sendReplacePane(paneId: string, targetPaneId: string): void {
+    void this.conn.request("pane.replace", { paneId, targetPaneId }).catch(() => undefined);
+  }
+
+  /** `ConfirmDialog`（`kind: "confirmReplacePane"`）が確定したときに呼ぶ。 */
+  confirmReplacePane(): void {
+    const ctx = this.view.dialogContext;
+    if (ctx?.kind !== "confirmReplacePane") return;
+    this.view.closeDialog();
+    this.sendReplacePane(ctx.paneId, ctx.targetPaneId);
   }
 
   private cyclePane(delta: 1 | -1): void {

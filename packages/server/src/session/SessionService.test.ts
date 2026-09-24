@@ -277,6 +277,64 @@ describe("SessionService — tabs and panes", () => {
     expect(persist.touchCount).toBe(0);
   });
 
+  // 20260924-pane-dnd-split-move：ドラッグでの分割。design「振る舞いの詳細 > サーバ側」。
+  it("moveToEdge: 成功すると layout.updated を publish し保存を予約する", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const { pane: other } = await service.splitPane(pane.id, "right", undefined);
+    const events: string[] = [];
+    bus.subscribe((e) => events.push(e.event));
+    persist.touchCount = 0;
+
+    const ok = service.moveToEdge(other.id, pane.id, "top");
+
+    expect(ok).toBe(true);
+    expect(events).toEqual(["layout.updated"]);
+    expect(persist.touchCount).toBe(1);
+  });
+
+  it("moveToEdge: 何も起きなかったときは publish も保存の予約もしない", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const events: string[] = [];
+    bus.subscribe((e) => events.push(e.event));
+    persist.touchCount = 0;
+
+    const ok = service.moveToEdge(pane.id, pane.id, "top"); // 自分自身の縁
+
+    expect(ok).toBe(false);
+    expect(events).toEqual([]);
+    expect(persist.touchCount).toBe(0);
+  });
+
+  // 20260924-pane-dnd-split-move：ドラッグでの分割解除。ドロップ先のプロセスは実際に終了する。
+  it("replacePane: ドロップ先のプロセスを破棄し、pane.closed → layout.updated の順に publish する", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const { pane: other } = await service.splitPane(pane.id, "right", undefined);
+    const host = terminals.get(other.id) as FakeTerminalHost;
+    const events: string[] = [];
+    bus.subscribe((e) => events.push(e.event));
+    persist.touchCount = 0;
+
+    const ok = service.replacePane(pane.id, other.id);
+
+    expect(ok).toBe(true);
+    expect(host.disposed).toBe(true);
+    expect(events).toEqual(["pane.closed", "layout.updated"]);
+    expect(persist.touchCount).toBe(1);
+  });
+
+  it("replacePane: 何も起きなかったときはプロセスを破棄せず publish も保存の予約もしない", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const events: string[] = [];
+    bus.subscribe((e) => events.push(e.event));
+    persist.touchCount = 0;
+
+    const ok = service.replacePane(pane.id, pane.id); // 自分自身
+
+    expect(ok).toBe(false);
+    expect(events).toEqual([]);
+    expect(persist.touchCount).toBe(0);
+  });
+
   it("supports at least 16 panes in one session, each independently addressable (AC17「規模」・test 工程で確認)", async () => {
     const { pane: first, tab } = await service.createWorkspace("/home/u", "api");
     const paneIds = [first.id];
