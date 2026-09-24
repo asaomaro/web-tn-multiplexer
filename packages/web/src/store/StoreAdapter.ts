@@ -96,6 +96,16 @@ export class StoreAdapter implements StorePort {
       case "workspace.closed":
         session.workspaceClosed(e.data.workspaceId);
         return;
+      case "workspace.order_changed":
+        session.workspacesReordered(e.data.workspaceIds);
+        return;
+      case "group.created":
+      case "group.updated":
+        session.groupUpserted(e.data.group);
+        return;
+      case "group.deleted":
+        session.groupDeleted(e.data.groupId);
+        return;
       case "tab.created":
       case "tab.updated":
         session.tabUpserted(e.data.tab);

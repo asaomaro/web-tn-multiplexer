@@ -1,4 +1,4 @@
-import type { AgentInfo, HostInfo, Pane, SessionFocus, SessionLimits, SessionSnapshot, Tab, Workspace } from "@wtm/protocol";
+import type { AgentInfo, HostInfo, Pane, SessionFocus, SessionLimits, SessionSnapshot, Tab, Workspace, WorkspaceGroup } from "@wtm/protocol";
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
@@ -15,6 +15,8 @@ export const useSessionStore = defineStore("session", () => {
   const workspaces = ref(new Map<string, Workspace>());
   const tabs = ref(new Map<string, Tab>());
   const panes = ref(new Map<string, Pane>());
+  /** 手動グループ（20260923-workspace-grouping。herdr に前例が無い独自拡張）。 */
+  const groups = ref(new Map<string, WorkspaceGroup>());
   const focus = ref<SessionFocus | null>(null);
   const limits = ref<SessionLimits>({ scrollbackLines: 5000 });
 
@@ -26,6 +28,7 @@ export const useSessionStore = defineStore("session", () => {
     workspaces.value = new Map(s.workspaces.map((w) => [w.id, w]));
     tabs.value = new Map(s.tabs.map((t) => [t.id, t]));
     panes.value = new Map(s.panes.map((p) => [p.id, p]));
+    groups.value = new Map(s.groups.map((g) => [g.id, g]));
     focus.value = s.focus;
     limits.value = s.limits;
   }
@@ -40,6 +43,26 @@ export const useSessionStore = defineStore("session", () => {
   }
   function workspaceClosed(workspaceId: string): void {
     workspaces.value.delete(workspaceId);
+  }
+  /**
+   * `workspace.order_changed`（20260923-workspace-grouping。decisions.md D5）：`Map.set` は
+   * 既存キーの挿入位置を動かさないので、`workspace.updated` の upsert では並び替えを表現できない。
+   * サーバと同じ「エントリを並べ替えてから `new Map(...)` で作り直す」技法をここにも適用する。
+   * イベントに含まれない（ローカルにまだ無い）id は無視し、ローカルにあるがイベントに含まれない
+   * workspace は末尾に残す（防御的——競合するイベント順序があっても壊れない）。
+   */
+  function workspacesReordered(workspaceIds: string[]): void {
+    const known = new Set(workspaces.value.keys());
+    const ordered = workspaceIds.filter((id) => known.has(id));
+    const missing = [...workspaces.value.keys()].filter((id) => !ordered.includes(id));
+    const entries = [...ordered, ...missing].map((id) => [id, workspaces.value.get(id)!] as const);
+    workspaces.value = new Map(entries);
+  }
+  function groupUpserted(g: WorkspaceGroup): void {
+    groups.value.set(g.id, g);
+  }
+  function groupDeleted(groupId: string): void {
+    groups.value.delete(groupId);
   }
   function tabUpserted(t: Tab): void {
     tabs.value.set(t.id, t);
@@ -82,12 +105,16 @@ export const useSessionStore = defineStore("session", () => {
     workspaces,
     tabs,
     panes,
+    groups,
     focus,
     limits,
     applySnapshot,
     hasSizeAuthority,
     workspaceUpserted,
     workspaceClosed,
+    workspacesReordered,
+    groupUpserted,
+    groupDeleted,
     tabUpserted,
     tabClosed,
     paneUpserted,

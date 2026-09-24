@@ -41,6 +41,7 @@ describe("StoreAdapter", () => {
         workspaces: [makeWorkspace("w1")],
         tabs: [],
         panes: [],
+        groups: [],
         focus: null,
         limits: { scrollbackLines: 5000 },
       },
@@ -60,6 +61,7 @@ describe("StoreAdapter", () => {
         workspaces: [makeWorkspace("w1")],
         tabs: [makeTab("t1", "w1")],
         panes: [makePane("p1", "t1")],
+        groups: [],
         focus: { workspaceId: "w1", tabId: "t1", paneId: "p1" },
         limits: { scrollbackLines: 5000 },
       },
@@ -83,6 +85,7 @@ describe("StoreAdapter", () => {
         workspaces: [makeWorkspace("w1")],
         tabs: [makeTab("t1", "w1")],
         panes: [makePane("p1", "t1")],
+        groups: [],
         focus: { workspaceId: "w1", tabId: "t1", paneId: "p1" },
         limits: { scrollbackLines: 5000 },
       },
@@ -101,6 +104,7 @@ describe("StoreAdapter", () => {
         workspaces: [makeWorkspace("w1"), makeWorkspace("w2")],
         tabs: [makeTab("t1", "w1"), makeTab("t2", "w2")],
         panes: [makePane("p1", "t1"), makePane("p2", "t2")],
+        groups: [],
         focus: { workspaceId: "w2", tabId: "t2", paneId: "p2" },
         limits: { scrollbackLines: 5000 },
       },
@@ -126,6 +130,32 @@ describe("StoreAdapter", () => {
     useSessionStore(pinia).workspaceUpserted(makeWorkspace("w1"));
     adapter.applyEvent({ event: "workspace.closed", data: { workspaceId: "w1" } });
     expect(useSessionStore(pinia).workspaces.has("w1")).toBe(false);
+  });
+
+  // 20260923-workspace-grouping（decisions.md D5）。
+  it("workspace.order_changed reorders the session store's workspaces map", () => {
+    const { adapter } = makeAdapter();
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.workspaceUpserted(makeWorkspace("w2"));
+    adapter.applyEvent({ event: "workspace.order_changed", data: { workspaceIds: ["w2", "w1"] } });
+    expect([...session.workspaces.keys()]).toEqual(["w2", "w1"]);
+  });
+
+  it.each([
+    ["group.created", { group: { id: "g1", label: "backend", collapsed: false } }],
+    ["group.updated", { group: { id: "g1", label: "backend", collapsed: false } }],
+  ] as const)("%s は groupUpserted を呼ぶ", (event, data) => {
+    const { adapter } = makeAdapter();
+    adapter.applyEvent({ event, data } as never);
+    expect(useSessionStore(pinia).groups.has("g1")).toBe(true);
+  });
+
+  it("group.deleted", () => {
+    const { adapter } = makeAdapter();
+    useSessionStore(pinia).groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    adapter.applyEvent({ event: "group.deleted", data: { groupId: "g1" } });
+    expect(useSessionStore(pinia).groups.has("g1")).toBe(false);
   });
 
   it("tab.created/updated/layout.updated/closed", () => {
@@ -292,6 +322,7 @@ describe("StoreAdapter — 通知への注入口", () => {
       workspaces: [makeWorkspace("w1")],
       tabs: [makeTab("t1", "w1")],
       panes,
+      groups: [],
       focus: null,
       limits: { scrollbackLines: 5000 },
     };

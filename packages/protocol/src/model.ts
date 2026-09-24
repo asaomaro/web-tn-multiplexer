@@ -1,4 +1,4 @@
-import type { PaneId, SplitId, TabId, WorkspaceId, AgentInstanceId } from "./ids.js";
+import type { GroupId, PaneId, SplitId, TabId, WorkspaceId, AgentInstanceId } from "./ids.js";
 
 /** サーバが判定する 4 状態。5 つ目の `done`（未読の完了）はブラウザが既読から導く（design.md「概要」）。 */
 export type AgentState = "blocked" | "working" | "idle" | "unknown";
@@ -13,6 +13,19 @@ export interface GitInfo {
   branch: string | null;
   ahead: number;
   behind: number;
+  /**
+   * Git 共通ディレクトリの絶対パス（正規化済み。`git rev-parse --git-common-dir`）。worktree
+   * 自動グループの判定キー——同じ `repoKey` を持つ workspace が2つ以上あれば束ねる
+   * （20260923-workspace-grouping）。git 管理外なら null。
+   */
+  repoKey: string | null;
+  /**
+   * linked worktree か（本体＝false）。`git rev-parse --git-dir` と `--git-common-dir` を
+   * 両方解決して比較する——本体はこの2つが同じパスを指し、linked worktree は異なる
+   * （`--git-dir` は `<common-dir>/worktrees/<name>` を指す。標準的な Git の仕組み）。
+   * `repoKey` が null（git 管理外）のときは常に false（20260923-workspace-grouping）。
+   */
+  isLinkedWorktree: boolean;
 }
 
 export interface Workspace {
@@ -22,8 +35,8 @@ export interface Workspace {
   tabIds: TabId[];
   /** サーバ全体で最後に選ばれた tab（design.md「フォーカスと表示」）。 */
   activeTabId: TabId;
-  /** 後続「workspace のグルーピング」用に予約。MVP では常に null（decisions.md D6）。 */
-  groupId: string | null;
+  /** 手動グループ（`WorkspaceGroup`）の所属先。無ければ null（20260923-workspace-grouping）。 */
+  groupId: GroupId | null;
   /** サイドバーの Space パネルの 2 行目。git 管理外なら null。 */
   git: GitInfo | null;
   /**
@@ -124,6 +137,17 @@ export interface SessionLimits {
   scrollbackLines: number;
 }
 
+/**
+ * 利用者が名前を付けて作る手動グループ（herdr に前例が無い独自拡張。20260923-workspace-grouping）。
+ * worktree 自動グループとは別物——こちらはサーバに永続化する実体（`session.json` の一部）。
+ */
+export interface WorkspaceGroup {
+  id: GroupId; // "g1", "g2", ... （既存の id 採番の流儀に揃える）
+  label: string;
+  /** 折りたたみ状態（サーバ全体で共有。worktree 自動グループの折りたたみ状態はブラウザ側に持つ別物）。 */
+  collapsed: boolean;
+}
+
 export interface SessionSnapshot {
   protocol: 1;
   serverVersion: string;
@@ -131,6 +155,7 @@ export interface SessionSnapshot {
   workspaces: Workspace[];
   tabs: Tab[];
   panes: Pane[];
+  groups: WorkspaceGroup[];
   focus: SessionFocus | null;
   limits: SessionLimits;
 }

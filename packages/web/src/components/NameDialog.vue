@@ -14,7 +14,9 @@ import { useViewStore } from "../store/view.js";
  * `trimmed != default_name` と同じ。D75）——このコンポーネントがプリフィル値を空文字に読み替えて
  * `confirmNewTab` に渡す（`ActionDispatcher` 側の「空なら送らない」判定をそのまま使う）。
  */
-const NAME_KINDS = new Set(["newTab", "renamePane", "renameTab", "renameWorkspace"]);
+// `createGroup`/`renameGroup`（20260923-workspace-grouping）もこのダイアログを再利用する——
+// どちらも「1行で名前を決める」という点で `renameWorkspace` 等と同じ形だから。
+const NAME_KINDS = new Set(["newTab", "renamePane", "renameTab", "renameWorkspace", "createGroup", "renameGroup"]);
 
 const session = useSessionStore();
 const view = useViewStore();
@@ -34,8 +36,8 @@ function initialValue(): string {
     const ws = session.workspaces.get(ctx.workspaceId);
     return ws ? String(ws.tabIds.length + 1) : "";
   }
-  if (ctx.kind === "renamePane" || ctx.kind === "renameTab" || ctx.kind === "renameWorkspace") return ctx.currentLabel;
-  return "";
+  if (ctx.kind === "renamePane" || ctx.kind === "renameTab" || ctx.kind === "renameWorkspace" || ctx.kind === "renameGroup") return ctx.currentLabel;
+  return ""; // createGroup は空から始める（新規作成なので今の名前が無い）
 }
 
 function title(): string {
@@ -48,6 +50,10 @@ function title(): string {
       return "tab の名前を変更";
     case "renameWorkspace":
       return "workspace の名前を変更";
+    case "createGroup":
+      return "新しいグループの名前";
+    case "renameGroup":
+      return "グループの名前を変更";
     default:
       return "";
   }
@@ -81,6 +87,8 @@ const confirm = (): void => {
   } else if (ctx.kind === "renamePane") actions.confirmRenamePane(value.value);
   else if (ctx.kind === "renameTab") actions.confirmRenameTab(value.value);
   else if (ctx.kind === "renameWorkspace") actions.confirmRenameWorkspace(value.value);
+  else if (ctx.kind === "createGroup") actions.confirmCreateGroup(value.value);
+  else if (ctx.kind === "renameGroup") actions.confirmRenameGroup(value.value);
 };
 
 /** workspace の名前を変えるときの手掛かり。空で確定すると自動の名前に戻ることと、いま自動の名前かどうか。 */

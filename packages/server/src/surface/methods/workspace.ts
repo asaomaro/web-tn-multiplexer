@@ -2,6 +2,8 @@ import {
   WorkspaceCloseParams,
   WorkspaceCreateParams,
   WorkspaceFocusParams,
+  WorkspaceMoveParams,
+  WorkspaceMoveToParams,
   WorkspaceRenameParams,
 } from "@wtm/protocol";
 import type { ControlSurface } from "../ControlSurface.js";
@@ -39,7 +41,25 @@ export function registerWorkspaceMethods(surface: ControlSurface, deps: MethodDe
   surface.register("workspace.close", {
     schema: WorkspaceCloseParams,
     handler: async (_ctx, params) => {
-      await deps.session.closeWorkspace(params.workspaceId);
+      await deps.session.closeWorkspace(params.workspaceId, params.closeLinkedWorktrees);
+      return {};
+    },
+  });
+
+  // 20260923-workspace-grouping（キーバインド用。delta 指定。`tab.move` と同じ形）。
+  surface.register("workspace.move", {
+    schema: WorkspaceMoveParams,
+    handler: (_ctx, params) => {
+      deps.session.moveWorkspace(params.workspaceId, params.direction);
+      return {};
+    },
+  });
+
+  // 20260923-workspace-grouping（D&D 用。anchor 指定。単一・グループ一括の両方を同じ経路で扱う）。
+  surface.register("workspace.move_to", {
+    schema: WorkspaceMoveToParams,
+    handler: (_ctx, params) => {
+      deps.session.moveWorkspacesTo(params.workspaceIds, params.beforeWorkspaceId);
       return {};
     },
   });

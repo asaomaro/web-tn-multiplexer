@@ -11,6 +11,7 @@ describe("ids", () => {
     expect(parseId("w1")).toEqual({ kind: "w", n: 1 });
     expect(parseId("p12")).toEqual({ kind: "p", n: 12 });
     expect(parseId("s4")).toEqual({ kind: "s", n: 4 });
+    expect(parseId("g3")).toEqual({ kind: "g", n: 3 }); // 手動グループ（20260923-workspace-grouping）
   });
 
   it("rejects malformed or unknown-kind ids", () => {

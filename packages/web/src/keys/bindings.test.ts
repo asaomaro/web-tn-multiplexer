@@ -17,21 +17,24 @@ const UNBOUND_BY_DEFAULT_IDS = [
   "resize_pane_down",
   "resize_pane_up",
   "resize_pane_right",
+  "move_workspace_previous",
+  "move_workspace_next",
 ];
 
 describe("操作のカタログ（design「操作のカタログ」）", () => {
   // 20260922-appearance-settings-rest T7 で reload_config（全体）をカタログへ正式登録し 35 個に。
   // 20260923-missing-keybinding-actions で12個追加し 47 個になった（NOT_YET_BINDINGS の案内から昇格。keymap.ts 参照）。
-  it("47 個あり、id は重複しない・表示名は空でない", () => {
-    expect(ACTIONS).toHaveLength(47);
-    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(47);
+  // 20260923-workspace-grouping で move_workspace_previous/next の2個を追加し 49 個になった。
+  it("49 個あり、id は重複しない・表示名は空でない", () => {
+    expect(ACTIONS).toHaveLength(49);
+    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(49);
     for (const a of ACTIONS) expect(a.label.length, a.id).toBeGreaterThan(0);
   });
 
-  it("群は 全体 5・workspace / tab 19・pane 23（この順に並ぶ）", () => {
+  it("群は 全体 5・workspace / tab 21・pane 23（この順に並ぶ）", () => {
     const groups = ACTIONS.map((a) => a.group);
     expect(groups.filter((g) => g === "全体")).toHaveLength(5);
-    expect(groups.filter((g) => g === "workspace / tab")).toHaveLength(19);
+    expect(groups.filter((g) => g === "workspace / tab")).toHaveLength(21);
     expect(groups.filter((g) => g === "pane")).toHaveLength(23);
     // 群ごとにまとまっている（全体 → workspace / tab → pane）
     expect(groups.join(",")).toBe(

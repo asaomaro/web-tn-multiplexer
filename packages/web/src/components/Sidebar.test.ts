@@ -29,6 +29,16 @@ function makePane(id: string, tabId: string, agent: AgentInfo | null = null): Pa
   return { id, tabId, label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent, agentSession: null };
 }
 
+// 20260923-workspace-grouping（D&D。`PaneFrame.test.ts` の `pointerEvent` と同じ形）。
+function pointerEvent(type: string, opts: Partial<PointerEvent> & { clientX: number; clientY: number; pointerId?: number }) {
+  return new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, ...opts });
+}
+/** 動かさずに離す＝クリックとして扱われる（閾値未満）。 */
+function clickRow(row: { element: Element }): void {
+  row.element.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+  row.element.dispatchEvent(pointerEvent("pointerup", { clientX: 10, clientY: 10 }));
+}
+
 function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] } {
   return {
     requests: [],
@@ -44,16 +54,18 @@ function makeConnection(): ConnectionPort & { requests: [MethodName, unknown][] 
 }
 
 function makeActions() {
-  return { openContextMenu: vi.fn(), run: vi.fn() };
+  // 20260923-workspace-grouping。
+  return { openContextMenu: vi.fn(), run: vi.fn(), toggleGroupCollapsed: vi.fn(), moveWorkspacesByDrag: vi.fn() };
 }
 
-function mountSidebar(conn: ConnectionPort, actions?: { openContextMenu: ReturnType<typeof vi.fn>; run?: ReturnType<typeof vi.fn> }) {
+function mountSidebar(conn: ConnectionPort, actions?: Partial<ReturnType<typeof makeActions>>) {
   return mount(Sidebar, {
     global: {
       plugins: [pinia],
       provide: {
         [ConnectionKey as symbol]: conn,
-        [ActionDispatcherKey as symbol]: actions ?? makeActions(),
+        // 上書きは個別の関数だけ（未指定の関数は既定のモックのまま。呼ばれても落ちない）。
+        [ActionDispatcherKey as symbol]: { ...makeActions(), ...actions },
       },
     },
   });
@@ -86,14 +98,14 @@ describe("Sidebar — spaces", () => {
 
   it("git の ahead/behind が両方 0 なら 2 行目を出さない", () => {
     const session = useSessionStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0 } }));
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0, repoKey: null, isLinkedWorktree: false } }));
     const wrapper = mountSidebar(makeConnection());
     expect(wrapper.find(".sidebar-row-line2").exists()).toBe(false);
   });
 
   it("git の ahead/behind のどちらかが 0 でなければ 2 行目にブランチと件数を出す", () => {
     const session = useSessionStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 2, behind: 1 } }));
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 2, behind: 1, repoKey: null, isLinkedWorktree: false } }));
     const wrapper = mountSidebar(makeConnection());
     const line2 = wrapper.find(".sidebar-row-line2");
     expect(line2.text()).toContain("main");
@@ -108,7 +120,8 @@ describe("Sidebar — spaces", () => {
     session.tabUpserted(makeTab("t1", "w1", "p1"));
     const conn = makeConnection();
     const wrapper = mountSidebar(conn);
-    await wrapper.find(".sidebar-spaces .sidebar-row").trigger("click");
+    clickRow(wrapper.find(".sidebar-spaces .sidebar-row"));
+    await wrapper.vm.$nextTick();
     expect(view.workspaceId).toBe("w1");
     expect(view.tabId).toBe("t1");
     expect(view.focusedPaneId).toBe("p1");
@@ -169,7 +182,7 @@ describe("Sidebar — spaces", () => {
   // AC3：`↑n ↓n` は縮めると意味を失うので、縮ませない印を付ける（省略の対象はブランチ名だけ）。
   it("2 行目の ↑n ↓n に、縮ませない印（sidebar-git-counts）を付ける", () => {
     const session = useSessionStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 2, behind: 1 } }));
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 2, behind: 1, repoKey: null, isLinkedWorktree: false } }));
     const wrapper = mountSidebar(makeConnection());
     expect(wrapper.find(".sidebar-row-line2 .sidebar-git-counts").text()).toBe("↑2 ↓1");
   });
@@ -546,5 +559,317 @@ describe("Sidebar — 幅を覚える", () => {
     pinia = createPinia(); // ストアは作る時点で読む
     const { wrapper } = setup();
     expect((wrapper.find(".sidebar").element as HTMLElement).style.width).toBe("280px");
+  });
+});
+
+// 20260923-workspace-grouping（herdr に前例が無い独自拡張・worktree 自動グループ）。
+describe("Sidebar — グループの表示", () => {
+  function rowLabels(wrapper: ReturnType<typeof mountSidebar>): string[] {
+    return wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.find(".sidebar-label").text());
+  }
+  function rowIndents(wrapper: ReturnType<typeof mountSidebar>): boolean[] {
+    return wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.classes().includes("sidebar-row-indent"));
+  }
+
+  it("手動グループ：ヘッダー行（グループ名）＋インデントしたメンバー行", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "api", groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "worker", groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const wrapper = mountSidebar(makeConnection());
+    expect(rowLabels(wrapper)).toEqual(["backend", "api", "worker"]);
+    expect(rowIndents(wrapper)).toEqual([false, true, true]);
+  });
+
+  it("worktree 自動グループ：本体の行が頭を兼ね、子だけインデントする（herdr と同じ並び）", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "main", git: { branch: "main", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: false } }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "wt", git: { branch: "feature", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: true } }));
+    const wrapper = mountSidebar(makeConnection());
+    expect(rowLabels(wrapper)).toEqual(["main", "wt"]);
+    expect(rowIndents(wrapper)).toEqual([false, true]);
+    expect(wrapper.findAll(".sidebar-spaces .sidebar-row")[0]!.find(".sidebar-group-toggle").exists()).toBe(true);
+    expect(wrapper.findAll(".sidebar-spaces .sidebar-row")[1]!.find(".sidebar-group-toggle").exists()).toBe(false);
+  });
+
+  it("手動グループが折りたたまれていればメンバー行を隠す", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "api", groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: true });
+    const wrapper = mountSidebar(makeConnection());
+    expect(rowLabels(wrapper)).toEqual(["backend"]);
+  });
+
+  it("折りたたみ中でも focus 中の workspace があればその行だけは見える（AC6）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "api", groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "worker", groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: true });
+    view.setView("w2", "t1");
+    const wrapper = mountSidebar(makeConnection());
+    expect(rowLabels(wrapper)).toEqual(["backend", "worker"]);
+  });
+
+  // AC3（worktree 自動グループ版。上と同じ挙動を manual/auto の両方で確かめる——test 工程で見つけた
+  // 抜け：`Sidebar.vue` の `visibleChildren` 分岐が auto グループにも専用で存在するのに、この
+  // 挙動を確かめるテストが手動グループ側にしか無かった）。
+  it("worktree 自動グループが折りたたまれていても、focus 中の子 workspace はその行だけ見える（AC3）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "main", git: { branch: "main", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: false } }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "wt", git: { branch: "feature", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: true } }));
+    view.toggleAutoGroupCollapsed("/r/.git"); // 折りたたむ（ブラウザ側の状態）
+    view.setView("w2", "t1"); // w2（子）に focus
+    const wrapper = mountSidebar(makeConnection());
+    expect(rowLabels(wrapper)).toEqual(["main", "wt"]); // 折りたたみ中でも focus 中の wt は見える
+  });
+
+  it("worktree 自動グループが折りたたまれていて focus 中の workspace が無ければ、本体の行だけになる", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "main", git: { branch: "main", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: false } }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "wt", git: { branch: "feature", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: true } }));
+    view.toggleAutoGroupCollapsed("/r/.git");
+    const wrapper = mountSidebar(makeConnection());
+    expect(rowLabels(wrapper)).toEqual(["main"]);
+  });
+
+  it("折りたたみアイコンのクリック：手動グループは toggleGroupCollapsed を呼ぶ（サーバへ永続化。AC6）", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const toggleGroupCollapsed = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { toggleGroupCollapsed });
+    await wrapper.get(".sidebar-group-toggle").trigger("click");
+    expect(toggleGroupCollapsed).toHaveBeenCalledWith("g1");
+  });
+
+  it("折りたたみアイコンのクリック：worktree 自動グループはブラウザだけで完結する（RPC を呼ばない）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: false } }));
+    session.workspaceUpserted(makeWorkspace("w2", { git: { branch: "f", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: true } }));
+    const toggleGroupCollapsed = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { toggleGroupCollapsed });
+    await wrapper.get(".sidebar-group-toggle").trigger("click");
+    expect(toggleGroupCollapsed).not.toHaveBeenCalled();
+    expect(view.collapsedAutoGroups.has("/r/.git")).toBe(true);
+  });
+
+  it("手動グループのヘッダー行を右クリックすると group 対象で openContextMenu を呼ぶ", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const openContextMenu = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { openContextMenu });
+    await wrapper.get(".sidebar-spaces .sidebar-row").trigger("contextmenu", { clientX: 1, clientY: 2 });
+    expect(openContextMenu).toHaveBeenCalledWith({ kind: "group", groupId: "g1" }, { x: 1, y: 2 });
+  });
+});
+
+describe("Sidebar — workspace 行の D&D（20260923-workspace-grouping）", () => {
+  it("閾値未満の移動はドラッグにならず、離すとクリック（フォーカス）として扱う", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { activeTabId: "t1" }));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    const moveWorkspacesByDrag = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { moveWorkspacesByDrag });
+    const row = wrapper.get(".sidebar-spaces .sidebar-row").element;
+    row.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    row.dispatchEvent(pointerEvent("pointermove", { clientX: 12, clientY: 10 })); // 2px。閾値(6px)未満
+    row.dispatchEvent(pointerEvent("pointerup", { clientX: 12, clientY: 10 }));
+    await wrapper.vm.$nextTick();
+    expect(moveWorkspacesByDrag).not.toHaveBeenCalled();
+    expect(view.workspaceId).toBe("w1"); // クリックとして扱われた
+  });
+
+  it("閾値を超えて動かし別の行の上で離すと moveWorkspacesByDrag([自分], 相手) を呼ぶ", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "a" }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "b" }));
+    const moveWorkspacesByDrag = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { moveWorkspacesByDrag });
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(rows[1]!);
+    rows[0]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[0]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 40 })); // 30px。閾値を超える
+    rows[0]!.dispatchEvent(pointerEvent("pointerup", { clientX: 10, clientY: 40 }));
+    expect(moveWorkspacesByDrag).toHaveBeenCalledWith(["w1"], "w2");
+    elementFromPoint.mockRestore();
+  });
+
+  it("グループのヘッダー行をドラッグすると、そのグループの全メンバー id をまとめて動かす（AC9）", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w2", { groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w3", { label: "other" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const moveWorkspacesByDrag = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { moveWorkspacesByDrag });
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    // rows: [0]=グループヘッダー, [1]=w1, [2]=w2, [3]=w3(other)
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(rows[3]!);
+    rows[0]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[0]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 60 }));
+    rows[0]!.dispatchEvent(pointerEvent("pointerup", { clientX: 10, clientY: 60 }));
+    expect(moveWorkspacesByDrag).toHaveBeenCalledWith(["w1", "w2"], "w3");
+    elementFromPoint.mockRestore();
+  });
+
+  it("Esc で取り消し、moveWorkspacesByDrag を呼ばない", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.workspaceUpserted(makeWorkspace("w2"));
+    const moveWorkspacesByDrag = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { moveWorkspacesByDrag });
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    rows[0]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[0]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 40 }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    rows[0]!.dispatchEvent(pointerEvent("pointerup", { clientX: 10, clientY: 40 }));
+    expect(moveWorkspacesByDrag).not.toHaveBeenCalled();
+  });
+
+  // タスク点検の指摘：ドロップ候補のハイライトは「ドラッグの発生源に含まれない、今ホバー中の行」
+  // にだけ付く。以前は自分自身の `dragIds` と比べていて、原理的に一度も付かなかった（死んだ論理）。
+  it("ドラッグ中に別の行の上へ来ると sidebar-row-drop-target が付き、ドラッグ元自身には付かない", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "a" }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "b" }));
+    const wrapper = mountSidebar(makeConnection());
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(rows[1]!);
+    rows[0]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[0]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 40 }));
+    await wrapper.vm.$nextTick();
+    expect(view.workspaceDrag?.overRowKey).toBe("w2");
+    const rowsAfter = wrapper.findAll(".sidebar-spaces .sidebar-row");
+    expect(rowsAfter[0]!.classes()).not.toContain("sidebar-row-drop-target"); // ドラッグ元自身
+    expect(rowsAfter[1]!.classes()).toContain("sidebar-row-drop-target"); // ドロップ候補
+    elementFromPoint.mockRestore();
+  });
+
+  // レビューの指摘（should）：グループの中の並びは常に「開いた順」で固定（design「設計方針」）なので、
+  // メンバー行（頭以外）のどこにドロップしても実際の効果は「グループの直前へ挿入」（頭の行へ
+  // ドロップしたのと同じ）でしかない。正規化しないと、ホバー中のハイライトが特定のメンバー行に
+  // 付くのに実際の見た目は変わらない（メンバーの数だけドロップ位置があるように見えて実は1箇所しか
+  // 無い）という食い違いが起きる——`groupHeadRowKeyFor` がメンバー行を頭の行の key に正規化する。
+  it("手動グループのメンバー行（頭以外）のどこへホバーしても、ハイライトはグループの頭の行に付く", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "member1", groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "member2", groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    session.workspaceUpserted(makeWorkspace("w3", { label: "other" }));
+    const wrapper = mountSidebar(makeConnection());
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    // rows: [0]=グループヘッダー（頭。dropAnchorId="w1"）, [1]=w1（dropAnchorId="w1"。頭と同じ値）,
+    // [2]=w2（メンバーだが頭ではない）, [3]=w3（グループ外）
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(rows[2]!); // w2（頭でないメンバー）を実際にホバー
+    rows[3]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[3]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 40 }));
+    await wrapper.vm.$nextTick();
+    const rowsAfter = wrapper.findAll(".sidebar-spaces .sidebar-row");
+    expect(rowsAfter[0]!.classes()).toContain("sidebar-row-drop-target"); // 頭の行（ヘッダー）に正規化される
+    expect(rowsAfter[2]!.classes()).not.toContain("sidebar-row-drop-target"); // 実際にホバーした w2 自身には付かない
+    elementFromPoint.mockRestore();
+  });
+
+  it("手動グループの頭の行そのものへホバーしたときもハイライトは頭の行に付く（自明ケース）", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "member1", groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    session.workspaceUpserted(makeWorkspace("w3", { label: "other" }));
+    const wrapper = mountSidebar(makeConnection());
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    // rows: [0]=グループヘッダー（頭）, [1]=w1, [2]=w3
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(rows[0]!);
+    rows[2]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[2]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 40 }));
+    await wrapper.vm.$nextTick();
+    const rowsAfter = wrapper.findAll(".sidebar-spaces .sidebar-row");
+    expect(rowsAfter[0]!.classes()).toContain("sidebar-row-drop-target");
+    elementFromPoint.mockRestore();
+  });
+
+  it("ドロップ先をメンバー行（頭以外）にしても、実際に送る対象はグループの頭の dropAnchorId になる", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { label: "member1", groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w2", { label: "member2", groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    session.workspaceUpserted(makeWorkspace("w3", { label: "other" }));
+    const moveWorkspacesByDrag = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { moveWorkspacesByDrag });
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    // rows: [0]=グループヘッダー, [1]=w1, [2]=w2, [3]=w3
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(rows[2]!); // w2 の上で離す
+    rows[3]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[3]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 40 }));
+    rows[3]!.dispatchEvent(pointerEvent("pointerup", { clientX: 10, clientY: 40 }));
+    // 頭の dropAnchorId（= w1、グループの先頭メンバーの id）が渡る。w2（実際にホバーした行）ではない。
+    expect(moveWorkspacesByDrag).toHaveBeenCalledWith(["w3"], "w1");
+    elementFromPoint.mockRestore();
+  });
+
+  // タスク点検の指摘：トグルボタンの pointerdown/pointerup が行へ伝播すると、`onToggleCollapse` が
+  // （ボタンの `@click.stop` 経由と合わせて）2 重に呼ばれる、または worktree 自動グループの頭では
+  // 意図せず `focusWorkspace` が呼ばれてしまう。`.stop` で止めて 1 回だけにする。
+  // **`.trigger("click")` だけでは再現しない**——実際のクリックは pointerdown→pointerup→click の
+  // 順に、いずれも行まで**バブルする**（`.stop` がなければ）。行の pointerdown/pointerup ハンドラが
+  // 動くところまで含めて確かめるため、3つとも明示的に発火させる。
+  it("折りたたみアイコンのクリックは行のドラッグ/クリック処理を起動しない（二重発火の回帰）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const toggleGroupCollapsed = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { toggleGroupCollapsed });
+    const toggle = wrapper.get(".sidebar-group-toggle").element;
+    toggle.dispatchEvent(pointerEvent("pointerdown", { clientX: 5, clientY: 5 }));
+    toggle.dispatchEvent(pointerEvent("pointerup", { clientX: 5, clientY: 5 }));
+    await wrapper.get(".sidebar-group-toggle").trigger("click");
+    expect(toggleGroupCollapsed).toHaveBeenCalledTimes(1); // 2 重に呼ばれない
+    expect(view.workspaceId).toBeNull(); // 行のクリック（フォーカス）は起きていない
+  });
+
+  it("worktree 自動グループの頭の折りたたみアイコンをクリックしても focusWorkspace が呼ばれない（回帰）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: false } }));
+    session.workspaceUpserted(makeWorkspace("w2", { git: { branch: "f", ahead: 0, behind: 0, repoKey: "/r/.git", isLinkedWorktree: true } }));
+    const conn = makeConnection();
+    const wrapper = mountSidebar(conn);
+    const toggle = wrapper.get(".sidebar-group-toggle").element;
+    toggle.dispatchEvent(pointerEvent("pointerdown", { clientX: 5, clientY: 5 }));
+    toggle.dispatchEvent(pointerEvent("pointerup", { clientX: 5, clientY: 5 }));
+    await wrapper.get(".sidebar-group-toggle").trigger("click");
+    expect(view.workspaceId).toBeNull(); // フォーカスは動いていない
+    expect(conn.requests.filter(([m]) => m === "workspace.focus")).toEqual([]);
+  });
+
+  // タスク点検の指摘：ドロップ確定時は「ドラッグ開始時点のスナップショット」を使う。ドラッグ中に
+  // グループ構成が変わっても（他クライアントの操作等）、実際に動かす対象がドラッグ開始時と変わらない。
+  it("ドラッグ中にグループの構成が変わっても、開始時点のメンバー集合で移動する", async () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w2", { groupId: "g1" }));
+    session.workspaceUpserted(makeWorkspace("w3", { label: "other" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const moveWorkspacesByDrag = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { moveWorkspacesByDrag });
+    const rows = wrapper.findAll(".sidebar-spaces .sidebar-row").map((r) => r.element as HTMLElement);
+    // rows: [0]=グループヘッダー, [1]=w1, [2]=w2, [3]=w3(other)
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(rows[3]!);
+    rows[0]!.dispatchEvent(pointerEvent("pointerdown", { clientX: 10, clientY: 10 }));
+    rows[0]!.dispatchEvent(pointerEvent("pointermove", { clientX: 10, clientY: 60 }));
+    // ドラッグの最中に w2 がグループから外れる（他クライアントの操作を模す）。
+    session.workspaceUpserted({ ...session.workspaces.get("w2")!, groupId: null });
+    await wrapper.vm.$nextTick();
+    rows[0]!.dispatchEvent(pointerEvent("pointerup", { clientX: 10, clientY: 60 }));
+    // 開始時点のメンバー（w1・w2 の両方）で移動する——ドロップ時点の最新の構成（w1 だけ）ではない。
+    expect(moveWorkspacesByDrag).toHaveBeenCalledWith(["w1", "w2"], "w3");
+    elementFromPoint.mockRestore();
   });
 });

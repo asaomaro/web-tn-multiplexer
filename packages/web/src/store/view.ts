@@ -1,4 +1,4 @@
-import type { SessionFocus, WorktreeEntry, WorktreeListResult } from "@wtm/protocol";
+import type { SessionFocus, WorkspaceGroup, WorktreeEntry, WorktreeListResult } from "@wtm/protocol";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { Mode } from "../keys/actions.js";
@@ -116,6 +116,20 @@ function saveWorkspaceSort(v: WorkspaceSort): void {
   writePrefs({ workspaceSort: v });
 }
 
+/**
+ * worktree 自動グループの折りたたみ状態（20260923-workspace-grouping）。herdr は client 側の
+ * preferences に持つ（research.md F3）——本製品も `sidebarCollapsed` 等と同じ `localStorage` の
+ * 流儀に揃える。`Set` は JSON に直接書けないので、保存は配列（`repoKey` の一覧）で行う。
+ * 手動グループの折りたたみはサーバ全体で共有する別物（`WorkspaceGroup.collapsed`）——ここでは扱わない。
+ */
+export function loadCollapsedAutoGroups(raw: unknown): Set<string> {
+  return Array.isArray(raw) ? new Set(raw.filter((v): v is string => typeof v === "string")) : new Set();
+}
+
+function saveCollapsedAutoGroups(v: ReadonlySet<string>): void {
+  writePrefs({ collapsedAutoGroups: [...v] });
+}
+
 let nextToastId = 1;
 
 /** トーストの行動ボタン（`sticky` のときだけ置く。20260920-agent-notifications）。 */
@@ -162,6 +176,12 @@ export type DialogContext =
   // worktree（20260920-git-worktree-actions）。**サーバへ聞いてから開く**ので、開く時点で中身が揃っている。
   | { kind: "worktreeCreate"; workspaceId: string; info: WorktreeListResult }
   | { kind: "worktreeOpen"; workspaceId: string; entries: WorktreeEntry[] }
+  // 手動グループ（20260923-workspace-grouping。herdr に前例が無い独自拡張）。
+  // 新しいグループを作り、右クリック元の workspace をそのまま追加する（`NameDialog` を再利用）。
+  | { kind: "createGroup"; workspaceId: string }
+  | { kind: "renameGroup"; groupId: string; currentLabel: string }
+  // `worktreeOpen` と同じ「一覧から選ぶ」形。`groups` は開く時点のグループ一覧（GroupPickerDialog）。
+  | { kind: "addToGroup"; workspaceId: string; groups: WorkspaceGroup[] }
   // 設定（通知・表示・端末。20260921-herdr-settings-gaps）。値はそれぞれのストアが持つので文脈は空。
   | { kind: "settings" };
 
@@ -192,6 +212,15 @@ export const useViewStore = defineStore("view", () => {
    * 複数の `PaneFrame` インスタンスをまたいで共有する必要があるためここに置く（`contextMenu` と同じ流儀）。
    */
   const paneDrag = ref<{ sourcePaneId: string; overPaneId: string | null } | null>(null);
+  /**
+   * workspace 行・グループのヘッダー行の D&D の一時状態（20260923-workspace-grouping。`paneDrag` と
+   * 同じ流儀）。`sourceIds` は動かす対象——通常の行なら `[workspace.id]`、グループのヘッダー行なら
+   * そのグループの全メンバー id（design「振る舞いの詳細（D&D）」）。`overRowKey` は今ホバー中の行の
+   * `SpaceRow.key`（**workspace id ではない**——タスク点検の指摘：手動グループのヘッダー行と、その
+   * 先頭メンバー行は同じ `dropAnchorId`〔drop 先として使う workspace id〕を持ちうるので、ホバー中の
+   * 行を一意に特定するには行固有の `key` を使う必要がある）。
+   */
+  const workspaceDrag = ref<{ sourceIds: string[]; overRowKey: string | null } | null>(null);
   const connectionState = ref<ConnectionState>("connecting");
   const authRequired = ref(false);
   /**
@@ -218,6 +247,7 @@ export const useViewStore = defineStore("view", () => {
   const sidebarWidth = ref(loadSidebarWidth(initialPrefs["sidebarWidth"]));
   const agentSort = ref(loadAgentSort());
   const workspaceSort = ref(loadWorkspaceSort(initialPrefs["workspaceSort"]));
+  const collapsedAutoGroups = ref(loadCollapsedAutoGroups(initialPrefs["collapsedAutoGroups"]));
   const toasts = ref<Toast[]>([]);
 
   /**
@@ -317,6 +347,32 @@ export const useViewStore = defineStore("view", () => {
     paneDrag.value = null;
   }
 
+  /** workspace の D&D 開始（20260923-workspace-grouping。`startPaneDrag` と同じ形。閾値を超えて初めて呼ぶ）。
+   *  `sourceIds` は通常の行なら1件、グループのヘッダー行ならそのグループの全メンバー id（AC9）。 */
+  function startWorkspaceDrag(sourceIds: string[]): void {
+    workspaceDrag.value = { sourceIds, overRowKey: null };
+  }
+
+  /** `rowKey` は `SpaceRow.key`（`Sidebar.vue`）——workspace id そのものではない。上の注記参照。 */
+  function setWorkspaceDragOver(rowKey: string | null): void {
+    if (!workspaceDrag.value || workspaceDrag.value.overRowKey === rowKey) return;
+    workspaceDrag.value = { ...workspaceDrag.value, overRowKey: rowKey };
+  }
+
+  function endWorkspaceDrag(): void {
+    workspaceDrag.value = null;
+  }
+
+  /** worktree 自動グループの折りたたみを切り替える（`repoKey` がキー。`toggleSidebar` と同じ
+   *  「切り替えるたびに保存する」流儀。20260923-workspace-grouping）。 */
+  function toggleAutoGroupCollapsed(repoKey: string): void {
+    const next = new Set(collapsedAutoGroups.value);
+    if (next.has(repoKey)) next.delete(repoKey);
+    else next.add(repoKey);
+    collapsedAutoGroups.value = next;
+    saveCollapsedAutoGroups(next);
+  }
+
   function onConnectionState(s: ConnectionState): void {
     connectionState.value = s;
     // `rejected`（`/api/session` が 403 で `/ws` も開く前に閉じた）も下ろす：サーバは Cookie を先に確かめ、無効なら Host を問わず
@@ -385,6 +441,8 @@ export const useViewStore = defineStore("view", () => {
     navigateSelection,
     contextMenu,
     paneDrag,
+    workspaceDrag,
+    collapsedAutoGroups,
     connectionState,
     authRequired,
     authRequiredCount,
@@ -411,6 +469,10 @@ export const useViewStore = defineStore("view", () => {
     startPaneDrag,
     setPaneDragOver,
     endPaneDrag,
+    startWorkspaceDrag,
+    setWorkspaceDragOver,
+    endWorkspaceDrag,
+    toggleAutoGroupCollapsed,
     onConnectionState,
     onAuthRequired,
     setOriginRejectSuspected,

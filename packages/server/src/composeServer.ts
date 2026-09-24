@@ -331,10 +331,12 @@ function toSessionFileData(session: SessionService): SessionFileData {
     schema: 1,
     savedAt: new Date().toISOString(),
     nextId: session.getNextIdCounters(),
+    groups: snapshot.groups.map((g) => ({ id: g.id, label: g.label, collapsed: g.collapsed })),
     workspaces: snapshot.workspaces.map((ws) => ({
       id: ws.id,
       label: ws.label,
       autoLabel: ws.autoLabel,
+      groupId: ws.groupId,
       cwd: ws.cwd,
       activeTabId: ws.activeTabId,
       tabs: snapshot.tabs

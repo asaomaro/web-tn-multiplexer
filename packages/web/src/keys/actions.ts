@@ -79,4 +79,6 @@ export type Action =
   | { type: "lastPane" } // last_pane
   | { type: "moveTab"; direction: "previous" | "next" } // move_tab_previous / move_tab_next
   | { type: "agentDelta"; delta: 1 | -1 } // previous_agent / next_agent
-  | { type: "focusAgentIndex"; index: number }; // focus_agent（1-9 → 0-8 に変換済みで渡す）
+  | { type: "focusAgentIndex"; index: number } // focus_agent（1-9 → 0-8 に変換済みで渡す）
+  // 20260923-workspace-grouping。
+  | { type: "moveWorkspace"; direction: "previous" | "next" }; // move_workspace_previous / move_workspace_next

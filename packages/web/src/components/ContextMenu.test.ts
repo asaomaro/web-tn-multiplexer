@@ -33,6 +33,12 @@ function makeActions() {
     run: vi.fn(),
     newWorktree: vi.fn(),
     openWorktree: vi.fn(),
+    // 20260923-workspace-grouping。
+    createGroupForWorkspace: vi.fn(),
+    openGroupPicker: vi.fn(),
+    removeWorkspaceFromGroup: vi.fn(),
+    renameGroupById: vi.fn(),
+    deleteGroupById: vi.fn(),
   };
 }
 
@@ -138,29 +144,30 @@ describe("ContextMenu — tab", () => {
 
 describe("ContextMenu — workspace", () => {
   // 20260920-git-worktree-actions：git かどうかで 2 パターンになった（以前は常に 2 項目固定）。
-  it("git リポジトリでなければ、名前の変更・閉じるの 2 項目だけ（AC8）", () => {
+  // 20260923-workspace-grouping：「新しいグループを作る…」は常に出る（herdr に前例が無い独自拡張）。
+  it("git リポジトリでなければ、名前の変更・閉じる・新しいグループを作る…の 3 項目だけ（AC8）", () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1")); // git: null
     view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
     const wrapper = mountMenu(makeActions());
-    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる"]);
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる", "新しいグループを作る…"]);
   });
 
   it("git リポジトリなら worktree の 2 項目が増える（AC1・AC8）", () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
-    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0 } }));
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0, repoKey: null, isLinkedWorktree: false } }));
     view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
     const wrapper = mountMenu(makeActions());
-    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる", "新しい worktree", "worktree を開く…"]);
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる", "新しい worktree", "worktree を開く…", "新しいグループを作る…"]);
   });
 
   it("worktree の項目は、それぞれの入口を呼ぶ", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);
     const actions = makeActions();
-    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0 } }));
+    session.workspaceUpserted(makeWorkspace("w1", { git: { branch: "main", ahead: 0, behind: 0, repoKey: null, isLinkedWorktree: false } }));
     view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
     const wrapper = mountMenu(actions);
     await wrapper.findAll("li")[2]!.trigger("click");
@@ -170,6 +177,64 @@ describe("ContextMenu — workspace", () => {
     const reopened = mountMenu(actions);
     await reopened.findAll("li")[3]!.trigger("click");
     expect(actions.openWorktree).toHaveBeenCalledWith("w1");
+  });
+
+  // 20260923-workspace-grouping。
+  it("グループに未所属なら「新しいグループを作る…」を呼び、グループが1件以上あれば「グループへ追加…」も出る", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(actions);
+    const labels = wrapper.findAll("li").map((li) => li.text());
+    expect(labels).toEqual(["名前の変更", "閉じる", "新しいグループを作る…", "グループへ追加…"]);
+    await wrapper.findAll("li")[2]!.trigger("click");
+    expect(actions.createGroupForWorkspace).toHaveBeenCalledWith("w1");
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const reopened = mountMenu(actions);
+    await reopened.findAll("li")[3]!.trigger("click");
+    expect(actions.openGroupPicker).toHaveBeenCalledWith("w1");
+  });
+
+  it("グループに所属していれば「グループへ追加…」の代わりに「グループから外す」を出す", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(actions);
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる", "新しいグループを作る…", "グループから外す"]);
+    await wrapper.findAll("li")[3]!.trigger("click");
+    expect(actions.removeWorkspaceFromGroup).toHaveBeenCalledWith("w1");
+  });
+
+  it("グループが0件なら「グループへ追加…」は出ない", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(makeActions());
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "閉じる", "新しいグループを作る…"]);
+  });
+});
+
+// 20260923-workspace-grouping：グループのヘッダー行専用のメニュー（herdr に前例が無い独自拡張）。
+describe("ContextMenu — group", () => {
+  it("名前の変更・グループを削除の2項目を出し、それぞれの入口を呼ぶ", async () => {
+    const view = useViewStore(pinia);
+    const actions = makeActions();
+    view.openContextMenu({ kind: "group", groupId: "g1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(actions);
+    expect(wrapper.findAll("li").map((li) => li.text())).toEqual(["名前の変更", "グループを削除"]);
+    await wrapper.findAll("li")[0]!.trigger("click");
+    expect(actions.renameGroupById).toHaveBeenCalledWith("g1");
+    view.openContextMenu({ kind: "group", groupId: "g1" }, { x: 0, y: 0 });
+    const reopened = mountMenu(actions);
+    await reopened.findAll("li")[1]!.trigger("click");
+    expect(actions.deleteGroupById).toHaveBeenCalledWith("g1");
   });
 });
 

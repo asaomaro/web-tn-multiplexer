@@ -100,6 +100,42 @@ describe("DefaultGitInfoPoller", () => {
     await rm(plainDir, { recursive: true, force: true });
   });
 
+  // 20260923-workspace-grouping（worktree 自動グループの判定キー）。
+  it("sets repoKey to the resolved common dir and isLinkedWorktree=false for the main checkout", async () => {
+    await service.createWorkspace(repoDir, "repo");
+    const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+    await poller.pollNow();
+    const ws = service.snapshot().workspaces[0]!;
+    expect(ws.git?.repoKey).toMatch(/\.git$/);
+    expect(ws.git?.isLinkedWorktree).toBe(false);
+  });
+
+  it("leaves repoKey null and isLinkedWorktree false for a non-git workspace", async () => {
+    const plainDir = await mkdirTemp();
+    await service.createWorkspace(plainDir, "plain");
+    const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+    await poller.pollNow();
+    expect(service.snapshot().workspaces.find((w) => w.cwd === plainDir)!.git).toBeNull();
+    await rm(plainDir, { recursive: true, force: true });
+  });
+
+  it("gives a linked worktree the same repoKey as the main checkout, and isLinkedWorktree=true", async () => {
+    const worktreeDir = `${repoDir}-wt`; // repoDir は mkdtemp が作った末尾スラッシュ無しの絶対パス
+    await runGit(repoDir, ["worktree", "add", "-b", "feature", worktreeDir]);
+    await service.createWorkspace(repoDir, "main");
+    await service.createWorkspace(worktreeDir, "wt");
+    const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+    await poller.pollNow();
+    const snapshot = service.snapshot();
+    const main = snapshot.workspaces.find((w) => w.cwd === repoDir)!;
+    const wt = snapshot.workspaces.find((w) => w.cwd === worktreeDir)!;
+    expect(main.git?.repoKey).not.toBeNull();
+    expect(wt.git?.repoKey).toBe(main.git?.repoKey); // 同じ共通ディレクトリ＝同じグループ判定キー
+    expect(main.git?.isLinkedWorktree).toBe(false);
+    expect(wt.git?.isLinkedWorktree).toBe(true);
+    await rm(worktreeDir, { recursive: true, force: true });
+  });
+
   it("reports ahead when a commit exists only on the local branch relative to its upstream", async () => {
     // 「上流」をローカルブランチ base（現在の HEAD）にし、main だけ 1 コミット進める
     // （リモートを使わずに ahead=1・behind=0 を作れる、最も単純な形）。

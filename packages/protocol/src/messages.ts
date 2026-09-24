@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentIntegrationKind, Pane, SessionSnapshot, Tab, Workspace, WorktreeEntry } from "./model.js";
+import type { AgentIntegrationKind, Pane, SessionSnapshot, Tab, Workspace, WorkspaceGroup, WorktreeEntry } from "./model.js";
 import { THEME_NAMES } from "./theme.js";
 
 /**
@@ -11,6 +11,8 @@ const paneId = z.string().min(1);
 const workspaceId = z.string().min(1);
 const tabId = z.string().min(1);
 const splitId = z.string().min(1);
+// 20260923-workspace-grouping（タスク点検の指摘：groupId もほかの id と同じく共有 const にする）。
+const groupId = z.string().min(1);
 // `"external"` = 画面を持たない外部クライアント（`wtmctl`。20260923-external-control-api の design D4）。
 const clientKind = z.enum(["desktop", "mobile", "external"]);
 const splitDirection = z.enum(["right", "down"]);
@@ -119,8 +121,56 @@ export type WorkspaceRenameParams = z.infer<typeof WorkspaceRenameParams>;
 export const WorkspaceFocusParams = z.object({ workspaceId });
 export type WorkspaceFocusParams = z.infer<typeof WorkspaceFocusParams>;
 
-export const WorkspaceCloseParams = z.object({ workspaceId });
+// `closeLinkedWorktrees`（20260923-workspace-grouping。herdr の `close_group` 相当）：true かつ
+// 対象が worktree 自動グループの本体なら、束ねられた worktree も連鎖して閉じる。**省略可**——
+// `z.boolean().default(false)` にすると `z.infer` の TS 型で必須フィールドになり、既存の呼び出し元
+// （例: `packages/cli/src/commands/workspace.ts`）が型エラーになる（タスク点検の指摘）。既定は
+// `SessionService.closeWorkspace(id, closeLinkedWorktrees = false)` 側の JS 既定引数が担う。
+export const WorkspaceCloseParams = z.object({ workspaceId, closeLinkedWorktrees: z.boolean().optional() });
 export type WorkspaceCloseParams = z.infer<typeof WorkspaceCloseParams>;
+
+// --- workspace のグルーピングと並べ替え（20260923-workspace-grouping） --------------------------
+
+// キーバインド用（delta 指定。tab.move と同じ形）。値は tabMoveDirection と同じだが、
+// 対象の種類が違う（tab ではなく workspace）ので別の const として持つ——スキーマの意味を
+// 「tab の方向」に固定させないため。
+const workspaceMoveDirection = z.enum(["previous", "next"]);
+export const WorkspaceMoveParams = z.object({ workspaceId, direction: workspaceMoveDirection });
+export type WorkspaceMoveParams = z.infer<typeof WorkspaceMoveParams>;
+
+// D&D 用（anchor 指定）。`workspaceIds` が複数なら、グループの一括移動（herdr の
+// `WorkspaceMoveBlockParams` 相当）。単一なら通常の1件ドラッグ。
+export const WorkspaceMoveToParams = z.object({
+  workspaceIds: z.array(workspaceId).min(1),
+  beforeWorkspaceId: workspaceId.nullable(), // null なら末尾へ
+});
+export type WorkspaceMoveToParams = z.infer<typeof WorkspaceMoveToParams>;
+
+export const GroupCreateParams = z.object({ label: z.string().min(1) });
+export type GroupCreateParams = z.infer<typeof GroupCreateParams>;
+export interface GroupCreateResult {
+  group: WorkspaceGroup;
+}
+
+export const GroupRenameParams = z.object({ groupId, label: z.string().min(1) });
+export type GroupRenameParams = z.infer<typeof GroupRenameParams>;
+
+export const GroupDeleteParams = z.object({ groupId }); // メンバーは外れるだけ（消えない）
+export type GroupDeleteParams = z.infer<typeof GroupDeleteParams>;
+
+export const GroupAddMemberParams = z.object({ groupId, workspaceId });
+export type GroupAddMemberParams = z.infer<typeof GroupAddMemberParams>;
+
+export const GroupRemoveMemberParams = z.object({ workspaceId }); // 現在のグループから外す
+export type GroupRemoveMemberParams = z.infer<typeof GroupRemoveMemberParams>;
+
+// 折りたたみ状態の切り替え（decisions.md D7。design のデータ構造〔WorkspaceGroup.collapsed〕には
+// あったが、それを変更する RPC が design に無かったための追加）。**値を渡さずサーバに反転させる**
+// （タスク点検の指摘：クライアントが今の値を読んで反転して送る形だと、応答が返る前に連続で
+// 呼ばれたとき〔すばやい2回クリック〕両方が同じ古い値から同じ反転値を送ってしまい、2回目が
+// 効かなくなる。`pane.zoom` の `mode: "toggle"` と同じ「サーバに決めさせる」考え方に揃えた）。
+export const GroupToggleCollapsedParams = z.object({ groupId });
+export type GroupToggleCollapsedParams = z.infer<typeof GroupToggleCollapsedParams>;
 
 // --- tab ------------------------------------------------------------------
 
@@ -290,6 +340,14 @@ export const METHOD_SCHEMAS = {
   "workspace.rename": WorkspaceRenameParams,
   "workspace.focus": WorkspaceFocusParams,
   "workspace.close": WorkspaceCloseParams,
+  "workspace.move": WorkspaceMoveParams,
+  "workspace.move_to": WorkspaceMoveToParams,
+  "group.create": GroupCreateParams,
+  "group.rename": GroupRenameParams,
+  "group.delete": GroupDeleteParams,
+  "group.add_member": GroupAddMemberParams,
+  "group.remove_member": GroupRemoveMemberParams,
+  "group.toggle_collapsed": GroupToggleCollapsedParams,
   "tab.create": TabCreateParams,
   "tab.rename": TabRenameParams,
   "tab.focus": TabFocusParams,
@@ -328,6 +386,14 @@ export interface MethodResultMap {
   "workspace.rename": Record<string, never>;
   "workspace.focus": Record<string, never>;
   "workspace.close": Record<string, never>;
+  "workspace.move": Record<string, never>;
+  "workspace.move_to": Record<string, never>;
+  "group.create": GroupCreateResult;
+  "group.rename": Record<string, never>;
+  "group.delete": Record<string, never>;
+  "group.add_member": Record<string, never>;
+  "group.remove_member": Record<string, never>;
+  "group.toggle_collapsed": Record<string, never>;
   "tab.create": TabCreateResult;
   "tab.rename": Record<string, never>;
   "tab.focus": Record<string, never>;

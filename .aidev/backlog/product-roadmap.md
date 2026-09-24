@@ -64,9 +64,16 @@ parent: 20260918-web-terminal-multiplexer
       workspace の右クリックメニューに「新しい worktree」「worktree を開く…」、キーは `prefix+G`。
       作成先は `~/.wtm/worktrees/<repo>/<branch-slug>`（`packages/protocol/src/worktreePath.ts:37-41`）。
       失敗は 6 つのコードに分類して日本語にする（`packages/web/src/net/clientError.ts:19-25`）。
-      実測: 実装 36 ファイル・単体 1161 件 / E2E 69 件 pass。**削除とグループ化は下の行に残っている**
-- [ ] workspace のグルーピング: herdr 同等の Git worktree グループ＋利用者による任意の束ね、workspace・tab の並べ替え〔D6〕。
+      実測: 実装 36 ファイル・単体 1161 件 / E2E 69 件 pass。~~削除とグループ化は下の行に残っている~~
+      グループ化は下の行（20260923-workspace-grouping）で対応済み。削除（`git worktree remove`）は
+      別の backlog 項目として未着手のまま残る。
+- [x] workspace のグルーピング: herdr 同等の Git worktree グループ＋利用者による任意の束ね、workspace・~~tab~~ の並べ替え〔D6〕。
       **worktree の作成・一覧は 20260920-git-worktree-actions で済んだので、残りはグループ化と並べ替え** (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/requirements.md）
+      20260923-workspace-grouping で worktree 自動グループ・手動named グループ・D&D＋キーバインドでの
+      workspace 並べ替えを実装（AC1〜AC11・AC-I1〜AC-I5 全て pass。typecheck/test 2800 件 green・
+      coverage --strict gap 0・smoke pass）。tab の並べ替えは取り消し線のとおり対象外
+      （20260923-missing-keybinding-actions で別途対応済み）。
+      （出典: .aidev/works/20260923-workspace-grouping/test-result.md）
 - [x] D&D による pane の入れ替え（Web 固有の操作。上の項目のうち入れ替えだけ）: 20260923-pane-name-dnd-swap で対応。
       pane 名ラベルを別の pane の上へドラッグ＆ドロップすると同一 tab 内の2つの pane が入れ替わる
       （`pane.swap_with`。`packages/server/src/session/SessionModel.ts` の `swapPaneWith`）。
@@ -233,3 +240,4 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] 端末の選択の背景を見えるようにする: 上流の配色の選択の背景と端末の背景の比が低いテーマがあり（one-light 1.11・solarized-light 1.14・solarized 1.15・rose-pine-dawn 1.27・one-dark 1.31）、copy モードやマウスで選んだ範囲がほとんど見えない。`finalizePalette`（packages/protocol/src/theme.ts）に「選択の背景を端末の背景から寄せる」規則を足す案。20260921-theme-settings では「上流の値のまま、選んだ文字とカーソルだけ直す」（decisions D5）の内側として見送った（出典: .aidev/works/20260921-theme-settings/review.md）
 - [ ] エージェント自動化 API / CLI: herdr の agent start／agent prompt --wait／agent wait／agent read 相当（pane とは別の「エージェント」という名前付きの対象・状態遷移の待ち合わせ・agent skill ファイルの検討を含む） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）
 - [ ] pane 直接接続・制御ストリーム: herdr の terminal attach／session observe／session control 相当（pane 単体への直接接続・書き込み権限の排他制御・閲覧専用の購読ストリーム。既存の pane.subscribe は複数購読者を許す設計のため前提が異なる） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）
+- [ ] キーバインドでの workspace 並べ替え（AC8: move_workspace_previous/next）は flat な隣接1件だけを入れ替える実装のため、手動グループの非アンカーメンバーを動かすと、隣が別グループ/無所属の workspace の場合に画面上は何も変化しないことがある（20260923-workspace-grouping レビューで発見。D&D 側は同レビューで修正済み。キーバインド側は workspace.move の delta 方式を anchor 方式へ変えるプロトコル改修が要るため今回は見送り）。（出典: .aidev/works/20260923-workspace-grouping/review.md）

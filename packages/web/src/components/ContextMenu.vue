@@ -69,11 +69,14 @@ const items = computed<MenuItem[]>(() => {
     ];
   }
   if (target.kind === "workspace") {
-    // herdr は worktree の状態で 4 パターンに変える。本製品はグルーピングと削除が対象外なので
-    // 「git リポジトリか」の 2 パターンだけ（20260920-git-worktree-actions。元は D56 の訂正 10 で 2 項目固定だった）。
+    // herdr は worktree の状態で 4 パターンに変える。本製品は削除が対象外なので「git リポジトリか」
+    // の 2 パターンだけ（20260920-git-worktree-actions。元は D56 の訂正 10 で 2 項目固定だった）。
+    // グルーピングは 20260923-workspace-grouping で対応した（手動グループの項目を下に追加）。
     // 判定は `workspace.git`（`GitInfoPoller` が 5 秒周期で埋める）。**作った直後は間に合わない**ので、
     // その間は `prefix+G` から始められるようにしてある（decisions.md D3）。
-    const isGit = session.workspaces.get(target.workspaceId)?.git != null;
+    const ws = session.workspaces.get(target.workspaceId);
+    const isGit = ws?.git != null;
+    const inGroup = ws?.groupId != null;
     return [
       { label: "名前の変更", run: () => actions.renameWorkspaceById(target.workspaceId) },
       { label: "閉じる", run: () => actions.closeWorkspaceById(target.workspaceId) },
@@ -83,6 +86,19 @@ const items = computed<MenuItem[]>(() => {
             { label: "worktree を開く…", run: () => actions.openWorktree(target.workspaceId) },
           ]
         : []),
+      // 20260923-workspace-grouping（herdr に前例が無い独自拡張）。
+      { label: "新しいグループを作る…", run: () => actions.createGroupForWorkspace(target.workspaceId) },
+      ...(inGroup
+        ? [{ label: "グループから外す", run: () => actions.removeWorkspaceFromGroup(target.workspaceId) }]
+        : session.groups.size > 0
+          ? [{ label: "グループへ追加…", run: () => actions.openGroupPicker(target.workspaceId) }]
+          : []),
+    ];
+  }
+  if (target.kind === "group") {
+    return [
+      { label: "名前の変更", run: () => actions.renameGroupById(target.groupId) },
+      { label: "グループを削除", run: () => actions.deleteGroupById(target.groupId) },
     ];
   }
   // global：どこにも属さない全体の操作。**「設定」は入れる**（20260920-agent-notifications で通知の設定として足し、

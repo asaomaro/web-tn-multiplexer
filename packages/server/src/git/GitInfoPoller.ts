@@ -1,6 +1,7 @@
 import type { GitInfo, Workspace } from "@wtm/protocol";
 import type { SessionService } from "../session/SessionService.js";
 import type { GitRunner } from "../infra/GitRunner.js";
+import { resolveCommonDir } from "./worktree.js";
 
 const DEFAULT_INTERVAL_MS = 5000;
 const GIT_TIMEOUT_MS = 3000;
@@ -63,7 +64,21 @@ export class DefaultGitInfoPoller implements GitInfoPoller {
         ahead = Number(aheadStr) || 0;
       } // 上流ブランチが無ければそのまま 0/0（エラーにしない）
 
-      return { branch, ahead, behind };
+      // worktree 自動グループの判定キー（20260923-workspace-grouping。design「server
+      // （GitInfoPoller.probe の拡張）」）。既存の `WorktreeService.repoNameOf` と同じ
+      // `resolveCommonDir` を再利用する——新しい共有モジュールは作らない。
+      let repoKey: string | null = null;
+      let isLinkedWorktree = false;
+      const commonResult = await this.git.run(cwd, ["rev-parse", "--git-common-dir"], GIT_TIMEOUT_MS);
+      if (commonResult.code === 0) {
+        repoKey = resolveCommonDir(cwd, commonResult.stdout);
+        const dirResult = await this.git.run(cwd, ["rev-parse", "--git-dir"], GIT_TIMEOUT_MS);
+        // 本体は `--git-dir` と `--git-common-dir` が同じパスを指す。linked worktree は異なる
+        // （`--git-dir` が `<common-dir>/worktrees/<name>` を指す標準的な Git の仕組み）。
+        if (dirResult.code === 0) isLinkedWorktree = resolveCommonDir(cwd, dirResult.stdout) !== repoKey;
+      } // 取れなければ repoKey は null のまま（worktree 自動グループの対象外）
+
+      return { branch, ahead, behind, repoKey, isLinkedWorktree };
     } catch {
       return null; // 時間切れ・git が無い等
     }

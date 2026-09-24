@@ -46,6 +46,7 @@ function makeSnapshot(): SessionSnapshot {
     workspaces: [],
     tabs: [],
     panes: [],
+    groups: [],
     focus: null,
     limits: { scrollbackLines: 5000 },
   };
