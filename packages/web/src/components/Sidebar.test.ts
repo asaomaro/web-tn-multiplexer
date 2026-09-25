@@ -137,6 +137,67 @@ describe("Sidebar — spaces", () => {
     expect(openContextMenu).toHaveBeenCalledWith({ kind: "workspace", workspaceId: "w1" }, { x: 5, y: 6 });
   });
 
+  // 20260925-sidebar-keyboard-menu（design「振る舞いの詳細」手順4）。navigateMenuRequested は
+  // ActionDispatcher.navigate("openMenu") が立てる想定だが、ここでは store を直接操作して
+  // Sidebar.vue の watch だけを検証する（右クリックのテストと同じ粒度）。
+  it("navigateMenuRequested が立つと、選択中の行の位置で UiPort.openContextMenu を呼び、要求を消す", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    view.onModeChange("navigate");
+    view.setNavigateSelection("w1");
+    const openContextMenu = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { openContextMenu });
+    view.requestNavigateMenu();
+    await wrapper.vm.$nextTick();
+    expect(openContextMenu).toHaveBeenCalledWith({ kind: "workspace", workspaceId: "w1" }, { x: expect.any(Number), y: expect.any(Number) });
+    expect(view.navigateMenuRequested).toBe(false); // 一度きりのトリガー（design「エラー処理 / 異常系」）
+    expect(view.navigateSelection).toBe("w1"); // 選択は保持される（design「設計方針」）
+  });
+
+  it("navigateMenuRequested が立っても選択が無ければ何も呼ばない", async () => {
+    const view = useViewStore(pinia);
+    const openContextMenu = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { openContextMenu });
+    view.requestNavigateMenu();
+    await wrapper.vm.$nextTick();
+    expect(openContextMenu).not.toHaveBeenCalled();
+    expect(view.navigateMenuRequested).toBe(false);
+  });
+
+  it("該当する行の DOM が見つからなければ {x:0,y:0} にフォールバックする（design「エラー処理 / 異常系」）", async () => {
+    const view = useViewStore(pinia);
+    // navigateSelection がサイドバーに存在しない workspace を指す異常系（通常は起きない。研究F2参照）。
+    view.setNavigateSelection("does-not-exist");
+    const openContextMenu = vi.fn();
+    const wrapper = mountSidebar(makeConnection(), { openContextMenu });
+    view.requestNavigateMenu();
+    await wrapper.vm.$nextTick();
+    expect(openContextMenu).toHaveBeenCalledWith({ kind: "workspace", workspaceId: "does-not-exist" }, { x: 0, y: 0 });
+  });
+
+  // taskcheck T5 round1 の指摘: 前の3件は「終わった状態」しか見ておらず、design が明記する
+  // 「DOM 処理より前に要求を消す」という順序（例外安全性）自体は検証できていなかった。
+  // ここでは DOM 処理の最終呼び出し（openContextMenu）が実行される**その瞬間**に
+  // navigateMenuRequested が既に false であることを、モックの中で直接確認する
+  // （呼び出し順を入れ替えると red になる——実際に一時的に入れ替えて確認済み。decisions.md D1）。
+  it("navigateMenuRequested は DOM 処理（openContextMenu の呼び出し）より前に消える", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    view.onModeChange("navigate");
+    view.setNavigateSelection("w1");
+    let requestedWhenCalled: boolean | null = null;
+    const openContextMenu = vi.fn(() => {
+      requestedWhenCalled = view.navigateMenuRequested;
+    });
+    const wrapper = mountSidebar(makeConnection(), { openContextMenu });
+    view.requestNavigateMenu();
+    await wrapper.vm.$nextTick();
+    expect(openContextMenu).toHaveBeenCalledTimes(1);
+    expect(requestedWhenCalled).toBe(false);
+  });
+
   it("navigate モードで選択中の workspace に選択スタイルを付ける", () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);

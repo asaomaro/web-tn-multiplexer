@@ -71,7 +71,7 @@ export type Action =
   | { type: "detach" }
   | { type: "notYet"; work: string } // 後続のキー
   | { type: "reloadConfig" } // prefix+shift+r（20260922-appearance-settings-rest の herdr `reload_config` 相当）
-  | { type: "navigate"; op: "up" | "down" | "paneDir" | "activate" | "cancel"; dir?: Dir }
+  | { type: "navigate"; op: "up" | "down" | "paneDir" | "activate" | "cancel" | "openMenu"; dir?: Dir }
   | { type: "resizeBy"; dir: Dir; amount: number }
   | { type: "copy"; cmd: CopyCommand }
   // 20260923-missing-keybinding-actions（herdr にあって本製品に操作自体が無かったもの）。

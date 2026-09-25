@@ -1,14 +1,18 @@
 import type { Action } from "./actions.js";
 
 /**
- * navigate モード（`prefix+w`）の中の6つの移動操作のカタログ（20260923-navigate-mode-keys。
- * design「インターフェース / データ構造 > カタログ」）。既存操作の `bindings.ts` の `ACTIONS`
- * （2026-09-23 時点で35個）とは**独立した別の表**（decisions D2）——prefix 概念が無く、bare な単一文字も
- * 許す点が既存操作の検証規則（`assign.ts` の `isDirectChord` の modifier 必須規則）と相容れないため。
+ * navigate モード（`prefix+w`）の中の、キーでカスタマイズできる操作のカタログ
+ * （20260923-navigate-mode-keys。design「インターフェース / データ構造 > カタログ」）。
+ * 当初は6つの移動操作のみだったが、20260925-sidebar-keyboard-menu で7つ目
+ * （`navigate_open_menu`。移動ではなくメニューを開く操作）を追加した——このカタログ機構自体は
+ * 移動専用ではなく汎用（`NavigateKeyDef.action` は任意の `Action` を持てる）。
+ * 既存操作の `bindings.ts` の `ACTIONS`（2026-09-23 時点で35個）とは**独立した別の表**
+ * （decisions D2）——prefix 概念が無く、bare な単一文字も許す点が既存操作の検証規則
+ * （`assign.ts` の `isDirectChord` の modifier 必須規則）と相容れないため。
  *
- * 既定は現行の `NavigateMode.ts` の固定キーと 1:1（`navigate_pane_left`/`navigate_pane_right` の
- * `left`/`right` は予約キーのため表に載らない——`ArrowLeft`/`ArrowRight` は `NavigateMode` 側の
- * 固定 case として別途維持する。decisions D3）。
+ * 当初6件の既定は現行の `NavigateMode.ts` の固定キーと 1:1（`navigate_pane_left`/
+ * `navigate_pane_right` の `left`/`right` は予約キーのため表に載らない——`ArrowLeft`/
+ * `ArrowRight` は `NavigateMode` 側の固定 case として別途維持する。decisions D3）。
  */
 export interface NavigateKeyDef {
   /** herdr の `[keys]` の項目名と同じ id（`navigate_workspace_up` 等）。 */
@@ -57,6 +61,12 @@ export const NAVIGATE_KEYS = [
     label: "pane を右へ選ぶ",
     defaults: ["l"],
     action: { type: "navigate", op: "paneDir", dir: "right" },
+  },
+  {
+    id: "navigate_open_menu",
+    label: "選択した workspace のメニューを開く",
+    defaults: ["space"],
+    action: { type: "navigate", op: "openMenu" },
   },
 ] as const satisfies readonly NavigateKeyDef[];
 
