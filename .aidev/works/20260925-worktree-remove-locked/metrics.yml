@@ -33,3 +33,4 @@ events:
   - { ts: 2026-09-25T14:16:49Z, phase: review, event: start, metrics: { marks: 2 } }
   - { ts: 2026-09-25T14:18:49Z, phase: review, event: approved, metrics: { ac_total: 11, ac_covered: 11, tasks_no_ac: 0, tasks_ac_none: 2 } }
   - { ts: 2026-09-25T14:18:55Z, phase: deliver, event: start }
+  - { ts: 2026-09-25T14:19:20Z, phase: deliver, event: approved }

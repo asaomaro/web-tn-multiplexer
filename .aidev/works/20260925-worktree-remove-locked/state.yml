@@ -1,7 +1,7 @@
 schema: 11
 slug: worktree-remove-locked
-current: review
-approved: [requirements, design, tasks, coding, test, review]
+current: deliver
+approved: [requirements, design, tasks, coding, test, review, deliver]
 mode: autonomous
 profile: full
 humanGates: []
@@ -9,3 +9,4 @@ maxSendBacks: 3
 dependsOn: []
 harnessRev: 0d4e919b342e
 backlog: product-roadmap.md
+harnessRevDelivered: 0d4e919b342e
