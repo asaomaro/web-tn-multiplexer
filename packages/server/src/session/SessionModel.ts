@@ -625,6 +625,10 @@ export class SessionModel {
       const nextFocused = sourceTab.focusedPaneId === paneId ? Layout.leaves(withoutPane)[0]! : sourceTab.focusedPaneId;
       this.tabs.set(sourceTab.id, { ...sourceTab, layout: withoutPane, focusedPaneId: nextFocused, zoomedPaneId: null });
     }
+    // グローバル focus を移動先へ（20260925-pane-move-global-focus。design「設計方針」）。
+    // `closeEmptyTabShell` の後に置く——先に置くと、移動元 tab が移動元 workspace の
+    // activeTabId だった場合、closeEmptyTabShell 内の救済の setFocus に上書きされる。
+    this.setFocus(targetTab.workspaceId, targetTabId, paneId);
     return true;
   }
 
@@ -653,7 +657,6 @@ export class SessionModel {
     this.panes.set(paneId, { ...pane, tabId: newTabId });
     this.tabs.set(newTabId, newTab);
     this.workspaces.set(targetWorkspaceId, { ...ws, tabIds: [...ws.tabIds, newTabId], activeTabId: newTabId });
-    this.setFocus(targetWorkspaceId, newTabId, paneId);
 
     if (withoutPane === null) {
       this.closeEmptyTabShell(sourceTab.id);
@@ -661,6 +664,11 @@ export class SessionModel {
       const nextFocused = sourceTab.focusedPaneId === paneId ? Layout.leaves(withoutPane)[0]! : sourceTab.focusedPaneId;
       this.tabs.set(sourceTab.id, { ...sourceTab, layout: withoutPane, focusedPaneId: nextFocused, zoomedPaneId: null });
     }
+    // グローバル focus を移動先へ（20260925-pane-move-global-focus。design「設計方針」）。
+    // `closeEmptyTabShell` の後に置く——先に置くと（元の実装のとおり）、移動元 tab が
+    // 移動元 workspace の activeTabId だった場合、closeEmptyTabShell 内の救済の setFocus に
+    // 上書きされる（decisions.md 参照）。
+    this.setFocus(targetWorkspaceId, newTabId, paneId);
     return { tab: newTab };
   }
 
@@ -717,6 +725,8 @@ export class SessionModel {
     if (!other || other.tabId !== pane.tabId) return false;
     const tab = this.requireTab(pane.tabId);
     this.tabs.set(tab.id, { ...tab, layout: Layout.swap(tab.layout, paneId, otherPaneId) });
+    // グローバル focus を動かした pane（paneId）へ（20260925-pane-move-global-focus。design「設計方針」）。
+    this.setFocus(tab.workspaceId, tab.id, paneId);
     return true;
   }
 
@@ -738,6 +748,8 @@ export class SessionModel {
     const splitId = this.nextId("s");
     const newLayout = Layout.insertAtEdge(withoutSource, targetPaneId, edge, paneId, splitId);
     this.tabs.set(tab.id, { ...tab, layout: newLayout });
+    // グローバル focus を動かした pane（paneId）へ（20260925-pane-move-global-focus。design「設計方針」）。
+    this.setFocus(tab.workspaceId, tab.id, paneId);
     return true;
   }
 
@@ -766,7 +778,9 @@ export class SessionModel {
       focusedPaneId: nextFocused,
       zoomedPaneId: null, // pane を閉じたら zoom を解除する（closePane と同じ。D100）
     });
-    if (nextFocused !== tab.focusedPaneId) this.setFocus(tab.workspaceId, tab.id, nextFocused);
+    // グローバル focus を生存した pane（paneId）へ（20260925-pane-move-global-focus。design「設計方針」）。
+    // 削除された pane が tab のローカル focus だったかどうかに関わらず、常に paneId を指す。
+    this.setFocus(tab.workspaceId, tab.id, paneId);
     return { removedPaneIds: [targetPaneId], removedTabIds: [], closedWorkspaceId: null };
   }
 

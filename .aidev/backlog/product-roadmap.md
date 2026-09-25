@@ -334,7 +334,18 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] キーバインドでの workspace 並べ替え（AC8: move_workspace_previous/next）は flat な隣接1件だけを入れ替える実装のため、手動グループの非アンカーメンバーを動かすと、隣が別グループ/無所属の workspace の場合に画面上は何も変化しないことがある（20260923-workspace-grouping レビューで発見。D&D 側は同レビューで修正済み。キーバインド側は workspace.move の delta 方式を anchor 方式へ変えるプロトコル改修が要るため今回は見送り）。（出典: .aidev/works/20260923-workspace-grouping/review.md）
 - [ ] クリップボード画像のリモート貼り付け: herdr は `remote_image_paste`（既定 Ctrl+V、`herdr --remote` 使用時だけ有効）でクライアントの画像クリップボードをリモートのペインへ貼り付けられるが、web-tn-multiplexer にはこれに相当する実装が無い（`packages/web/src/term/clipboard.ts` はテキストの readText/writeText のみ、画像用の navigator.clipboard.read()・ClipboardItem・サーバー側の画像アップロード経路とも未実装）。サーバーとブラウザが別マシンの構成（WSL2 のようにOSクリップボードが共有される環境を除く、純粋なリモート接続）では、pane 内のプロセスがクライアント側の画像クリップボードに触れる手段が無い。（出典: .aidev/works/20260923-workspace-grouping/review.md）
 - [ ] 複数クライアントで同じtabを見ているとき、片方のD&Dによる pane 分割解除（pane.replace）でドロップ先が閉じられると、そのpaneへローカルでfocusしていた別クライアントの focus 復帰先が想定とずれる: viewRepair.ts のフォールバック規則（閉じたpaneの代わりはレイアウト木の最初の葉。SessionModel.closePaneの規則をそのまま写したもの）は、SessionModel.replacePaneの「後継は必ずドラッグした pane 自身」という規則を知らない（pane.closed/layout.updated イベントに推奨後継のヒントが無いため、クライアント側では区別できない）。20260924-pane-dnd-split-move の cross-check で発見。直すには protocol（イベントへの後継ヒント追加）とviewRepair.ts双方の変更が要る。（出典: .aidev/works/20260924-pane-dnd-split-move/review.md）
-- [ ] レイアウトだけを書き換える pane 操作（swapPaneWith/moveToEdge/replacePane/moveToTab/moveToNewTab）はセッション全体のグローバル focus（this.focus）を更新しない: ローカル保存 view の無い新規クライアントが直後に再接続すると、移動先ではなく元の focus が指す pane へ復元されうる（20260924-pane-move-cross-tab decisions.md D4）
+- [x] レイアウトだけを書き換える pane 操作（swapPaneWith/moveToEdge/replacePane/moveToTab/moveToNewTab）はセッション全体のグローバル focus（this.focus）を更新しない: ローカル保存 view の無い新規クライアントが直後に再接続すると、移動先ではなく元の focus が指す pane へ復元されうる（20260924-pane-move-cross-tab decisions.md D4）
+  → 着地: 20260925-pane-move-global-focus（feature/pane-move-global-focus）。5操作全ての
+  成功パス末尾に `this.setFocus(workspaceId, tabId, paneId)`（動かした pane が新しい
+  グローバル focus 先）を追加。design 段階の調査で backlog の想定より実態が複雑だと判明——
+  `moveToNewTab` は既に主経路で `setFocus` を呼んでいたが、移動元 tab の自動クローズ
+  （`closeEmptyTabShell`）内の「救済」ロジックが無条件にそれを上書きする別のバグがあった。
+  `moveToTab`/`moveToNewTab` は `setFocus` の呼び出しを `closeEmptyTabShell` の**後**に
+  置くことでこれも解消（decisions.md D3 がこの上書きバグをそのまま再現）。
+  `closeEmptyTabShell` の救済ロジック自体（無関係な workspace の focus まで巻き込みうる、
+  より広い既存の潜在的不具合）はスコープ外とし、backlog 新項目（下記）へ送った（D0）。
+  review は5観点とも must 0 件（nit 1件を修正）。
+  実測: server 824 本・ルート一括 2991 本・smoke pass・`aidev coverage --strict` gaps=0。
 - [ ] worktree 削除の確認ダイアログの openWorkspaceId は開いた瞬間のスナップショットで確定まで再評価されない: 複数クライアントが同じ repo を開いている状況で、確認ダイアログが開いている間に別クライアントがその path を新しく workspace として開くと、確定時にサーバはその workspace を黙って閉じる（AC4/US2 が求める確認が効かない狭い競合）。design が『一覧の即時同期は作らない』と決めた既存のトレードオフの範囲内（20260924-worktree-remove review.md round1）
 - [x] worktree の削除で lock 済み（git worktree lock）の対象は classifyWorktreeRemoveError のどの分岐にもマッチせず worktree_failed に落ちる: --force 単体では削除できず（-f -f が要る）、利用者は汎用メッセージのまま行き詰まる（20260924-worktree-remove review.md round1。実機確認: fatal: cannot remove a locked working tree; use 'remove -f -f' to override or unlock first）
   → 着地: 20260925-worktree-remove-locked（feature/worktree-remove-locked）。
@@ -347,3 +358,14 @@ parent: 20260918-web-terminal-multiplexer
   T2 round1・T6 round1 で計2件の should 指摘（負の確認の記録の粒度・見せかけのキーボード
   テスト）を発見・修正。review は5観点とも findings 0。
   実測: server 811 本・ルート一括 2974 本・smoke pass・`aidev coverage --strict` gaps=0。
+- [ ] `SessionModel.closeEmptyTabShell` の「救済」ロジック（自動的に閉じた tab が所属
+  workspace の `activeTabId` だったら、新しい active tab へ `this.focus` を書き換える）は、
+  `this.focus` が実際にその workspace/tab を指していたかどうかに関わらず無条件に発火する:
+  無関係な workspace の `this.focus` まで巻き込んで上書きしうる（例: workspace A の
+  `this.focus` とは無関係な pane P に固定されている状態で、workspace B の
+  `moveToTab`/`moveToNewTab` が B の active tab を空にして自動的に閉じると、B 側の救済が
+  `this.focus` を B の新しい active tab へ書き換えてしまい、A の pane P を指していたはずの
+  `this.focus` が失われる）。修正するには「`this.focus` が実際に閉じた tab を指していた
+  ときだけ救済する」という条件を足す必要があるが、影響範囲の見積もりに別の調査が要るため
+  見送った（20260925-pane-move-global-focus decisions.md D0）。（出典:
+  .aidev/works/20260925-pane-move-global-focus/decisions.md）
