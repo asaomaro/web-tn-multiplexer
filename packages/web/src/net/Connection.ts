@@ -290,7 +290,12 @@ export class Connection implements ConnectionPort {
       if (!pending) return;
       this.pending.delete(envelope.id);
       if (envelope.error) {
-        pending.reject(new Error(`${envelope.error.code}: ${envelope.error.message}`));
+        // `code` をプロパティとしても持たせる（20260925-connection-error-code。design「設計方針」）。
+        // `message` の文字列書式は変えない——`clientError.ts` の `errorCodeOf` が `.code` を
+        // 最優先で読み、無ければ従来どおりこの文字列を正規表現でパースする（後方互換）。
+        const err = new Error(`${envelope.error.code}: ${envelope.error.message}`);
+        Object.assign(err, { code: envelope.error.code });
+        pending.reject(err);
       } else {
         pending.resolve(envelope.result);
       }

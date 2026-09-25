@@ -70,4 +70,19 @@ describe("errorCodeOf", () => {
     expect(errorCodeOf(new Error("Not A Code: x"))).toBeNull();
     expect(errorCodeOf(undefined)).toBeNull();
   });
+
+  // 20260925-connection-error-code（design「振る舞いの詳細」）。
+  it("code プロパティを持てば最優先でそれを返す（AC2）", () => {
+    const err = Object.assign(new Error("worktree_dirty: from server"), { code: "worktree_locked" });
+    expect(errorCodeOf(err)).toBe("worktree_locked"); // message の書式ではなく code プロパティが勝つ
+  });
+
+  it("code プロパティを持たない従来型の値は、引き続き正規表現フォールバックで判定する（AC3）", () => {
+    expect(errorCodeOf(new Error("worktree_dirty: from server"))).toBe("worktree_dirty");
+  });
+
+  it("code プロパティが文字列でなければ、正規表現フォールバックに落ちる", () => {
+    const err = Object.assign(new Error("worktree_dirty: from server"), { code: 42 });
+    expect(errorCodeOf(err)).toBe("worktree_dirty");
+  });
 });
