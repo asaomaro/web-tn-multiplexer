@@ -255,7 +255,16 @@ parent: 20260918-web-terminal-multiplexer
   という決め打ちの文字列一致（実際のパスに合わせて直す必要がある）を両方とも解消できる（出典:
   .aidev/works/20260924-worktree-dir-config/requirements.md「対象外」）
 - [ ] E2E が古いビルドを見る: pnpm -C packages/e2e test は再ビルドせず、@wtm/server の dist と packages/web/dist を読む。直さずに走らせても通ったように見える。test スクリプトか CI で build を前置する（D8）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
-- [ ] workspace のメニューをキーボードから開く: Sidebar.vue の行に tabindex も keydown も無く、右クリック（マウス）でしか開けない。pane の枠だけ PaneFrame.vue で対応済み。「worktree を開く…」がキーだけで到達できない原因（AC-I3 の制限）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+- [x] workspace のメニューをキーボードから開く: Sidebar.vue の行に tabindex も keydown も無く、右クリック（マウス）でしか開けない。pane の枠だけ PaneFrame.vue で対応済み。「worktree を開く…」がキーだけで到達できない原因（AC-I3 の制限）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+  → 着地: 20260925-sidebar-keyboard-menu（feature/sidebar-keyboard-menu）。独立した Tab フォーカスは作らず、
+  既存の navigate モード（prefix+w→矢印キーの仮想カーソル）を拡張し、選択中の行で space を押すとその行の
+  メニューが開く（7つ目の navigate キー `navigate_open_menu`。既存6件と同じカスタマイズ可能なカタログ機構
+  に乗せた）。ActionDispatcher は DOM に一切触れない既存原則を守り、実際に DOM から位置計算して開くのは
+  Sidebar.vue が担う。review round1 で must（ContextMenu.vue に stopPropagation() が無く、navigate モード中に
+  メニューを開いた状態で矢印キー・space が window まで二重配送され navigateSelection が意図せず動く不具合）
+  を発見・修正——「変更しない」としていた ContextMenu.vue への差し戻しが実際に発生した。
+  実測: web 1948 本・ルート一括 2949 本・smoke pass・`aidev coverage --strict` gaps=0。独立点検・cross-task
+  check・レビュー2ラウンドで計8件の指摘を解消（負の確認は生ログ付きで decisions.md D1〜D4 に記録）。
 - [ ] Connection がエラーコードをプロパティで持つ: いまは new Error(`<code>: <message>`) の文字列で、web は書式を正規表現で読む（errorCodeOf）。書式が変わると黙って汎用の文言に落ちる（D4）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] Workspace.git の即時化: GitInfoPoller が 5 秒周期なので、workspace を作った直後は最大 5 秒 git が null で、メニューに worktree の項目が出ない（D3）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] 既読（wtm.seen.v1）の意味論を直す: markVisibleAgentsSeen はウィンドウにフォーカスがあれば pane の表示を見ずに全 pane を既読にする（main.ts の「意図的な簡略化」）。結果、フォーカス中は displayStateFor が done を返せず、通知は「完了しました」と言うのにサイドバーに印が無い。正しい規則 shouldMarkSeen(paneVisible, windowFocused) は本番から一度も呼ばれていない。20260920-agent-notifications が TerminalRegistry.isVisible を足したので、結線できる前提が揃った（出典: .aidev/works/20260920-agent-notifications/decisions.md）

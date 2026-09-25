@@ -73,7 +73,7 @@ describe("KeySettings — 一覧（AC1）", () => {
     expect(
       Array.from(document.querySelectorAll(".keys-group-name")).map((h) => h.textContent),
     ).toEqual(["全体", "workspace / tab", "pane", "navigate モードの移動"]);
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(55); // 49 + navigate 6
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(56); // 49 + navigate 7（20260925-sidebar-keyboard-menu で navigate_open_menu が加わった）
     expect(summaryText("split_vertical")).toBe("prefix+v");
     expect(summaryText("switch_tab")).toBe("prefix+1..9");
     expect(summaryText("cycle_pane_previous")).toBe("prefix+shift+tab");
@@ -818,7 +818,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
   it("最初から表示され（開閉の概念を持たない）、操作名の一部で一致する操作だけが残る（AC1・AC-I1）", async () => {
     await mountKeys();
     expect(filterInput()).not.toBeNull();
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(55);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(56);
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     expect(row("zoom")).not.toBeNull();
@@ -842,7 +842,7 @@ describe("KeySettings — 絞り込み（AC1・AC2・AC3・AC-I1〜AC-I5）", ()
     await typeFilter("拡大表示");
     expect(document.querySelectorAll(".keys-details")).toHaveLength(1);
     await typeFilter("");
-    expect(document.querySelectorAll(".keys-details")).toHaveLength(55);
+    expect(document.querySelectorAll(".keys-details")).toHaveLength(56);
   });
 
   it("絞り込み中もフォーカスが入力欄に残る（入力のたびに奪われない。AC-I4）", async () => {
@@ -1107,10 +1107,11 @@ describe("KeySettings — Keyboard Lock の switch（AC11・AC-I11）", () => {
 // ---------------------------------------------------------------------------------------------------------------------
 
 describe("KeySettings — navigate モードの移動（一覧・AC1）", () => {
-  it("6操作の現在の割り当てが見える（既定は今のキー）。予約キー・矢印の注記を含む", async () => {
+  it("7操作の現在の割り当てが見える（既定は今のキー）。予約キー・矢印の注記を含む。navigate_open_menu は NAVIGATE_KEYS を直接参照する作りのため無改修で自動的に一覧へ現れる（20260925-sidebar-keyboard-menu。design「依拠する既存の事実」の裏付け）", async () => {
     await mountKeys();
     expect(navSummaryText("navigate_workspace_up")).toBe("up");
     expect(navSummaryText("navigate_workspace_down")).toBe("down");
+    expect(navSummaryText("navigate_open_menu")).toBe("space");
     expect(navSummaryText("navigate_pane_left")).toBe("h");
     expect(navSummaryText("navigate_pane_down")).toBe("j");
     expect(navSummaryText("navigate_pane_up")).toBe("k");

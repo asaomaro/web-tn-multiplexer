@@ -3,9 +3,9 @@ import { formatChord, parseChord } from "./chord.js";
 import { isNavigateKeyId, NAVIGATE_KEYS, NAVIGATE_RESERVED_CHORDS, navigateKeyDef } from "./navigateKeys.js";
 
 describe("NAVIGATE_KEYS — カタログ（AC3）", () => {
-  it("6操作、id は重複しない・表示名は空でない", () => {
-    expect(NAVIGATE_KEYS).toHaveLength(6);
-    expect(new Set(NAVIGATE_KEYS.map((d) => d.id)).size).toBe(6);
+  it("7操作、id は重複しない・表示名は空でない", () => {
+    expect(NAVIGATE_KEYS).toHaveLength(7);
+    expect(new Set(NAVIGATE_KEYS.map((d) => d.id)).size).toBe(7);
     for (const d of NAVIGATE_KEYS) expect(d.label.length, d.id).toBeGreaterThan(0);
   });
 
@@ -15,7 +15,7 @@ describe("NAVIGATE_KEYS — カタログ（AC3）", () => {
         expect(formatChord(parseChord(chord)!), `${d.id}: ${chord}`).toBe(chord);
   });
 
-  it("既定は現行の NavigateMode.ts の固定キーと1:1", () => {
+  it("既定6件は現行の NavigateMode.ts の固定キーと1:1。7件目（navigate_open_menu）は移動ではなくメニューを開く操作（20260925-sidebar-keyboard-menu）", () => {
     expect(NAVIGATE_KEYS.map((d) => d.id)).toEqual([
       "navigate_workspace_up",
       "navigate_workspace_down",
@@ -23,6 +23,7 @@ describe("NAVIGATE_KEYS — カタログ（AC3）", () => {
       "navigate_pane_down",
       "navigate_pane_up",
       "navigate_pane_right",
+      "navigate_open_menu",
     ]);
     expect(navigateKeyDef("navigate_workspace_up")?.defaults).toEqual(["up"]);
     expect(navigateKeyDef("navigate_workspace_down")?.defaults).toEqual(["down"]);
@@ -30,6 +31,7 @@ describe("NAVIGATE_KEYS — カタログ（AC3）", () => {
     expect(navigateKeyDef("navigate_pane_down")?.defaults).toEqual(["j"]);
     expect(navigateKeyDef("navigate_pane_up")?.defaults).toEqual(["k"]);
     expect(navigateKeyDef("navigate_pane_right")?.defaults).toEqual(["l"]);
+    expect(navigateKeyDef("navigate_open_menu")?.defaults).toEqual(["space"]);
   });
 
   it("各操作の action は navigate 系の固定 Action", () => {
@@ -55,6 +57,7 @@ describe("NAVIGATE_KEYS — カタログ（AC3）", () => {
       op: "paneDir",
       dir: "right",
     });
+    expect(navigateKeyDef("navigate_open_menu")?.action).toEqual({ type: "navigate", op: "openMenu" });
   });
 
   it("既定の chord はどれも予約キーではない・互いに重ならない（自己整合性）", () => {

@@ -10,9 +10,11 @@ import { useViewStore } from "../store/view.js";
  * `keybind_help_groups()`/`filter_keybind_help_groups()` を移植——群（全体・移動・workspace / tab・pane）
  * ごとの一覧、`custom` 群は本製品にカスタムキーバインド（独自コマンド）が無いので常に出さない（D56 の訂正 8）。
  * **キーは現在の割り当て（`settings.keymap`）から作る**（20260921-keybinding-customization。design「案内の追従」・D8）——prefix の後のキーは `prefix+v`、直接のキーは
- * `ctrl+alt+d`、割り当てなしは「なし」。**移動の群（navigate モードの中の6操作）も現在の割り当て
- * （`settings.navigateKeymap`）から作る**（20260923-navigate-mode-keys。design「HelpDialog.vue『移動』群の
- * 動的化」で「固定の表記」から変更）——`esc`（戻る）・`enter`（決定）は6操作に含まれないため固定のまま、
+ * `ctrl+alt+d`、割り当てなしは「なし」。**移動の群（navigate モードの中の操作。当初6つの移動操作
+ * のみだったが、20260925-sidebar-keyboard-menu で `navigate_open_menu`〔移動ではなくメニューを
+ * 開く操作〕が7つ目として加わった）も現在の割り当て（`settings.navigateKeymap`）から作る**
+ * （20260923-navigate-mode-keys。design「HelpDialog.vue『移動』群の動的化」で「固定の表記」から
+ * 変更）——`esc`（戻る）・`enter`（決定）はこの動的な一覧に含まれないため固定のまま、
  * `←`/`→` は予約キーで表に無いため pane 左右移動の固定フォールバックとして常に併記する（decisions D3）。
  * 絞り込みは herdr と同じくキー表記・説明の部分一致（大小無視）で、一致 0 件の群は丸ごと消える。
  *
@@ -52,7 +54,7 @@ function actionEntries(group: ActionGroup): HelpEntry[] {
   });
 }
 
-/** navigate 6操作の現在の割り当て表記（20260923-navigate-mode-keys）。割り当てなしは「なし」。 */
+/** navigate モードの操作の現在の割り当て表記（20260923-navigate-mode-keys）。割り当てなしは「なし」。 */
 function navigateBindingText(id: NavigateKeyId): string {
   const list = settings.navigateKeymap.bindingsOf(id);
   return list.length === 0 ? "なし" : list.join(" / ");
@@ -67,8 +69,12 @@ function navigateEntry(id: NavigateKeyId): HelpEntry {
   return { keys: navigateBindingText(id), label: navigateKeyDef(id)?.label ?? id, grayed: list.length === 0 };
 }
 /**
- * 移動の群：navigate モード（`prefix+w`）の中の6操作は現在の割り当てから作る（AC7）。
- * `esc`（戻る）・`enter`（決定）は6操作に含まれないため固定のまま。`←`/`→` は予約キーで表に無いが、
+ * 移動の群：navigate モード（`prefix+w`）の中の、`NAVIGATE_KEYS` カタログにある操作は現在の
+ * 割り当てから作る（AC7）。当初は移動6操作のみだったが、20260925-sidebar-keyboard-menu で
+ * `navigate_open_menu`（移動ではなくメニューを開く操作）がカタログの7つ目として加わった——
+ * `navigateEntry()` で他の操作と同じ形で組み立てる。`esc`（戻る）・`enter`（決定）は
+ * `NAVIGATE_KEYS` カタログに無い（`NavigateMode` 自身の固定 case）ため、この群の配列の中では
+ * 引き続き固定の表記のまま。`←`/`→` は予約キーで表に無いが、
  * `NavigateMode` の固定 case として常に pane 左右移動に効くため、表の割り当てに関わらず常に併記する
  * （decisions D3）。**pane 左右の2行は `grayed` を立てない**——表の割り当て（`h`/`l` 等）を外しても
  * 矢印キーが常に効くため、「使えない」ように見せない（design のスケッチどおり。workspace 上下・
@@ -78,6 +84,7 @@ const navigateEntries = computed<HelpEntry[]>(() => [
   { keys: "esc", label: "戻る" },
   navigateEntry("navigate_workspace_up"),
   navigateEntry("navigate_workspace_down"),
+  navigateEntry("navigate_open_menu"),
   { keys: `${navigateBindingText("navigate_pane_left")} ・ ←`, label: navigateKeyDef("navigate_pane_left")!.label },
   navigateEntry("navigate_pane_down"),
   navigateEntry("navigate_pane_up"),

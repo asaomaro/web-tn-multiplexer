@@ -312,6 +312,51 @@ describe("ContextMenu — キーボード（APG の Menu）", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(view.contextMenu).toBeNull();
   });
+
+  // 20260925-sidebar-keyboard-menu review round1 must（decisions D4）: onKeydown が
+  // stopPropagation() を呼ばないと、navigate モード中にメニューを開いた状態で矢印キー・
+  // Space・Escape を押したとき、メニュー内の処理と同時に main.ts の window レベルの
+  // keydown listener（KeyRouter/NavigateMode）へも同じキーが二重配送され、navigateSelection
+  // が意図せず動く・openMenu action が再発火する実害があった。
+  it("矢印キーは window まで二重配送されない（メニューを開いたまま。PaneFrame.vue と同じ stopPropagation）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(makeActions());
+    const menu = wrapper.get('[role="menu"]');
+    const onWindowKeydown = vi.fn();
+    window.addEventListener("keydown", onWindowKeydown);
+    try {
+      await menu.trigger("keydown", { key: "ArrowDown" });
+      await menu.trigger("keydown", { key: "ArrowUp" });
+    } finally {
+      window.removeEventListener("keydown", onWindowKeydown);
+    }
+    expect(onWindowKeydown).not.toHaveBeenCalled();
+    expect(view.contextMenu).not.toBeNull(); // 矢印キーでは閉じない（前提の確認）
+  });
+
+  it("Escape・Enter で閉じるキーも window まで二重配送されない", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+    const wrapper = mountMenu(makeActions());
+    const onWindowKeydown = vi.fn();
+    window.addEventListener("keydown", onWindowKeydown);
+    try {
+      await wrapper.get('[role="menu"]').trigger("keydown", { key: "Escape" });
+      expect(view.contextMenu).toBeNull();
+
+      view.openContextMenu({ kind: "workspace", workspaceId: "w1" }, { x: 0, y: 0 });
+      await wrapper.vm.$nextTick();
+      await wrapper.get('[role="menu"]').trigger("keydown", { key: "Enter" });
+    } finally {
+      window.removeEventListener("keydown", onWindowKeydown);
+    }
+    expect(onWindowKeydown).not.toHaveBeenCalled();
+  });
 });
 
 describe("ContextMenu — 閉じたときのフォーカスの戻し先（APG の Menu。D110）", () => {

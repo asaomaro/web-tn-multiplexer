@@ -59,8 +59,11 @@ const actionsByGroup = computed(() => {
   })).filter((g) => g.actions.length > 0); // AC2：0 件の群は見出しごと消える
 });
 /**
- * navigate 6操作の絞り込み（20260923-navigate-mode-keys）。既存34〜35操作の絞り込みと同じ扱い
- * （一致 0 件なら節ごと消える）だが、群を持たないので `NAVIGATE_KEYS` を直接絞り込む。
+ * navigate 操作の絞り込み（20260923-navigate-mode-keys。当初は移動6操作のみだったが、
+ * 20260925-sidebar-keyboard-menu で `navigate_open_menu` が7つ目として加わった——
+ * `NAVIGATE_KEYS` を直接参照するこのファイルは無改修で新エントリを自動的に扱う）。
+ * 既存34〜35操作の絞り込みと同じ扱い（一致 0 件なら節ごと消える）だが、群を持たないので
+ * `NAVIGATE_KEYS` を直接絞り込む。
  */
 const navigateKeysFiltered = computed(() => {
   const q = filterText.value.trim().toLowerCase();
@@ -69,7 +72,7 @@ const navigateKeysFiltered = computed(() => {
 
 /**
  * この節の取り込み対象は2系統ある（20260923-navigate-mode-keys）：既存34〜35操作（`AssignTarget`。
- * prefix の後／直接のキー）と、navigate モードの6操作（`NavigateAssignTarget`。prefix なしの素のキー。
+ * prefix の後／直接のキー）と、navigate モードの操作（`NavigateAssignTarget`。prefix なしの素のキー。
  * design「別の表」）。取り込みの枠組み（`captureAttrs`/`onCaptureKeydown`/`endCapture`/フォーカス制御）は
  * 共通なので、`CaptureTarget` の合併型で1つの状態に載せ、`kind` で検証・適用先だけ分ける。
  */
@@ -91,7 +94,7 @@ const pendingMove = ref<{
 } | null>(null);
 
 const bindingsOf = (id: ActionId): readonly string[] => settings.keymap.bindingsOf(id);
-/** navigate 6操作版の `bindingsOf`（20260923-navigate-mode-keys）。 */
+/** navigate 操作版の `bindingsOf`（20260923-navigate-mode-keys）。 */
 const navigateBindingsOf = (id: NavigateKeyId): readonly string[] =>
   settings.navigateKeymap.bindingsOf(id);
 /**
@@ -144,7 +147,7 @@ const changeTarget = (id: ActionId, binding: string): AssignTarget => ({
   via: viaOf(binding),
   replacing: binding,
 });
-/** navigate 6操作の［追加］の対象（prefix/direct の区別が無いので1種類）。 */
+/** navigate 操作の［追加］の対象（prefix/direct の区別が無いので1種類）。 */
 const navigateAddTarget = (id: NavigateKeyId): NavigateAssignTarget => ({ kind: "navigateKey", id });
 const navigateChangeTarget = (id: NavigateKeyId, binding: string): NavigateAssignTarget => ({
   kind: "navigateKey",
@@ -334,7 +337,7 @@ function removeBinding(id: ActionId, binding: string, ev: Event): void {
   });
 }
 
-/** navigate 6操作版の `removeBinding`（20260923-navigate-mode-keys）。フォーカスは同じ行の次の部品
+/** navigate 操作版の `removeBinding`（20260923-navigate-mode-keys）。フォーカスは同じ行の次の部品
  *  （無ければ単一の［追加］）へ——navigate は prefix/direct の区別が無いので追加ボタンは1つだけ。 */
 function removeNavigateBinding(id: NavigateKeyId, binding: string, ev: Event): void {
   const current = navigateBindingsOf(id);
@@ -356,7 +359,7 @@ function removeNavigateBinding(id: NavigateKeyId, binding: string, ev: Event): v
 // ---------------------------------------------------------------------------------------------------------------------
 
 const isOverridden = (id: ActionId): boolean => settings.keyPrefs.bindings[id] !== undefined;
-/** navigate 6操作版の `isOverridden`。 */
+/** navigate 操作版の `isOverridden`。 */
 const isNavigateOverridden = (id: NavigateKeyId): boolean =>
   settings.keyPrefs.navigateKeys[id] !== undefined;
 
@@ -384,7 +387,7 @@ function resetAction(id: ActionId, ev: Event): void {
   void nextTick(() => row?.querySelector<HTMLElement>("[data-add='prefix']")?.focus());
 }
 
-/** navigate 6操作版の `resetAction`。フォーカスは同じ行の単一の［追加］へ。 */
+/** navigate 操作版の `resetAction`。フォーカスは同じ行の単一の［追加］へ。 */
 function resetNavigateKeyAction(id: NavigateKeyId, ev: Event): void {
   const row = (ev.currentTarget as HTMLElement | null)?.closest("details") ?? null;
   const plan = planNavigateReset(settings.navigateKeymap, settings.keyPrefs, { kind: "navigateKey", id });

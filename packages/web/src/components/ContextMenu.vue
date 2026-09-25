@@ -124,25 +124,36 @@ function activate(index: number): void {
   item.run();
 }
 
+/**
+ * `main.ts` の window の keydown（端末外のキーを `KeyRouter`/`NavigateMode` へ流す経路）に
+ * 二重に渡さない（`PaneFrame.vue:238-246` と同じパターン。20260925-sidebar-keyboard-menu
+ * review round1 must——`stopPropagation()` が無かったため、navigate モード中にメニューを
+ * 開いた状態で矢印キー・Space を押すと、メニュー内の操作と同時に `navigateSelection` が
+ * 動く・`openMenu` action が再発火する実害があった。decisions D4）。
+ */
 function onKeydown(ev: KeyboardEvent): void {
   if (ev.key === "Escape") {
     ev.preventDefault();
+    ev.stopPropagation();
     close();
     restoreFocus();
     return;
   }
   if (ev.key === "ArrowDown") {
     ev.preventDefault();
+    ev.stopPropagation();
     activeIndex.value = (activeIndex.value + 1) % items.value.length;
     return;
   }
   if (ev.key === "ArrowUp") {
     ev.preventDefault();
+    ev.stopPropagation();
     activeIndex.value = (activeIndex.value - 1 + items.value.length) % items.value.length;
     return;
   }
   if (ev.key === "Enter" || ev.key === " ") {
     ev.preventDefault();
+    ev.stopPropagation();
     activate(activeIndex.value);
   }
 }

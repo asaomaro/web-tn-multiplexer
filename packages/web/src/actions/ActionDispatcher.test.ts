@@ -710,6 +710,23 @@ describe("ActionDispatcher — navigate", () => {
     expect(conn.requests).toEqual([]);
   });
 
+  it("openMenu: 選択があれば navigateMenuRequested を立てる。DOM には一切触れない（20260925-sidebar-keyboard-menu。design「設計方針」）", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    view.setNavigateSelection("w1");
+    makeDispatcher(conn).dispatcher.run({ type: "navigate", op: "openMenu" });
+    expect(view.navigateMenuRequested).toBe(true);
+    expect(view.navigateSelection).toBe("w1"); // 選択は消えない（activate と違う）
+    expect(conn.requests).toEqual([]);
+  });
+
+  it("openMenu: 選択が無ければ何もしない", () => {
+    const conn = makeConnection();
+    const view = useViewStore(pinia);
+    makeDispatcher(conn).dispatcher.run({ type: "navigate", op: "openMenu" });
+    expect(view.navigateMenuRequested).toBe(false);
+  });
+
   it("paneDir は focusDir と同じ経路を使う", () => {
     const conn = makeConnection();
     const session = useSessionStore(pinia);

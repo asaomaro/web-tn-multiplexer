@@ -167,6 +167,27 @@ function onRowContextMenu(ev: MouseEvent, row: SpaceRow): void {
   else if (row.groupTargetId) actions?.openContextMenu({ kind: "group", groupId: row.groupTargetId }, { x: ev.clientX, y: ev.clientY });
 }
 
+/**
+ * navigate モード中の「メニューを開く」要求（`ActionDispatcher.navigate("openMenu")`。
+ * 20260925-sidebar-keyboard-menu。design「振る舞いの詳細」手順4）。要求は先に消してから
+ * （一度きりのトリガー保証。design「エラー処理 / 異常系」）、選択中の行の DOM を
+ * `data-drop-workspace-id`（D&D 用に既存。`onRowContextMenu` と同じ target の形）で探し、
+ * `getBoundingClientRect()` の位置でメニューを開く。行が見つからなければ `{x:0, y:0}` に
+ * フォールバックする（`PaneFrame.vue` の `rect?.left ?? 0` と同じ防御）。
+ */
+watch(
+  () => view.navigateMenuRequested,
+  (requested) => {
+    if (!requested) return;
+    const workspaceId = view.navigateSelection;
+    view.clearNavigateMenuRequest();
+    if (!workspaceId) return;
+    const rowEl = el.value?.querySelector<HTMLElement>(`[data-drop-workspace-id="${workspaceId}"]`);
+    const rect = rowEl?.getBoundingClientRect();
+    actions?.openContextMenu({ kind: "workspace", workspaceId }, { x: rect?.left ?? 0, y: rect?.top ?? 0 });
+  },
+);
+
 /** グループの頭の折りたたみアイコン。手動グループはサーバに永続化（RPC）、worktree 自動グループは
  *  ブラウザだけ（`view.toggleAutoGroupCollapsed`。20260923-workspace-grouping）。 */
 function onToggleCollapse(row: SpaceRow): void {

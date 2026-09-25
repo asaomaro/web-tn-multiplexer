@@ -169,12 +169,14 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     // 全体：prefix・?・q・s・o・（後続の shift+r）
     expect(groups[0]!.findAll("dt").map((el) => el.text())).toEqual(["ctrl+b", "prefix+?", "prefix+q", "prefix+s", "prefix+o", "prefix+shift+r"]);
     expect(groups[0]!.findAll("dd")[0]!.text()).toContain("prefix");
-    // 移動（navigate モードの6操作は現在の割り当てから作る。20260923-navigate-mode-keys。AC7）。
+    // 移動（navigate モードの操作は現在の割り当てから作る。20260923-navigate-mode-keys。AC7）。
     // 既定は up/down/h/j/k/l で、pane 左右は矢印の固定フォールバックが常に併記される（decisions D3）。
+    // navigate_open_menu（既定 space）は20260925-sidebar-keyboard-menuで7件目として加わった。
     expect(groups[1]!.findAll("dt").map((el) => el.text())).toEqual([
       "esc",
       "up",
       "down",
+      "space",
       "h ・ ←",
       "j",
       "k",
@@ -288,6 +290,7 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
       "esc",
       "up",
       "down",
+      "space",
       "ctrl+h ・ ←",
       "j",
       "k",
@@ -308,8 +311,9 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     expect(rows.map((el) => el.text())).toContain("なし ・ ←"); // 素の割り当ては無いが矢印は常に効く
     expect(rows.map((el) => el.text())).toContain("なし"); // workspace 上は矢印の固定フォールバックが無い
     expect(rows[1]!.classes()).toContain("help-dialog-grayed"); // navigate_workspace_up の行（未設定なので灰色）
-    // pane 左（rows[3]）は素の割り当てが無くても矢印が常に効くので、灰色にしない（design のスケッチどおり）。
-    expect(rows[3]!.text()).toBe("なし ・ ←");
-    expect(rows[3]!.classes()).not.toContain("help-dialog-grayed");
+    // pane 左（rows[4]。rows[3] は 20260925-sidebar-keyboard-menu で加わった navigate_open_menu の行）は
+    // 素の割り当てが無くても矢印が常に効くので、灰色にしない（design のスケッチどおり）。
+    expect(rows[4]!.text()).toBe("なし ・ ←");
+    expect(rows[4]!.classes()).not.toContain("help-dialog-grayed");
   });
 });

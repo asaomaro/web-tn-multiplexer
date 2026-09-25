@@ -222,6 +222,13 @@ export const useViewStore = defineStore("view", () => {
   const preDialogFocusPaneId = ref<string | null>(null);
   /** navigate モード中に選択中の workspace（`↑/↓` で動かす。Enter で確定）。 */
   const navigateSelection = ref<string | null>(null);
+  /**
+   * navigate モード中に「選択中の workspace のメニューを開いてほしい」という一度きりの要求
+   * （20260925-sidebar-keyboard-menu。design「設計方針」）。`ActionDispatcher`（DOM 非依存）が
+   * 立て、`Sidebar.vue`（行の DOM を実際に持つ場所）が消費して `getBoundingClientRect()` から
+   * 実際にメニューを開く。
+   */
+  const navigateMenuRequested = ref(false);
   const contextMenu = ref<{ target: MenuTarget; at: { x: number; y: number } } | null>(null);
   /**
    * pane 名ラベルをドラッグして入れ替える操作の一時状態（20260923-pane-name-dnd-swap。design「1.」）。
@@ -354,6 +361,14 @@ export const useViewStore = defineStore("view", () => {
 
   function setNavigateSelection(workspaceId2: string | null): void {
     navigateSelection.value = workspaceId2;
+  }
+
+  function requestNavigateMenu(): void {
+    navigateMenuRequested.value = true;
+  }
+
+  function clearNavigateMenuRequest(): void {
+    navigateMenuRequested.value = false;
   }
 
   function openContextMenu(target: MenuTarget, at: { x: number; y: number }): void {
@@ -495,6 +510,7 @@ export const useViewStore = defineStore("view", () => {
     openDialog,
     dialogContext,
     navigateSelection,
+    navigateMenuRequested,
     contextMenu,
     paneDrag,
     workspaceDrag,
@@ -520,6 +536,8 @@ export const useViewStore = defineStore("view", () => {
     closeDialog,
     retargetPreDialogFocus,
     setNavigateSelection,
+    requestNavigateMenu,
+    clearNavigateMenuRequest,
     openContextMenu,
     closeContextMenu,
     startPaneDrag,
