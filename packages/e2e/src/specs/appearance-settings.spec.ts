@@ -95,8 +95,9 @@ test("tab バー：tab が1個のときは無く、2個以上で現れる。非�
   // （消えたまま迷子にならない）。最初の tab 項目へフォーカスしてから、表示中（＝いま作った方）
   // の tab を閉じる（`.focus()` はクリックと違い `selectTab` を呼ばないので、閉じるのは
   // 引き続き `view.tabId` が指す「second-tab」——`.tab-bar-new` ではなく `.tab-bar-item` を
-  // 使うのは、`.tab-bar-new` だけ `@keydown.stop` が付いており、フォーカスしたままだと
-  // `prefix+X` が window レベルの KeyRouter まで届かないため）。
+  // 使うのは、この AC がタブ項目へのフォーカスを検証対象としているため。`.tab-bar-new` に
+  // フォーカスが残っていても、20260925-focus-trapped-keybindings で無修飾の Enter/Space
+  // だけを止めるよう直ったので、`prefix+X` は今は届く）。
   await page.locator(".tab-bar-item").first().focus();
   await expect(page.locator(".tab-bar-item").first()).toBeFocused();
   await prefixKey(page, "X"); // close_tab（busy でなければ確認なし。workspace-tab-pane.spec.ts と同じ）

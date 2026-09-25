@@ -168,7 +168,7 @@ test("直接のキー：ctrl+alt+d を右へ分割に足すと、prefix なし�
   await expect.poll(() => paneCount(page)).toBe(3);
 });
 
-test("端末の外（フォーカスできない要素＝サイドバーの行をクリックした後）でも、直接のキーは効く（AC5。`keydown` を止めるボタンの上は既知の制約）", async ({
+test("端末の外（フォーカスできない要素＝サイドバーの行をクリックした後）でも、直接のキーは効く（AC5）", async ({
   browser,
   appServer,
 }) => {
@@ -187,6 +187,70 @@ test("端末の外（フォーカスできない要素＝サイドバーの行�
   await page.keyboard.press("Control+Alt+d");
   await expect.poll(() => paneCount(page)).toBe(2);
   await context.close();
+});
+
+// 20260925-focus-trapped-keybindings（review 指摘。AC1・AC2・AC4・AC8）: 単体テスト
+// （happy-dom）は「コード側が伝播を止めていない」ことまでしか示せない。実ブラウザで
+// 「ボタンにフォーカスが残ったまま prefix・直接のキーを押すと実際に効く」ことを確認する。
+// `Sidebar.vue`・`TabBar.vue` は design が明示的に「モジュールを共有しない」とした別々の
+// `onButtonKeydown`（同型だが同一参照ではない）なので、代表1箇所ずつ（サイドバーの
+// 「並び順」・tab バーの「＋」）で個別に確認する（T6 taskcheck round1 の指摘）。
+// 「並び順」ボタンを選ぶのは、クリックしてもダイアログ等を開かず（＋新規・メニューと違い
+// フォーカスを奪う副作用が無く）、クリック後もボタン自身へフォーカスが残るため。
+
+test("サイドバーのボタン（並び順）にフォーカスが残ったままでも prefix キーが実際に効く（AC1・AC8）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  expect(await paneCount(page)).toBe(1);
+  const sortBtn = page.locator(".sidebar-spaces .sidebar-sort-btn");
+  await sortBtn.click();
+  await expect(sortBtn).toBeFocused();
+  // フォーカスが残ったまま prefix キーで実際に分割できる。
+  await prefixKey(page, "v");
+  await expect.poll(() => paneCount(page)).toBe(2);
+});
+
+test("サイドバーのボタン（並び順）にフォーカスが残ったままでも修飾付きの直接のキーが実際に効く（AC2・AC8）", async ({
+  browser,
+  appServer,
+}) => {
+  // prefix を経由しない直接のキー（AC2）は既定に無いので割り当てる（既存の AC5 テストと同じ形）。
+  const { context, page } = await openWithPrefs(browser, appServer, {
+    keys: { bindings: { split_vertical: ["prefix+v", "ctrl+alt+d"] } },
+  });
+  expect(await paneCount(page)).toBe(1);
+  const sortBtn = page.locator(".sidebar-spaces .sidebar-sort-btn");
+  await sortBtn.click();
+  await expect(sortBtn).toBeFocused();
+  await page.keyboard.press("Control+Alt+d");
+  await expect.poll(() => paneCount(page)).toBe(2);
+  await context.close();
+});
+
+test("tab バーのボタン（＋）にフォーカスが残ったままでも prefix キーが実際に効く（AC4・AC8）", async ({
+  page,
+  appServer,
+}) => {
+  await openApp(page, appServer);
+  // tab バーは tab が2個以上でないと現れない（自動非表示）ので、まず prefix+c でもう1つ作る。
+  await focusTerminal(page);
+  await prefixKey(page, "c");
+  await expect(page.getByRole("textbox", { name: "新しい tab の名前" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".tab-bar-item")).toHaveCount(2);
+  const paneCountBefore = await paneCount(page);
+  // `.click()` ではなく `.focus()` を使う——`.tab-bar-new` のクリックは新しい tab の名前入力
+  // ダイアログを開き、フォーカスがそちらへ移ってしまう（「並び順」ボタンと違う副作用を持つ）。
+  // `onButtonKeydown` は keydown だけを見るハンドラなので、フォーカスの経路（クリック／
+  // プログラムからの `.focus()`／Tab 移動）を問わず同じに振る舞う——D11(1) が報告した実際の
+  // 不具合も「クリック後にフォーカスが残る」状態が起点であり、ここでの検証対象と同じ状態。
+  const newTabBtn = page.locator(".tab-bar-new");
+  await newTabBtn.focus();
+  await expect(newTabBtn).toBeFocused();
+  await prefixKey(page, "v");
+  await expect.poll(() => paneCount(page)).toBe(paneCountBefore + 1);
 });
 
 test("衝突は理由（持ち主の名前）を出して拒否し、元のまま終わってフォーカスは押したボタンへ戻る（AC6・AC-I2・AC-I4）", async ({

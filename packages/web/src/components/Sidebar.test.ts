@@ -1,7 +1,7 @@
 import type { AgentInfo, MethodName, ParamsOf, Pane, ResultOf, Tab, Workspace } from "@wtm/protocol";
 import { mount } from "@vue/test-utils";
 import { createPinia, type Pinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActionDispatcherKey, ConnectionKey } from "../injection.js";
 import type { ConnectionPort } from "../net/ports.js";
 import { useSessionStore } from "../store/session.js";
@@ -58,8 +58,11 @@ function makeActions() {
   return { openContextMenu: vi.fn(), run: vi.fn(), toggleGroupCollapsed: vi.fn(), moveWorkspacesByDrag: vi.fn() };
 }
 
-function mountSidebar(conn: ConnectionPort, actions?: Partial<ReturnType<typeof makeActions>>) {
+function mountSidebar(conn: ConnectionPort, actions?: Partial<ReturnType<typeof makeActions>>, opts: { attachTo?: boolean } = {}) {
   return mount(Sidebar, {
+    // 20260925-focus-trapped-keybindings：keydown の window までの bubble を確認するテストは
+    // 要素が document に attach されていないと届かない（`PaneFrame.test.ts` の `mountFrame` と同じ理由）。
+    ...(opts.attachTo ? { attachTo: document.body } : {}),
     global: {
       plugins: [pinia],
       provide: {
@@ -332,6 +335,76 @@ describe("Sidebar — ボタン", () => {
     expect(wrapper.get(".sidebar-agents .sidebar-sort-btn").text()).toBe("優先度順");
     await wrapper.get(".sidebar-agents .sidebar-sort-btn").trigger("click");
     expect(view.agentSort).toBe("grouped");
+  });
+});
+
+// 20260925-focus-trapped-keybindings。`onButtonKeydown`（`Sidebar.vue` 6箇所）が、無修飾の
+// Enter/Space だけを window の keydown（`main.ts` 側の prefix・直接キー処理の経路）へ渡さない
+// ことを、コピペの貼り忘れ検知のため対象6箇所**全て**で個別に確認する
+// （`PaneFrame.test.ts:101-111` と同型。design「受け入れ基準との対応」AC1）。
+describe("Sidebar — ボタンの keydown：無修飾の Enter/Space だけ window へ渡さない（AC1・AC2・AC3・AC5）", () => {
+  // `attachTo: document.body` で mount した要素は自動では外れない（`PaneFrame.test.ts` と同じ後始末）。
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  /**
+   * 無修飾の Enter/Space は window の keydown へ渡さない。修飾付き（ctrl/alt）・他のキー
+   * （Tab 等）は従来どおり渡す。いずれの場合も `ev.defaultPrevented` は false のまま
+   * （ネイティブな活性化を妨げない＝AC3）。happy-dom は合成 keydown からのネイティブな
+   * button activation を再現しないため（decisions.md D0）、`click` の実発火ではなく
+   * `defaultPrevented` で確認する。
+   */
+  function expectStopsOnlyUnmodifiedEnterSpace(target: Element): void {
+    const onWindowKeydown = vi.fn();
+    window.addEventListener("keydown", onWindowKeydown);
+    const dispatch = (init: KeyboardEventInit): boolean => {
+      const ev = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      target.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    expect(dispatch({ key: "Enter" })).toBe(false);
+    expect(dispatch({ key: " " })).toBe(false);
+    expect(onWindowKeydown).not.toHaveBeenCalled(); // 無修飾の Enter/Space はここまで届いていない（AC1・AC2）
+    expect(dispatch({ key: "Enter", ctrlKey: true })).toBe(false);
+    expect(dispatch({ key: " ", altKey: true })).toBe(false);
+    expect(dispatch({ key: "Tab" })).toBe(false);
+    expect(dispatch({ key: "b", ctrlKey: true, metaKey: true })).toBe(false);
+    window.removeEventListener("keydown", onWindowKeydown);
+    expect(onWindowKeydown).toHaveBeenCalledTimes(4); // 修飾付き Enter/Space・Tab・他の修飾キーは渡す（AC5）
+  }
+
+  it("並び順（spaces）", () => {
+    const wrapper = mountSidebar(makeConnection(), undefined, { attachTo: true });
+    expectStopsOnlyUnmodifiedEnterSpace(wrapper.get(".sidebar-spaces .sidebar-sort-btn").element);
+  });
+
+  it("グループ折りたたみ▸", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", { groupId: "g1" }));
+    session.groupUpserted({ id: "g1", label: "backend", collapsed: false });
+    const wrapper = mountSidebar(makeConnection(), undefined, { attachTo: true });
+    expectStopsOnlyUnmodifiedEnterSpace(wrapper.get(".sidebar-group-toggle").element);
+  });
+
+  it("＋新規", () => {
+    const wrapper = mountSidebar(makeConnection(), undefined, { attachTo: true });
+    expectStopsOnlyUnmodifiedEnterSpace(wrapper.findAll(".sidebar-section-footer .sidebar-btn")[0]!.element);
+  });
+
+  it("メニュー", () => {
+    const wrapper = mountSidebar(makeConnection(), undefined, { attachTo: true });
+    expectStopsOnlyUnmodifiedEnterSpace(wrapper.get(".sidebar-section-footer .sidebar-btn-right").element);
+  });
+
+  it("並び順（agents）", () => {
+    const wrapper = mountSidebar(makeConnection(), undefined, { attachTo: true });
+    expectStopsOnlyUnmodifiedEnterSpace(wrapper.get(".sidebar-agents .sidebar-sort-btn").element);
+  });
+
+  it("サイドバー折りたたみ«/»", () => {
+    const wrapper = mountSidebar(makeConnection(), undefined, { attachTo: true });
+    expectStopsOnlyUnmodifiedEnterSpace(wrapper.get(".sidebar-collapse-btn").element);
   });
 });
 

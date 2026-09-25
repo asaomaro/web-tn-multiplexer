@@ -894,9 +894,14 @@ pnpm --filter @wtm/e2e exec playwright test performance agent-detection --headed
   （`Option+D` → `∂`）、macOS のときだけ物理キーの位置（`code`）で元の英字・数字へ戻す。**Dvorak・QWERTZ・AZERTY の macOS では、化けた Option の chord の表示が押した字と食い違う**
   （押せば効く。同 decisions D7）。Windows の AltGr は Ctrl+Alt と同じに見えるため、AltGr で**合成された文字**（`@`・`[` が別のキーにある配列）だけを拒否し、英数字と US 配列の記号は通す（記号は、同じ物理キーを同じ shift の状態で押した US 配列の文字と比べる。**記号の位置が US と違う配列**〔Dvorak 等〕では、Firefox・Windows で記号が「AltGr で入力する文字」として拒否されうる〔英数字は通る〕。逆に、**AltGr で打つ記号が US 配列と同じ物理キーにある配列**では合成と判定できない。どちらも実機は未確認）。
   修飾キー付きの句読点は環境次第（herdr の文書と同じ）。
-- **キーの割り当て：`keydown` を止めるボタンにフォーカスがある間は、prefix も直接のキーも届かない**（既存の挙動。20260921-keybinding-customization の decisions D11）。サイドバーの［＋新規］［メニュー］［並び順］［«］・
-  tab バーの［＋］は `keydown` を止め、pane の枠は Enter・Space・↓ を止める。マウスで押したあとにフォーカスが残っていると、端末をクリックするまで prefix・直接のキーが効かない
-  （端末・サイドバーの行・フォーカスできない要素をクリックした後では効く）。
+- **キーの割り当て：pane の枠にフォーカスがある間は、prefix も直接のキーも届かない**（既存の挙動。20260921-keybinding-customization の decisions D11）。pane の枠は無修飾の
+  Enter・Space・↓・ContextMenu・Shift+F10 の keydown を止める（修飾キー（Ctrl・Alt・Meta）付きは止めない）。マウスで押したあとにフォーカスが残っていると、端末をクリックするまで prefix・直接のキーが効かない
+  （端末・サイドバーの行・フォーカスできない要素をクリックした後では効く）。**サイドバーの［＋新規］［メニュー］［並び順］［«/»］・グループ折りたたみ［▸/▾］・
+  tab バーの［＋］は、無修飾の Enter・Space の keydown のときだけ伝播を止めるよう直したので、これらのボタンにフォーカスが残っていても prefix・直接のキーは効く**
+  （20260925-focus-trapped-keybindings。20260921-keybinding-customization の decisions D11(1) が送っていた欠落）。ただし navigate モード（`prefix+w`）中にこれらの
+  ボタンへフォーカスが残っている状態で Enter・Space を押すと、ボタン自身の活性化が優先され、navigate の確定・`navigate_open_menu` には届かない——この修正によって
+  「ボタンにフォーカスが残ったまま navigate モードへ入る」という、以前は到達不能だった経路が新たに可能になったが、`PaneFrame.vue`/`ContextMenu.vue` が既に持つ
+  「フォーカス中の要素が自分の Enter/Space を優先する」という既存の優先順位をそのまま踏襲した結果であり、新しい設計判断は加えていない（既知の制約）。
 - **キーの割り当て：おすすめ一式には、環境によって届かないキーがある**（20260921-keybinding-customization の decisions D13）。`Ctrl+Alt+L` は Linux のデスクトップの一部（KDE 等）が画面のロックに使い、herdr の文書も「避けるもの」に挙げる。`Ctrl+Alt+[`・`]` は、`[`・`]` を AltGr で打つ配列（ドイツ語等）では AltGr で合成された文字として端末へ通す。
   届かないキーは、設定の［変更］で別のキーに付け替える。
 - **キーの割り当て：navigate・resize モードの中のキーは修飾キーを見ない**（既存の挙動。20260921-keybinding-customization の AC12〔そのモードの中のキーは変えない〕）。prefix を `ctrl+l`・`alt+j` のように文字を含む形へ変えても、prefix は terminal・copy モードで

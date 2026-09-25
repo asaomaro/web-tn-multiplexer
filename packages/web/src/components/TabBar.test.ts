@@ -198,6 +198,36 @@ describe("TabBar — 新しいタブのボタン", () => {
     expect(list.findAll(".tab-bar-new").length).toBe(0);
     expect(list.findAll('[role="tab"]').length).toBe(2);
   });
+
+  // 20260925-focus-trapped-keybindings（AC4）。`Sidebar.test.ts` の
+  // `expectStopsOnlyUnmodifiedEnterSpace` と同型（`PaneFrame.test.ts:101-111`）。
+  it("keydown：無修飾の Enter/Space だけ window へ渡さない（AC4）", () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    // `tab-bar` 全体が `v-if="tabs.length !== 1"` で隠れる（自動非表示）ので、タブは2つにする。
+    session.workspaceUpserted(makeWorkspace("w1", ["t1", "t2"]));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.tabUpserted(makeTab("t2", "w1"));
+    view.setView("w1", "t1");
+    const wrapper = mountTabBar(makeConnection());
+    const target = wrapper.get(".tab-bar-new").element;
+    const onWindowKeydown = vi.fn();
+    window.addEventListener("keydown", onWindowKeydown);
+    const dispatch = (init: KeyboardEventInit): boolean => {
+      const ev = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      target.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    expect(dispatch({ key: "Enter" })).toBe(false);
+    expect(dispatch({ key: " " })).toBe(false);
+    expect(onWindowKeydown).not.toHaveBeenCalled(); // 無修飾の Enter/Space はここまで届いていない
+    expect(dispatch({ key: "Enter", ctrlKey: true })).toBe(false);
+    expect(dispatch({ key: " ", altKey: true })).toBe(false);
+    expect(dispatch({ key: "Tab" })).toBe(false);
+    expect(dispatch({ key: "b", ctrlKey: true, metaKey: true })).toBe(false);
+    window.removeEventListener("keydown", onWindowKeydown);
+    expect(onWindowKeydown).toHaveBeenCalledTimes(4); // 修飾付き Enter/Space・Tab・他の修飾キーは渡す
+  });
 });
 
 // 20260922-appearance-settings-rest T6（design「振る舞いの詳細」US2・US3）。
