@@ -13,6 +13,7 @@ import { ConfigError } from "./config.js";
 import { STATE_DIR_LOCK_FILE, StateDirLock } from "./persist/StateDirLock.js";
 import { DefaultAuthService } from "./auth/AuthService.js";
 import { FsAuthFile } from "./persist/AuthFile.js";
+import { ChildProcessGitRunner } from "./infra/GitRunner.js";
 
 async function getFreePort(): Promise<number> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -395,6 +396,58 @@ describe("composeServer (integration)", () => {
     const helloReply = await requestUntilMatchingId(ws, "h1", "client.hello", { protocol: 1, kind: "desktop" });
     expect((helloReply as { clientId: string }).clientId).toBeTruthy();
   }, 10000);
+
+  it("--worktree-dir で起動すると、worktree.create RPC で作られたパスがその配下になる（20260924-worktree-dir-config AC1。design「テストで確認すること」——実ホームディレクトリは使わない）", async () => {
+    const stateDir = await makeTempDir("wtm-compose-wtdir-");
+    const worktreeDir = await makeTempDir("wtm-compose-wtdir-root-");
+    const repo = await makeTempDir("wtm-compose-wtdir-repo-");
+
+    const git = new ChildProcessGitRunner();
+    async function runGit(args: string[]): Promise<void> {
+      const r = await git.run(repo, args, 10_000);
+      if (r.code !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+    }
+    await runGit(["init", "-q", "-b", "main"]);
+    await runGit(["config", "user.email", "t@example.com"]);
+    await runGit(["config", "user.name", "t"]);
+    await runGit(["commit", "-q", "--allow-empty", "-m", "init"]);
+
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [], worktreeDir });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    cleanups.push(() => rm(worktreeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    cleanups.push(() => rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await server.listen();
+
+    const origin = `http://127.0.0.1:${port}`;
+    const loginRes = await fetch(`${origin}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ token: server.freshToken }),
+    });
+    expect(loginRes.status).toBe(204);
+    const cookie = loginRes.headers.get("set-cookie")!.split(";")[0]!;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie, origin, host: `127.0.0.1:${port}` } });
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    cleanups.push(async () => {
+      ws.close();
+    });
+
+    await requestUntilMatchingId(ws, "h1", "client.hello", { protocol: 1, kind: "desktop" });
+    const wsCreated = (await requestUntilMatchingId(ws, "c1", "workspace.create", { cwd: repo, label: "wt-repo" })) as {
+      workspace: { id: string };
+    };
+    const result = (await requestUntilMatchingId(ws, "w1", "worktree.create", {
+      workspaceId: wsCreated.workspace.id,
+      branch: "worktree/test-branch",
+    })) as { path: string };
+
+    expect(result.path.startsWith(worktreeDir)).toBe(true);
+  }, 15000);
 
   it("close() resolves promptly even while a browser WebSocket is still connected (レビュー指摘の回帰テスト)", async () => {
     // 以前は composeServer().close() が WebSocket を一切閉じなかったため、ブラウザが1つでも繋がった

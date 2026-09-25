@@ -49,6 +49,11 @@ describe("resolveServeOptions", () => {
     expect(() => resolveServeOptions({ scrollback: "abc" })).toThrow(ConfigError);
   });
 
+  it("worktreeDir は素通しする（既定値の解決はしない。20260924-worktree-dir-config）", () => {
+    expect(resolveServeOptions({}).worktreeDir).toBeUndefined();
+    expect(resolveServeOptions({ worktreeDir: "/custom/worktrees" }).worktreeDir).toBe("/custom/worktrees");
+  });
+
   it("--host の角括弧付きの IPv6 は角括弧を外す（listen が名前として引いて落ちないように。D101）", () => {
     expect(resolveServeOptions({ host: "[::1]" }).host).toBe("::1");
     expect(resolveServeOptions({ host: "[::]", cert: "c.pem", key: "k.pem" }).host).toBe("::");

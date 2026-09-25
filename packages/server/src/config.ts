@@ -20,6 +20,8 @@ export interface ServeOptions {
   stateDir: string;
   scrollbackLines: number;
   shell: string | undefined;
+  /** 20260924-worktree-dir-config。既定値の解決はしない（`shell` と同じ。既定は `defaultWorktreeRoot()` 側に委ねる）。 */
+  worktreeDir: string | undefined;
 }
 
 export interface RawServeArgs {
@@ -31,6 +33,7 @@ export interface RawServeArgs {
   stateDir?: string;
   scrollback?: string;
   shell?: string;
+  worktreeDir?: string;
 }
 
 /** Linux/macOS は XDG の state ディレクトリ、Windows は `%LOCALAPPDATA%`（design「起動オプション」）。 */
@@ -118,6 +121,7 @@ export function resolveServeOptions(args: RawServeArgs, env: NodeJS.ProcessEnv =
     stateDir: args.stateDir ?? defaultStateDir(env),
     scrollbackLines: parseScrollback(args.scrollback),
     shell: args.shell,
+    worktreeDir: args.worktreeDir,
   };
 }
 

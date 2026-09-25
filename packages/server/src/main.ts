@@ -14,7 +14,7 @@ function printHelp(): void {
   console.log(
     [
       "wtm serve [--host H] [--port P] [--cert FILE] [--key FILE] [--origin ORIGIN]...",
-      "          [--state-dir DIR] [--scrollback N] [--shell PATH]",
+      "          [--state-dir DIR] [--scrollback N] [--shell PATH] [--worktree-dir DIR]",
       "wtm token reset [--state-dir DIR]",
     ].join("\n"),
   );

@@ -235,7 +235,25 @@ parent: 20260918-web-terminal-multiplexer
       （`.aidev/works/20260924-worktree-remove/test-result.md`）。
       review round1 で見つかった2件の狭い既知の制約（多クライアント競合・lock 済み worktree）は
       backlog に別途追加済み（下記2行。review.md round1）。
-- [ ] worktree の作成先を設定できるようにする: いまは ~/.wtm/worktrees 固定で、DefaultWorktreeService は root を受け取れるのに composeServer.ts:141 が渡していない。herdr の worktrees.directory 相当。E2E から逃がせないため spec 側で後片付けしている（D7）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+- [x] worktree の作成先を設定できるようにする: いまは ~/.wtm/worktrees 固定で、DefaultWorktreeService は root を受け取れるのに composeServer.ts:141 が渡していない。herdr の worktrees.directory 相当。E2E から逃がせないため spec 側で後片付けしている（D7）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+  → 着地: 20260924-worktree-dir-config（feature/worktree-dir-config）。`wtm serve --worktree-dir <path>` を追加。
+  設定ファイル機構は新設せず（このリポジトリに元々存在せず、host/port/scrollback/shell 等を巻き込む横断判断が要るため見送り、
+  独立した backlog 項目とした）、既存の `--shell`（素通し・既定値は解決しない）と全く同じ CLI フラグの慣習に合わせた。
+  `cliArgs.ts`→`config.ts`→`composeServer.ts`→`DefaultWorktreeService`（既存の `root` 引数へそのまま渡すだけ。
+  `WorktreeService.ts` 自体は無改修）の4段階のリレー。`docs/herdr-parity.md`（H37行）・`docs/tls-setup.md`に追記。
+  実測: server 800 本・ルート一括 2941 本・smoke pass・`aidev coverage --strict` gaps=0。独立点検・cross-task check・
+  レビュー各ラウンドで計6件の指摘を解消（switch 分岐の実装漏れ〔セッション中断で一度失われていた〕・弱いテストの強化・
+  `main.ts` の `printHelp()` の追記漏れ・ドキュメントの矛盾2件・テストのprecedent不一致1件）。負の確認は生ログ付きで
+  test-result.md/decisions.md に記録。**E2E harness を実際にこのフラグへ乗せ替え、spec 側の手動後片付け（`madeRepos`）を
+  撤去する作業はこの work の対象外**——次の行として backlog に残す。
+- [ ] E2E の worktree spec を --worktree-dir に乗せ替え、手動の後片付けを撤去する: workspace-tab-pane.spec.ts の
+  afterEach（madeRepos を使った手動削除）は、E2E が worktree の作成先を実ホームディレクトリ（~/.wtm/worktrees）から
+  差し替えられなかったことの回避策（D7。20260920-git-worktree-actions decisions.md）。20260924-worktree-dir-config で
+  --worktree-dir が使えるようになったので、packages/e2e/src/support/appServer.ts の startAppServer/bootServer に
+  worktreeDir オプションを足し（scrollback と同じ形で composeServer へ素通しする）、該当 spec がテスト用の一時
+  ディレクトリを渡すようにすれば、afterEach の手動後片付けと .worktree-dialog-preview-path の "/.wtm/worktrees/"
+  という決め打ちの文字列一致（実際のパスに合わせて直す必要がある）を両方とも解消できる（出典:
+  .aidev/works/20260924-worktree-dir-config/requirements.md「対象外」）
 - [ ] E2E が古いビルドを見る: pnpm -C packages/e2e test は再ビルドせず、@wtm/server の dist と packages/web/dist を読む。直さずに走らせても通ったように見える。test スクリプトか CI で build を前置する（D8）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] workspace のメニューをキーボードから開く: Sidebar.vue の行に tabindex も keydown も無く、右クリック（マウス）でしか開けない。pane の枠だけ PaneFrame.vue で対応済み。「worktree を開く…」がキーだけで到達できない原因（AC-I3 の制限）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] Connection がエラーコードをプロパティで持つ: いまは new Error(`<code>: <message>`) の文字列で、web は書式を正規表現で読む（errorCodeOf）。書式が変わると黙って汎用の文言に落ちる（D4）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）

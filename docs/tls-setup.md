@@ -418,6 +418,24 @@ wtm serve --host 0.0.0.0 --port 8443 --cert wtm.pem --key wtm-key.pem \
 使いたいなら、1 つの wtm を `--host 0.0.0.0 --cert … --key …` で動かし、手元からも表示される
 `https://localhost:<port>` の URL を開く**。
 
+### worktree の作成先（`--worktree-dir`）
+
+`--worktree-dir <path>` で、workspace のメニュー・`prefix+G` で作る Git worktree の作成先を変えられる
+（既定は `~/.wtm/worktrees`。herdr の `worktrees.directory` に相当）。別ディスク・共有ストレージ等へ
+変えるなら：
+
+```sh
+wtm serve --worktree-dir /data/wtm-worktrees
+```
+
+指定しなければ既定の `~/.wtm/worktrees` のまま変わらない。
+
+指定した場所が存在する・書き込めることの起動時の事前確認はしない。**`--state-dir`・`--cert`・`--key`
+とは失敗が分かるタイミングが違う**——それらは起動の早い段階（`readPem`・`StateDirLock` 等）で読み書きを
+試すため、値が誤っていれば起動直後に `ConfigError`（終了コード 2）で分かる。`--worktree-dir` の値は
+起動時には一切使われず、実際に worktree を作る操作（`prefix+G` 等。別の利用者・別のタイミングの場合も
+ある）まで誤りに気づけない。
+
 ### token を作り直す（`wtm token reset` は `wtm serve` を止めてから）
 
 ```sh

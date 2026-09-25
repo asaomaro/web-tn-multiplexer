@@ -188,7 +188,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   const gitRunner = new ChildProcessGitRunner();
   const gitPoller = new DefaultGitInfoPoller(session, gitRunner);
   // worktree の一覧と作成（20260920-git-worktree-actions）。`GitInfoPoller` と同じ runner を使い回す。
-  const worktrees = new DefaultWorktreeService(session, gitRunner, logger);
+  const worktrees = new DefaultWorktreeService(session, gitRunner, logger, options.worktreeDir);
 
   // エージェント判定（02-agent-detection T10）。判定ルール（third_party/herdr/agent-detection）を読み、
   // 結果の要約をログへ出す（個々のファイルの失敗は ManifestStore.loadAll 自身が warn で出す。D46）。

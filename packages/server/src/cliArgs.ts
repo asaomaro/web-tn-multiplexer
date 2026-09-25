@@ -7,7 +7,7 @@ export interface ParsedArgs {
 }
 
 const USAGE =
-  "使い方: wtm serve [--host H] [--port P] [--cert F] [--key F] [--origin O]... [--state-dir D] [--scrollback N] [--shell S] / wtm token reset [--state-dir D]";
+  "使い方: wtm serve [--host H] [--port P] [--cert F] [--key F] [--origin O]... [--state-dir D] [--scrollback N] [--shell S] [--worktree-dir D] / wtm token reset [--state-dir D]";
 
 /**
  * CLI の引数を解釈する（`wtm serve [...]` / `wtm token reset [--state-dir D]`）。`main.ts` から分けたのは単体テストのため
@@ -65,6 +65,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         break;
       case "--shell":
         serve.shell = next();
+        break;
+      case "--worktree-dir":
+        serve.worktreeDir = next();
         break;
       default:
         throw new ConfigError(`unknown option: ${arg}`, USAGE);
