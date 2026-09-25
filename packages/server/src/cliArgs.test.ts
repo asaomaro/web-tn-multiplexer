@@ -20,6 +20,19 @@ describe("parseArgs（CLI の引数）", () => {
     expect(parsed.serve).toMatchObject({ host: "0.0.0.0", port: "8443", origin: ["https://a", "https://b"], stateDir: "/s" });
   });
 
+  it("--worktree-dir を読む（20260924-worktree-dir-config）", () => {
+    expect(parseArgs(["serve", "--worktree-dir", "/custom/worktrees"])).toMatchObject({
+      command: "serve",
+      serve: { worktreeDir: "/custom/worktrees" },
+    });
+  });
+
+  it("--worktree-dir に値が続かなければ ConfigError（20260924-worktree-dir-config）", () => {
+    // message で next() の「missing value」経路を通ったことを確かめる（switch 分岐が無いだけでも
+    // ConfigError にはなる「unknown option」と区別するため。taskcheck T2 round1 指摘）。
+    expect(configErrorOf(["serve", "--worktree-dir"]).message).toBe("missing value for --worktree-dir");
+  });
+
   it("token reset はサブコマンドの語を読み飛ばしてから --state-dir を読む（以前は unknown option: reset で一度も動かなかった。D103）", () => {
     expect(parseArgs(["token", "reset"])).toMatchObject({ command: "token-reset", stateDir: undefined });
     expect(parseArgs(["token", "reset", "--state-dir", "/s"])).toMatchObject({ command: "token-reset", stateDir: "/s" });
