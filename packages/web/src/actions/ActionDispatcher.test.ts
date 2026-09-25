@@ -1360,9 +1360,40 @@ describe("ActionDispatcher — worktree の削除", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(view.dialogContext).toEqual({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: "w9" });
+    expect(view.dialogContext).toEqual({
+      kind: "confirmWorktreeRemoveForce",
+      sourceWorkspaceId: "w1",
+      path: "/w/a",
+      openWorkspaceId: "w9",
+      reason: "dirty",
+    });
     expect(conn.requests.map(([m]) => m)).not.toContain("worktree.list"); // まだ一覧には戻らない
     expect(view.toasts.length).toBe(0); // dirty はトーストではなく確認で伝える
+  });
+
+  // 20260925-worktree-remove-locked。dirty と同じ --force 確認フローへ合流するが、reason は
+  // "locked"——ConfirmDialog.vue の文言を出し分ける入力になる（AC2）。
+  it("confirmWorktreeRemove：ロック済みで失敗すると、一覧へは戻らず reason: locked の --force 確認を開く（AC2）", async () => {
+    const conn = makeConnection();
+    conn.rejectWith["worktree.remove"] = "worktree_locked";
+    const { dispatcher } = makeDispatcher(conn);
+    const view = useViewStore(pinia);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemove", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: "w9" });
+
+    dispatcher.confirmWorktreeRemove();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(view.dialogContext).toEqual({
+      kind: "confirmWorktreeRemoveForce",
+      sourceWorkspaceId: "w1",
+      path: "/w/a",
+      openWorkspaceId: "w9",
+      reason: "locked",
+    });
+    expect(conn.requests.map(([m]) => m)).not.toContain("worktree.list"); // まだ一覧には戻らない
+    expect(view.toasts.length).toBe(0); // ロックもトーストではなく確認で伝える
   });
 
   it("confirmWorktreeRemove：dirty 以外の失敗は、トーストで知らせてから一覧を開き直す（AC9）", async () => {
@@ -1388,7 +1419,7 @@ describe("ActionDispatcher — worktree の削除", () => {
     const conn = makeConnection();
     const { dispatcher } = makeDispatcher(conn);
     const view = useViewStore(pinia);
-    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "dirty" });
 
     dispatcher.confirmWorktreeRemoveForce();
 
@@ -1402,7 +1433,7 @@ describe("ActionDispatcher — worktree の削除", () => {
     conn.resolveWith["worktree.list"] = { worktreeRoot: "/root", repoName: "wtm", suggestedBranch: "s", entries: [{ path: "/w/other", branch: "other" }] };
     const { dispatcher } = makeDispatcher(conn);
     const view = useViewStore(pinia);
-    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "dirty" });
 
     dispatcher.confirmWorktreeRemoveForce();
     await Promise.resolve();

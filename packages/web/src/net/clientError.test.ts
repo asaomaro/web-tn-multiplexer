@@ -51,6 +51,13 @@ describe("worktree のエラー（20260920-git-worktree-actions）", () => {
   });
 });
 
+describe("worktree のロック済み削除（20260925-worktree-remove-locked）", () => {
+  it("worktree_locked は「ロックされています」を含む文言で、既存の worktree_dirty とは別の文言", () => {
+    expect(clientErrorMessage("worktree_locked")).toContain("ロックされています");
+    expect(clientErrorMessage("worktree_locked")).not.toBe(clientErrorMessage("worktree_dirty"));
+  });
+});
+
 // `Connection` は `new Error(`<code>: <message>`)` で reject する（decisions.md D4）。
 // **この書式が変わると黙って汎用の文言に落ちる**ので、ここで固定する。
 describe("errorCodeOf", () => {

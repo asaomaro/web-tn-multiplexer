@@ -52,11 +52,16 @@ export function classifyWorktreeError(
 /**
  * `git worktree remove` の失敗を種類に分ける（`classifyWorktreeError` の `remove` 版。
  * 20260924-worktree-remove。design「依拠する既存の事実」で実機確認した文字列）。
+ * `worktree_locked`（20260925-worktree-remove-locked）: `git worktree lock` 済みの対象は
+ * `--force` を1回渡しても解決しない（git は `-f -f` を要求する）ため別の種類として分ける。
+ * ロック済みかつ dirty でも、常にロックのエラーが先に（単独で）返ることを実機確認済み
+ * （design「依拠する既存の事実」）——分岐の順序は判定結果を左右しない。
  */
 export function classifyWorktreeRemoveError(
   stderr: string,
-): "worktree_dirty" | "worktree_not_a_worktree" | "worktree_is_main" | "worktree_failed" {
+): "worktree_dirty" | "worktree_not_a_worktree" | "worktree_is_main" | "worktree_locked" | "worktree_failed" {
   const line = stderr.split("\n").find((l) => /^(fatal|error):/.test(l.trim())) ?? "";
+  if (/cannot remove a locked working tree/.test(line)) return "worktree_locked";
   // untracked/modified なファイルが残っている・submodule を含む、のどちらも `--force` で解決する
   // 同じ種類として扱う（design「依拠する既存の事実」。herdr の分類と同じ）。
   if (/contains modified or untracked files/.test(line)) return "worktree_dirty";
@@ -149,7 +154,10 @@ export class DefaultWorktreeService implements WorktreeService {
    */
   async remove(workspaceId: string, path: string, force: boolean): Promise<void> {
     const cwd = this.cwdOf(workspaceId);
-    const args = ["worktree", "remove", ...(force ? ["--force"] : []), path];
+    // `--force` を**2回**渡す（`-f -f`）——ロック済みの対象は1回では解決しない（実機確認。
+    // design「依拠する既存の事実」。20260925-worktree-remove-locked）。ロックされていない
+    // 通常の dirty worktree の削除にも副作用は無いことを実機確認済み。
+    const args = ["worktree", "remove", ...(force ? ["--force", "--force"] : []), path];
     const removed = await this.run(cwd, args);
     if (removed.code !== 0) {
       const code = classifyWorktreeRemoveError(removed.stderr);

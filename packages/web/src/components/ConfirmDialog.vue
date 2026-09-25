@@ -49,7 +49,10 @@ const message = computed(() => {
       : "この worktree を削除しますか？";
   }
   if (ctx?.kind === "confirmWorktreeRemoveForce") {
-    return "この worktree には未コミットの変更が残っています。変更を破棄して削除しますか？";
+    // 20260925-worktree-remove-locked。reason で理由に応じた文言を出し分ける（AC5）。
+    return ctx.reason === "locked"
+      ? "この worktree はロックされています。ロックを解除せずに強制的に削除しますか？"
+      : "この worktree には未コミットの変更が残っています。変更を破棄して削除しますか？";
   }
   return "";
 });

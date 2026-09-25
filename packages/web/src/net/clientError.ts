@@ -30,6 +30,9 @@ const MESSAGES: Record<ErrorCode, string> = {
   worktree_dirty: "この worktree には未コミットの変更が残っています。",
   worktree_not_a_worktree: "この worktree は既に見つかりません。一覧を開き直しました。",
   worktree_is_main: "これはメインの作業ツリーのため削除できません。",
+  // ロック済み worktree の削除（20260925-worktree-remove-locked）。`worktree_dirty` と同じ理由で
+  // 防御的に登録（通常は `sendWorktreeRemove` が catch して `--force` の確認へ進む）。
+  worktree_locked: "この worktree はロックされています。",
 };
 
 /**

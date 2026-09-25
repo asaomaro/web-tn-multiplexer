@@ -328,4 +328,14 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] 複数クライアントで同じtabを見ているとき、片方のD&Dによる pane 分割解除（pane.replace）でドロップ先が閉じられると、そのpaneへローカルでfocusしていた別クライアントの focus 復帰先が想定とずれる: viewRepair.ts のフォールバック規則（閉じたpaneの代わりはレイアウト木の最初の葉。SessionModel.closePaneの規則をそのまま写したもの）は、SessionModel.replacePaneの「後継は必ずドラッグした pane 自身」という規則を知らない（pane.closed/layout.updated イベントに推奨後継のヒントが無いため、クライアント側では区別できない）。20260924-pane-dnd-split-move の cross-check で発見。直すには protocol（イベントへの後継ヒント追加）とviewRepair.ts双方の変更が要る。（出典: .aidev/works/20260924-pane-dnd-split-move/review.md）
 - [ ] レイアウトだけを書き換える pane 操作（swapPaneWith/moveToEdge/replacePane/moveToTab/moveToNewTab）はセッション全体のグローバル focus（this.focus）を更新しない: ローカル保存 view の無い新規クライアントが直後に再接続すると、移動先ではなく元の focus が指す pane へ復元されうる（20260924-pane-move-cross-tab decisions.md D4）
 - [ ] worktree 削除の確認ダイアログの openWorkspaceId は開いた瞬間のスナップショットで確定まで再評価されない: 複数クライアントが同じ repo を開いている状況で、確認ダイアログが開いている間に別クライアントがその path を新しく workspace として開くと、確定時にサーバはその workspace を黙って閉じる（AC4/US2 が求める確認が効かない狭い競合）。design が『一覧の即時同期は作らない』と決めた既存のトレードオフの範囲内（20260924-worktree-remove review.md round1）
-- [ ] worktree の削除で lock 済み（git worktree lock）の対象は classifyWorktreeRemoveError のどの分岐にもマッチせず worktree_failed に落ちる: --force 単体では削除できず（-f -f が要る）、利用者は汎用メッセージのまま行き詰まる（20260924-worktree-remove review.md round1。実機確認: fatal: cannot remove a locked working tree; use 'remove -f -f' to override or unlock first）
+- [x] worktree の削除で lock 済み（git worktree lock）の対象は classifyWorktreeRemoveError のどの分岐にもマッチせず worktree_failed に落ちる: --force 単体では削除できず（-f -f が要る）、利用者は汎用メッセージのまま行き詰まる（20260924-worktree-remove review.md round1。実機確認: fatal: cannot remove a locked working tree; use 'remove -f -f' to override or unlock first）
+  → 着地: 20260925-worktree-remove-locked（feature/worktree-remove-locked）。
+  `classifyWorktreeRemoveError` に専用のエラーコード `worktree_locked` を追加し（`worktree_failed`
+  から切り出す）、`remove()` の `--force` を2回渡す（`-f -f`）実装に変更。web 側は既存の dirty
+  worktree の `--force` 確認フロー（`confirmWorktreeRemoveForce`）に `reason: "dirty" | "locked"`
+  を足して合流させ、ロック専用のメッセージ（「この worktree はロックされています。ロックを
+  解除せずに強制的に削除しますか？」）を出す。ロック済みかつ dirty でも常にロックのエラーが
+  優先されることを実機確認済み（`git worktree lock` した本物の worktree でテスト）。taskcheck
+  T2 round1・T6 round1 で計2件の should 指摘（負の確認の記録の粒度・見せかけのキーボード
+  テスト）を発見・修正。review は5観点とも findings 0。
+  実測: server 811 本・ルート一括 2974 本・smoke pass・`aidev coverage --strict` gaps=0。
