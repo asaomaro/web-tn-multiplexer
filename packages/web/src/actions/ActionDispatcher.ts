@@ -350,9 +350,18 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
         this.openWorktree(sourceWorkspaceId); // 更新された一覧を開き直す（AC2・AC3・AC-I1）
       })
       .catch((err: unknown) => {
-        if (!force && errorCodeOf(err) === "worktree_dirty") {
+        // dirty・ロック済みのどちらも同じ `--force` 確認フローへ合流する（20260925-worktree-remove-locked。
+        // design「設計方針」）。`reason` で `ConfirmDialog.vue` の文言だけを出し分ける。
+        const code = errorCodeOf(err);
+        if (!force && (code === "worktree_dirty" || code === "worktree_locked")) {
           if (this.view.dialogContext === null) {
-            this.view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId, path, openWorkspaceId });
+            this.view.openDialogWithContext({
+              kind: "confirmWorktreeRemoveForce",
+              sourceWorkspaceId,
+              path,
+              openWorkspaceId,
+              reason: code === "worktree_locked" ? "locked" : "dirty",
+            });
           }
           return;
         }

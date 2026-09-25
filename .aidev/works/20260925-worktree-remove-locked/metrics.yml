@@ -1,0 +1,36 @@
+events:
+  - { ts: 2026-09-25T13:40:35Z, phase: requirements, event: start }
+  - { ts: 2026-09-25T13:41:52Z, phase: requirements, event: doccheck, metrics: { stage: start, phase: requirements, mode: delegated, size: 8609 } }
+  - { ts: 2026-09-25T13:45:56Z, phase: requirements, event: doccheck, metrics: { stage: report, phase: requirements, findings: 2 } }
+  - { ts: 2026-09-25T13:46:19Z, phase: requirements, event: approved, metrics: { doc_check_rounds: 1, doc_check_findings: 2, doc_check_mode: delegated } }
+  - { ts: 2026-09-25T13:46:23Z, phase: design, event: start }
+  - { ts: 2026-09-25T13:48:05Z, phase: design, event: doccheck, metrics: { stage: start, phase: design, mode: delegated, size: 15733 } }
+  - { ts: 2026-09-25T13:51:49Z, phase: design, event: doccheck, metrics: { stage: report, phase: design, findings: 6 } }
+  - { ts: 2026-09-25T13:52:48Z, phase: design, event: approved, metrics: { doc_check_rounds: 1, doc_check_findings: 6, doc_check_mode: delegated } }
+  - { ts: 2026-09-25T13:52:51Z, phase: tasks, event: start }
+  - { ts: 2026-09-25T13:54:20Z, phase: tasks, event: doccheck, metrics: { stage: start, phase: tasks, mode: delegated, size: 7614 } }
+  - { ts: 2026-09-25T13:57:30Z, phase: tasks, event: doccheck, metrics: { stage: report, phase: tasks, findings: 3 } }
+  - { ts: 2026-09-25T13:58:14Z, phase: tasks, event: approved, metrics: { tasks_planned: 7, tasks_anchored: 7, doc_check_rounds: 1, doc_check_findings: 3, doc_check_mode: delegated, ac_total: 11, ac_covered: 11, tasks_no_ac: 0, tasks_ac_none: 2 } }
+  - { ts: 2026-09-25T13:58:17Z, phase: coding, event: start }
+  - { ts: 2026-09-25T13:58:36Z, phase: coding, event: taskcheck, metrics: { stage: start, task: T1, mode: delegated } }
+  - { ts: 2026-09-25T13:58:40Z, phase: coding, event: taskcheck, metrics: { stage: start, task: T4, mode: delegated } }
+  - { ts: 2026-09-25T13:59:36Z, phase: coding, event: taskcheck, metrics: { stage: report, task: T1, findings: 0 } }
+  - { ts: 2026-09-25T14:00:26Z, phase: coding, event: taskcheck, metrics: { stage: report, task: T4, findings: 0 } }
+  - { ts: 2026-09-25T14:02:42Z, phase: coding, event: taskcheck, metrics: { stage: start, task: T2, mode: delegated } }
+  - { ts: 2026-09-25T14:04:16Z, phase: coding, event: taskcheck, metrics: { stage: start, task: T3, mode: delegated } }
+  - { ts: 2026-09-25T14:05:03Z, phase: coding, event: taskcheck, metrics: { stage: report, task: T2, findings: 1 } }
+  - { ts: 2026-09-25T14:06:31Z, phase: coding, event: taskcheck, metrics: { stage: report, task: T3, findings: 0 } }
+  - { ts: 2026-09-25T14:07:03Z, phase: coding, event: taskcheck, metrics: { stage: start, task: T5, mode: delegated } }
+  - { ts: 2026-09-25T14:08:35Z, phase: coding, event: taskcheck, metrics: { stage: report, task: T5, findings: 0 } }
+  - { ts: 2026-09-25T14:08:49Z, phase: coding, event: taskcheck, metrics: { stage: start, task: T6, mode: delegated } }
+  - { ts: 2026-09-25T14:11:24Z, phase: coding, event: taskcheck, metrics: { stage: report, task: T6, findings: 1 } }
+  - { ts: 2026-09-25T14:11:50Z, phase: coding, event: taskcheck, metrics: { stage: start, task: cross, mode: delegated } }
+  - { ts: 2026-09-25T14:14:10Z, phase: coding, event: taskcheck, metrics: { stage: report, task: cross, findings: 0 } }
+  - { ts: 2026-09-25T14:16:22Z, phase: test, event: smoke, metrics: { result: pass, exit_code: 0, commands: 2 } }
+  - { ts: 2026-09-25T14:16:26Z, phase: coding, event: approved, metrics: { tasks_done: 7, unplanned_lookups: 0, task_checks: 6, task_check_findings: 2, task_check_mode: delegated } }
+  - { ts: 2026-09-25T14:16:30Z, phase: test, event: start, metrics: { marks: 0 } }
+  - { ts: 2026-09-25T14:16:46Z, phase: test, event: approved }
+  - { ts: 2026-09-25T14:16:49Z, phase: review, event: start, metrics: { marks: 2 } }
+  - { ts: 2026-09-25T14:18:49Z, phase: review, event: approved, metrics: { ac_total: 11, ac_covered: 11, tasks_no_ac: 0, tasks_ac_none: 2 } }
+  - { ts: 2026-09-25T14:18:55Z, phase: deliver, event: start }
+  - { ts: 2026-09-25T14:19:20Z, phase: deliver, event: approved }

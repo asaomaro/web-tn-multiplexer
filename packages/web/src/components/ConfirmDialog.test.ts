@@ -262,9 +262,19 @@ describe("ConfirmDialog — worktree の削除の確認（kind: confirmWorktreeR
   it("dirty での --force 確認は専用のメッセージ（AC6・AC7）", async () => {
     const view = useViewStore(pinia);
     const wrapper = mountDialog(makeActions());
-    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "dirty" });
     await wrapper.vm.$nextTick();
     expect(wrapper.get(".confirm-dialog-message").text()).toContain("未コミットの変更が残っています");
+  });
+
+  // 20260925-worktree-remove-locked。
+  it("ロック済みでの --force 確認は「ロックされています」を含む専用のメッセージ（AC5）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "locked" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get(".confirm-dialog-message").text()).toContain("ロックされています");
+    expect(wrapper.get(".confirm-dialog-message").text()).not.toContain("未コミットの変更が残っています");
   });
 
   it("確定ボタンの文言は「削除」——「閉じる」のままだと破壊的操作に見えない（decisions.md D1）", async () => {
@@ -317,11 +327,56 @@ describe("ConfirmDialog — worktree の削除の確認（kind: confirmWorktreeR
     const actions = makeActions();
     const view = useViewStore(pinia);
     const wrapper = mountDialog(actions);
-    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null });
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "dirty" });
     await wrapper.vm.$nextTick();
     await wrapper.findAll("button")[1]!.trigger("click");
     expect(actions.confirmWorktreeRemoveForce).toHaveBeenCalledTimes(1);
     expect(actions.confirmWorktreeRemove).not.toHaveBeenCalled();
+  });
+
+  // 20260925-worktree-remove-locked。reason: "locked" でも確定・キーボード・初期フォーカスの
+  // 配線（AC-I2・AC-I3・AC-I4）は reason: "dirty" と同じであることを確認する（メッセージだけが
+  // 変わる。message の内容自体は上の別テストで確認済みなので、ここでは配線だけを見る）。
+  it("reason: locked でも「削除」ボタンで confirmWorktreeRemoveForce を呼ぶ（AC-I2）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "locked" });
+    await wrapper.vm.$nextTick();
+    await wrapper.findAll("button")[1]!.trigger("click");
+    expect(actions.confirmWorktreeRemoveForce).toHaveBeenCalledTimes(1);
+  });
+
+  it("reason: locked でも y キーで確定する（AC-I3）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "locked" });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("dialog").trigger("keydown", { key: "y" });
+    expect(actions.confirmWorktreeRemoveForce).toHaveBeenCalledTimes(1);
+  });
+
+  // taskcheck の should 指摘：上のテスト名が「y キーで確定・n キーで取り消す」だったのに n を
+  // 一度もトリガーしておらず、見せかけの検証だった（T6 taskcheck round1）。ここで n を別途検証する。
+  it("reason: locked でも n キーで取り消す（一覧へ戻る。AC-I3）", async () => {
+    const actions = makeActions();
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(actions);
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "locked" });
+    await wrapper.vm.$nextTick();
+    await wrapper.get("dialog").trigger("keydown", { key: "n" });
+    expect(actions.confirmWorktreeRemoveForce).not.toHaveBeenCalled();
+    expect(actions.openWorktree).toHaveBeenCalledWith("w1");
+  });
+
+  it("reason: locked でも最初のフォーカスは「キャンセル」（AC-I4）", async () => {
+    const view = useViewStore(pinia);
+    const wrapper = mountDialog(makeActions());
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w1", path: "/w/a", openWorkspaceId: null, reason: "locked" });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(wrapper.findAll("button")[0]!.element);
   });
 
   it("「キャンセル」ボタンは削除を送らず、一覧ダイアログへ戻る（openWorktree を呼ぶ。AC-I1・AC-I2）", async () => {
@@ -339,7 +394,7 @@ describe("ConfirmDialog — worktree の削除の確認（kind: confirmWorktreeR
     const actions = makeActions();
     const view = useViewStore(pinia);
     const wrapper = mountDialog(actions);
-    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w2", path: "/w/b", openWorkspaceId: null });
+    view.openDialogWithContext({ kind: "confirmWorktreeRemoveForce", sourceWorkspaceId: "w2", path: "/w/b", openWorkspaceId: null, reason: "dirty" });
     await wrapper.vm.$nextTick();
     await wrapper.get("dialog").trigger("cancel");
     expect(actions.confirmWorktreeRemoveForce).not.toHaveBeenCalled();

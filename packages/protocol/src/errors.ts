@@ -16,7 +16,10 @@ export type ErrorCode =
   // worktree の削除（20260924-worktree-remove）。
   | "worktree_dirty"
   | "worktree_not_a_worktree"
-  | "worktree_is_main";
+  | "worktree_is_main"
+  // ロック済み worktree の削除（20260925-worktree-remove-locked）。`--force` を1回渡しても
+  // 解決しない（git は `-f -f` を要求する）ため、`worktree_dirty` とは別の種類として分ける。
+  | "worktree_locked";
 
 export interface ProtocolError {
   code: ErrorCode;

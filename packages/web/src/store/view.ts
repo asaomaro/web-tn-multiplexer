@@ -190,8 +190,17 @@ export type DialogContext =
    * （確認文言の出し分け用。閉じる処理自体はサーバ側が自動で行う）。
    */
   | { kind: "confirmWorktreeRemove"; sourceWorkspaceId: string; path: string; openWorkspaceId: string | null }
-  /** dirty で通常の削除が失敗したあとの `--force` 確認（同上。design「振る舞いの詳細」）。 */
-  | { kind: "confirmWorktreeRemoveForce"; sourceWorkspaceId: string; path: string; openWorkspaceId: string | null }
+  /**
+   * dirty／ロック済みで通常の削除が失敗したあとの `--force` 確認（同上。design「振る舞いの詳細」）。
+   * `reason` で確認文言を出し分ける（20260925-worktree-remove-locked）。
+   */
+  | {
+      kind: "confirmWorktreeRemoveForce";
+      sourceWorkspaceId: string;
+      path: string;
+      openWorkspaceId: string | null;
+      reason: "dirty" | "locked";
+    }
   // 手動グループ（20260923-workspace-grouping。herdr に前例が無い独自拡張）。
   // 新しいグループを作り、右クリック元の workspace をそのまま追加する（`NameDialog` を再利用）。
   | { kind: "createGroup"; workspaceId: string }

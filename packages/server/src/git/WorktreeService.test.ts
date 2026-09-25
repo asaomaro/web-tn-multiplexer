@@ -218,6 +218,33 @@ describe("DefaultWorktreeService（本物の git を使う。既存の GitInfoPo
       expect(session.closedWorkspaceIds).toEqual(["w9"]); // dirty 経路でも、成功すれば同じく閉じる
     });
 
+    // 20260925-worktree-remove-locked。`git worktree lock` した本物の worktree で確認する
+    // （既存の describe("remove", ...) の流儀と同じ）。
+    it("ロック済みだと worktree_locked で失敗する（force 無し。AC1）", async () => {
+      const created = await make().create("w1", "feature/locked");
+      await runGit(repo, ["worktree", "lock", created.path]);
+      const svc = new DefaultWorktreeService(sessionWith(repo), git, new MemoryLogger(), root, () => 0);
+
+      await expect(svc.remove("w1", created.path, false)).rejects.toMatchObject({ code: "worktree_locked" });
+
+      const after = await make().list("w1");
+      expect(after.entries.map((e) => e.branch)).toContain("feature/locked"); // 消えていない
+    });
+
+    it("ロック済み（かつ dirty）でも --force で削除できる（AC3）", async () => {
+      const created = await make().create("w1", "feature/locked-dirty");
+      await writeFile(join(created.path, "untracked.txt"), "x");
+      await runGit(repo, ["worktree", "lock", created.path]);
+      const session = sessionWith(repo, [{ id: "w9", cwd: created.path } as Workspace]);
+      const svc = new DefaultWorktreeService(session, git, new MemoryLogger(), root, () => 0);
+
+      await svc.remove("w1", created.path, true);
+
+      const after = await make().list("w1");
+      expect(after.entries.map((e) => e.branch)).not.toContain("feature/locked-dirty");
+      expect(session.closedWorkspaceIds).toEqual(["w9"]);
+    });
+
     it("既に worktree でない対象は worktree_not_a_worktree（AC9）", async () => {
       const notAWorktree = await makeTempDir("wtm-worktree-not-a-worktree-");
       const svc = new DefaultWorktreeService(sessionWith(repo), git, new MemoryLogger(), root, () => 0);
@@ -278,6 +305,18 @@ describe("classifyWorktreeRemoveError", () => {
   it("submodule を含む場合も dirty と同じ扱い（--force で解決するため。未検証・herdr 由来の文字列）", () => {
     const stderr = "fatal: working trees containing submodules cannot be moved or removed\n";
     expect(classifyWorktreeRemoveError(stderr)).toBe("worktree_dirty");
+  });
+
+  // 20260925-worktree-remove-locked。文字列は design.md「依拠する既存の事実」の実機確認
+  // （git 2.43.0）参照。
+  it("ロック済み（reason 付き）", () => {
+    const stderr = "fatal: cannot remove a locked working tree, lock reason: test lock\nuse 'remove -f -f' to override or unlock first\n";
+    expect(classifyWorktreeRemoveError(stderr)).toBe("worktree_locked");
+  });
+
+  it("ロック済み（reason 無し）", () => {
+    const stderr = "fatal: cannot remove a locked working tree;\nuse 'remove -f -f' to override or unlock first\n";
+    expect(classifyWorktreeRemoveError(stderr)).toBe("worktree_locked");
   });
 
   it("既に worktree でない", () => {
