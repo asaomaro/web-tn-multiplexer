@@ -52,8 +52,20 @@ parent: 20260918-web-terminal-multiplexer
   実測: 単体テスト 2608 本 green（protocol 58・server 657・web 1760・cli 133）・smoke pass（2本）。独立点検（cross）1件（対応済み）。review 指摘 0 件（test-result.md・review.md 参照）。
   `docs/herdr-parity.md` H26d に対応表を追加済み。
 - [ ] 独自コマンドのキー: herdr の `[[keys.command]]`（`type` が `popup`・`pane`・`shell`・`plugin_action`）。サーバで任意のコマンドを走らせる仕組みと、その権限の設計が要る。`docs/herdr-parity.md` の H12（ポップアップ端末・独自コマンドのキー割り当て）（出典: .aidev/works/20260921-keybinding-customization/requirements.md の対象外）
-- [ ] サイドバー・tab バーのボタン（`@keydown.stop`）や pane の枠にフォーカスがある間も、prefix・直接のキーを効かせる: いまはそのボタンにフォーカスが残ると、端末をクリックするまで届かない（prefix でも同じ既存の挙動）。
+- [x] サイドバー・tab バーのボタン（`@keydown.stop`）にフォーカスがある間も、prefix・直接のキーを効かせる: いまはそのボタンにフォーカスが残ると、端末をクリックするまで届かない（prefix でも同じ既存の挙動）。
   ボタンの Enter/Space と入力欄への入力を守ったまま、修飾キー付き・prefix のキーだけを window へ通す形が要る（出典: .aidev/works/20260921-keybinding-customization/decisions.md D11）
+  実装: `.aidev/works/20260925-focus-trapped-keybindings/`（`Sidebar.vue` 6箇所・`TabBar.vue` 1箇所の
+  `@keydown.stop` を、無修飾の Enter/Space のときだけ `stopPropagation()` する `onButtonKeydown` に置換。
+  `preventDefault()` はしないのでボタン自身の活性化は妨げない）。
+  実測: 単体テスト139本 green（Sidebar.test.ts・TabBar.test.ts・PaneFrame.test.ts）。E2E
+  `key-bindings.spec.ts` 23/24 pass（1件は無関係な既存失敗。decisions.md D4）・新設3件は実ブラウザで
+  AC1・AC2・AC4 を確認。smoke pass（2本）。taskcheck 6件（T1〜T6）＋cross、review 2ラウンド
+  （1回目 should 1件→E2E追加で解消・2回目 nit 2件→対応済み）。
+- [ ] pane の枠（`PaneFrame.vue`）にフォーカスがある間も、prefix・直接のキーを効かせる: 上と同じ
+  問題が pane の枠（Enter・Space・↓・ContextMenu・Shift+F10 を無条件に止める既存の実装）にも残る。
+  20260925-focus-trapped-keybindings は対象をサイドバー・tab バーのボタンに絞り、pane の枠は
+  意図的に対象外とした（出典: .aidev/works/20260925-focus-trapped-keybindings/requirements.md
+  「スコープ / 対象外」）。
 - [x] キーの設定の使い勝手: 20260922-keybinding-usability で対応。節「キー」に操作名・群名での絞り込み欄を足し（`KeySettings.vue` の `filterText`/`actionsByGroup`）、
       衝突したときは案内文の直後に「こちらへ移す」ボタンが出て単一の割り当てなら1回の操作で移せる（`assign.ts` の `AssignResult.conflict`・`KeySettings.vue` の `moveHere()`）。
       macOS で `navigator.keyboard.getLayoutMap()` が使えるとき、`alt+…` の chord の表示を実際に押した字へ置き換える（`packages/web/src/keys/chordDisplay.ts`。表示専用、取り込み・照合は変えない）。

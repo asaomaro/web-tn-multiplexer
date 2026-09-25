@@ -196,6 +196,18 @@ function onToggleCollapse(row: SpaceRow): void {
   else view.toggleAutoGroupCollapsed(row.groupTargetId);
 }
 
+/**
+ * ボタンの Enter/Space を `main.ts` の window keydown（prefix・直接のキーの経路）へ二重に
+ * 渡さない（20260925-focus-trapped-keybindings。design「設計方針」）。`preventDefault()`
+ * はしない——ネイティブな活性化（`click`）は妨げない。他のキー（修飾付き・矢印・Tab 等）は
+ * 何もせず bubble させ、`main.ts` へ届かせる。
+ */
+function onButtonKeydown(ev: KeyboardEvent): void {
+  if ((ev.key === "Enter" || ev.key === " ") && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+    ev.stopPropagation();
+  }
+}
+
 /** 新しい workspace を作る。キーの `prefix+shift+n` と同じ経路（`ActionDispatcher.run`）を通す。 */
 function onNewWorkspace(): void {
   actions?.run({ type: "newWorkspace" });
@@ -369,7 +381,7 @@ watch(
     <section class="sidebar-spaces" aria-label="spaces">
       <div v-if="!view.sidebarCollapsed" class="sidebar-section-header">
         <span class="sidebar-section-title">spaces</span>
-        <button type="button" class="sidebar-btn sidebar-sort-btn" :aria-label="`並び順: ${WORKSPACE_SORT_LABEL[view.workspaceSort]}（押すと切り替え）`" @click="view.toggleWorkspaceSort()" @keydown.stop>
+        <button type="button" class="sidebar-btn sidebar-sort-btn" :aria-label="`並び順: ${WORKSPACE_SORT_LABEL[view.workspaceSort]}（押すと切り替え）`" @click="view.toggleWorkspaceSort()" @keydown="onButtonKeydown">
           {{ WORKSPACE_SORT_LABEL[view.workspaceSort] }}
         </button>
       </div>
@@ -408,7 +420,7 @@ watch(
             @pointerdown.stop
             @pointerup.stop
             @click.stop="onToggleCollapse(row)"
-            @keydown.stop
+            @keydown="onButtonKeydown"
           >
             {{ row.collapsed ? "▸" : "▾" }}
           </button>
@@ -422,14 +434,14 @@ watch(
       </div>
 
       <div v-if="!view.sidebarCollapsed" class="sidebar-section-footer">
-        <button type="button" class="sidebar-btn" @click="onNewWorkspace" @keydown.stop>＋ 新規</button>
+        <button type="button" class="sidebar-btn" @click="onNewWorkspace" @keydown="onButtonKeydown">＋ 新規</button>
         <button
           type="button"
           class="sidebar-btn sidebar-btn-right"
           aria-haspopup="menu"
           :aria-expanded="globalMenuOpen ? 'true' : 'false'"
           @click="onOpenGlobalMenu"
-          @keydown.stop
+          @keydown="onButtonKeydown"
         >
           メニュー
         </button>
@@ -439,7 +451,7 @@ watch(
     <section class="sidebar-agents" aria-label="agents">
       <div v-if="!view.sidebarCollapsed" class="sidebar-section-header">
         <span class="sidebar-section-title">agents</span>
-        <button type="button" class="sidebar-btn sidebar-sort-btn" :aria-label="`並び順: ${AGENT_SORT_LABEL[view.agentSort]}（押すと切り替え）`" @click="view.toggleAgentSort()" @keydown.stop>
+        <button type="button" class="sidebar-btn sidebar-sort-btn" :aria-label="`並び順: ${AGENT_SORT_LABEL[view.agentSort]}（押すと切り替え）`" @click="view.toggleAgentSort()" @keydown="onButtonKeydown">
           {{ AGENT_SORT_LABEL[view.agentSort] }}
         </button>
       </div>
@@ -465,7 +477,7 @@ watch(
         :aria-expanded="!view.sidebarCollapsed"
         :aria-label="view.sidebarCollapsed ? 'サイドバーを開く' : 'サイドバーを畳む'"
         @click="actions?.run({ type: 'toggleSidebar' })"
-        @keydown.stop
+        @keydown="onButtonKeydown"
       >
         {{ view.sidebarCollapsed ? "»" : "«" }}
       </button>

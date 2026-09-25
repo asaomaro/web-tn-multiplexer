@@ -121,6 +121,18 @@ function onNewTab(): void {
   if (id) actions?.newTabInWorkspace(id);
 }
 
+/**
+ * ボタンの Enter/Space を `main.ts` の window keydown（prefix・直接のキーの経路）へ二重に
+ * 渡さない（20260925-focus-trapped-keybindings。design「設計方針」）。`preventDefault()`
+ * はしない——ネイティブな活性化（`click`）は妨げない。他のキー（修飾付き・矢印・Tab 等）は
+ * 何もせず bubble させ、`main.ts` へ届かせる。
+ */
+function onButtonKeydown(ev: KeyboardEvent): void {
+  if ((ev.key === "Enter" || ev.key === " ") && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+    ev.stopPropagation();
+  }
+}
+
 function onWheel(ev: WheelEvent): void {
   ev.preventDefault();
   actions?.run({ type: "tabDelta", delta: ev.deltaY > 0 ? 1 : -1 });
@@ -154,7 +166,7 @@ function onWheel(ev: WheelEvent): void {
         <span v-if="tab.zoomedPaneId" class="tab-bar-zoomed">Z</span>
       </button>
     </div>
-    <button type="button" class="tab-bar-new" :disabled="!view.workspaceId" aria-label="新しいタブ" @click="onNewTab" @keydown.stop>＋</button>
+    <button type="button" class="tab-bar-new" :disabled="!view.workspaceId" aria-label="新しいタブ" @click="onNewTab" @keydown="onButtonKeydown">＋</button>
     <span v-if="rightText" class="tab-bar-right" aria-hidden="true">{{ rightText }}</span>
   </div>
 </template>
