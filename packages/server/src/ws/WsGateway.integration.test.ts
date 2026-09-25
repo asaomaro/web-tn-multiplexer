@@ -27,6 +27,7 @@ import { DefaultLoginRateLimiter } from "../auth/LoginRateLimiter.js";
 import { HttpServer } from "../http/HttpServer.js";
 import { WsServerWs } from "./WsServerWs.js";
 import { WsGateway } from "./WsGateway.js";
+import type { GitInfoPoller } from "../git/GitInfoPoller.js";
 import type { WorktreeService } from "../git/WorktreeService.js";
 import type { AgentIntegrationService } from "../agent/AgentIntegrationService.js";
 
@@ -112,7 +113,7 @@ async function startTestServer(opts: { commandFor?: (index: number) => string; g
   const clients = new DefaultClientRegistry();
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(new MemoryLogger());
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees(), agentIntegrations: stubAgentIntegrations() });
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees(), agentIntegrations: stubAgentIntegrations(), gitPoller: stubGitPoller() });
 
   // 実物の HttpServer（T16）を使う。/api/login 等を素の 404 ハンドラで済ませず、本物の配線で確かめる。
   const webDistDir = await makeTempDir("wtm-ws-webdist-missing-");
@@ -631,6 +632,20 @@ function stubWorktrees(): WorktreeService {
     list: () => Promise.reject(new Error("not used in this test")),
     create: () => Promise.reject(new Error("not used in this test")),
     remove: () => Promise.reject(new Error("not used in this test")),
+  };
+}
+
+/**
+ * 20260925-workspace-git-immediate: workspace.create のたびに fire-and-forget で呼ばれるが、
+ * 応答自体はこの結果を待たない（ハンドラ側の `.catch` で無害化される）ので、ここでは
+ * 何もしない代役で足りる。
+ */
+function stubGitPoller(): GitInfoPoller {
+  return {
+    start: () => undefined,
+    stop: () => undefined,
+    pollNow: () => Promise.resolve(),
+    pollWorkspaceNow: () => Promise.resolve(),
   };
 }
 

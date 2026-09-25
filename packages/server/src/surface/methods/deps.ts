@@ -1,3 +1,4 @@
+import type { GitInfoPoller } from "../../git/GitInfoPoller.js";
 import type { WorktreeService } from "../../git/WorktreeService.js";
 import type { SessionService } from "../../session/SessionService.js";
 import type { ClientRegistry } from "../../clients/ClientRegistry.js";
@@ -15,4 +16,6 @@ export interface MethodDeps {
   worktrees: WorktreeService;
   /** 公式フック連携の導入・解除・自動再開設定（20260923-agent-session-resume）。 */
   agentIntegrations: AgentIntegrationService;
+  /** workspace.create 直後の即時ポーリング用（20260925-workspace-git-immediate）。 */
+  gitPoller: GitInfoPoller;
 }

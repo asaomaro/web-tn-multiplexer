@@ -161,6 +161,61 @@ describe("DefaultGitInfoPoller", () => {
     const second = service.snapshot().workspaces[0]!;
     expect(second).toBe(first); // 同一参照のまま＝モデルを書き換えていない
   });
+
+  // 20260925-workspace-git-immediate（design「インターフェース / データ構造 > GitInfoPoller.ts」）。
+  describe("pollWorkspaceNow", () => {
+    it("sets the branch for the targeted workspace without waiting for the periodic interval (AC1)", async () => {
+      const { workspace } = await service.createWorkspace(repoDir, "repo");
+      const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+      await poller.pollWorkspaceNow(workspace.id); // pollNow() を一度も呼んでいない
+      const ws = service.snapshot().workspaces[0]!;
+      expect(ws.git).toMatchObject({ branch: "main" });
+    });
+
+    it("leaves git null for a workspace whose cwd is not a git repo, without throwing (AC2)", async () => {
+      const plainDir = await mkdirTemp();
+      const { workspace } = await service.createWorkspace(plainDir, "plain");
+      const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+      await expect(poller.pollWorkspaceNow(workspace.id)).resolves.toBeUndefined();
+      expect(service.snapshot().workspaces.find((w) => w.cwd === plainDir)!.git).toBeNull();
+      await rm(plainDir, { recursive: true, force: true });
+    });
+
+    it("does nothing when the workspace id does not exist (already closed)", async () => {
+      const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+      await expect(poller.pollWorkspaceNow("bogus")).resolves.toBeUndefined();
+    });
+
+    it("does not touch other workspaces (targeted, unlike pollNow's full sweep)", async () => {
+      // 両方とも実際の git リポジトリにする——非 git ディレクトリだと既定値も null で
+      // 「ポーリングされたが非 git だった」のか「そもそもポーリングされていない」のか
+      // 区別できないため。branch が付くかどうかで観測する。
+      const otherRepoDir = await mkdirTemp();
+      await runGit(otherRepoDir, ["init", "-b", "main"]);
+      await runGit(otherRepoDir, ["config", "user.email", "t@example.com"]);
+      await runGit(otherRepoDir, ["config", "user.name", "t"]);
+      await runGit(otherRepoDir, ["commit", "--allow-empty", "-m", "init"]);
+
+      const { workspace: repoWs } = await service.createWorkspace(repoDir, "repo");
+      await service.createWorkspace(otherRepoDir, "other");
+      const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+      await poller.pollWorkspaceNow(repoWs.id);
+
+      expect(service.snapshot().workspaces.find((w) => w.cwd === repoDir)!.git).toMatchObject({ branch: "main" });
+      expect(service.snapshot().workspaces.find((w) => w.cwd === otherRepoDir)!.git).toBeNull(); // 対象外は一度もポーリングされていない
+      await rm(otherRepoDir, { recursive: true, force: true });
+    });
+
+    it("does not overwrite the record when the git info has not changed (AC4。sameGit の早期リターンに乗る)", async () => {
+      const { workspace } = await service.createWorkspace(repoDir, "repo");
+      const poller = new DefaultGitInfoPoller(service, new ChildProcessGitRunner());
+      await poller.pollWorkspaceNow(workspace.id);
+      const first = service.snapshot().workspaces[0]!;
+      await poller.pollWorkspaceNow(workspace.id); // 定期ポーリングとほぼ同時に走った場合を模す
+      const second = service.snapshot().workspaces[0]!;
+      expect(second).toBe(first); // 同一参照のまま＝モデルを書き換えていない・二重 publish もしない
+    });
+  });
 });
 
 async function mkdirTemp(): Promise<string> {

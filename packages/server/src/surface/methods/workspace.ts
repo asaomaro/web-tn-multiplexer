@@ -12,9 +12,13 @@ import type { MethodDeps } from "./deps.js";
 export function registerWorkspaceMethods(surface: ControlSurface, deps: MethodDeps): void {
   surface.register("workspace.create", {
     schema: WorkspaceCreateParams,
-    handler: (ctx, params) => {
+    handler: async (ctx, params) => {
       deps.clients.touch(ctx.clientId); // 作る操作も操作（色の問い合わせの答え。20260921-theme-settings の decisions D13）
-      return deps.session.createWorkspace(params.cwd, params.label, params.newCwd);
+      const result = await deps.session.createWorkspace(params.cwd, params.label, params.newCwd);
+      // 20260925-workspace-git-immediate（design「設計方針」）。応答は待たせない（fire-and-forget）。
+      // 結果は既存の workspace.updated イベントで届く。
+      void deps.gitPoller.pollWorkspaceNow(result.workspace.id).catch(() => undefined);
+      return result;
     },
   });
 

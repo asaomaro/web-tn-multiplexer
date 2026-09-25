@@ -266,7 +266,17 @@ parent: 20260918-web-terminal-multiplexer
   実測: web 1948 本・ルート一括 2949 本・smoke pass・`aidev coverage --strict` gaps=0。独立点検・cross-task
   check・レビュー2ラウンドで計8件の指摘を解消（負の確認は生ログ付きで decisions.md D1〜D4 に記録）。
 - [ ] Connection がエラーコードをプロパティで持つ: いまは new Error(`<code>: <message>`) の文字列で、web は書式を正規表現で読む（errorCodeOf）。書式が変わると黙って汎用の文言に落ちる（D4）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
-- [ ] Workspace.git の即時化: GitInfoPoller が 5 秒周期なので、workspace を作った直後は最大 5 秒 git が null で、メニューに worktree の項目が出ない（D3）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+- [x] Workspace.git の即時化: GitInfoPoller が 5 秒周期なので、workspace を作った直後は最大 5 秒 git が null で、メニューに worktree の項目が出ない（D3）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+  → 着地: 20260925-workspace-git-immediate（feature/workspace-git-immediate）。GitInfoPoller に
+  `pollWorkspaceNow(workspaceId)` を追加（対象1件だけを probe。`pollNow()` のように全件を巻き込まない）し、
+  `workspace.create` ハンドラから作成直後に fire-and-forget（`void ... .catch(() => undefined)`）で呼ぶ。
+  応答は待たせず、結果は既存の `workspace.updated` イベントで届く。重複更新は既存の
+  `updateWorkspaceGit`（`sameGit` による idempotent dedup）にそのまま乗せた。taskcheck T3 round1 で
+  「fire-and-forget の検証テストが同期的すぎて await との違いを区別できていない」不備を発見し、
+  `FakeGitInfoPoller` を deferred promise 方式に直して修正。taskcheck T5 round1 で「新規 end-to-end
+  テストの負の確認の記録漏れ」（regression-negative-control）を発見し、decisions.md D1・
+  test-result.md に生ログを記録。review は5観点とも findings 0。
+  実測: server 807 本・ルート一括 2963 本・smoke pass・`aidev coverage --strict` gaps=0。
 - [x] 既読（wtm.seen.v1）の意味論を直す: markVisibleAgentsSeen はウィンドウにフォーカスがあれば pane の表示を見ずに全 pane を既読にする（main.ts の「意図的な簡略化」）。結果、フォーカス中は displayStateFor が done を返せず、通知は「完了しました」と言うのにサイドバーに印が無い。正しい規則 shouldMarkSeen(paneVisible, windowFocused) は本番から一度も呼ばれていない。20260920-agent-notifications が TerminalRegistry.isVisible を足したので、結線できる前提が揃った（出典: .aidev/works/20260920-agent-notifications/decisions.md）
   → 着地: 20260925-seen-semantics-fix（feature/seen-semantics-fix）。main.ts の markVisibleAgentsSeen を、
   store/seen.ts に新設したテスト可能な純関数 sweepMarkSeen（pane ごとに shouldMarkSeen(isVisible, hasFocus) で
