@@ -290,6 +290,23 @@ describe("Connection", () => {
     await expect(p).rejects.toThrow(/not_found/);
   });
 
+  // 20260925-connection-error-code（design「振る舞いの詳細」）。message の文字列書式（上の
+  // テストで確認済み）に加えて、code をプロパティとしても持つことを確認する（AC1）。
+  it("request: サーバのエラー応答を reject するとき、reject される Error は code プロパティも持つ（AC1・AC4）", async () => {
+    const { conn, sockets } = makeConnection();
+    conn.connect();
+    await flush();
+    const ws = sockets[0]!;
+    ws.open();
+    ws.message(JSON.stringify({ id: JSON.parse(ws.sent[0] as string).id, result: { clientId: "c1", snapshot: makeSnapshot() } }));
+    await flush();
+
+    const p = conn.request("pane.focus", { paneId: "missing" });
+    const sent = JSON.parse(ws.sent.at(-1) as string) as { id: string };
+    ws.message(JSON.stringify({ id: sent.id, error: { code: "not_found", message: "no such pane" } }));
+    await expect(p).rejects.toMatchObject({ code: "not_found", message: "not_found: no such pane" });
+  });
+
   it("フレームの振り分け: OUTPUT/SNAPSHOT は TerminalSinkPort へ、それ以外のイベントは StorePort へ", async () => {
     const { conn, store, sink, sockets } = makeConnection();
     conn.connect();

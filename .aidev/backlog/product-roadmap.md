@@ -265,7 +265,15 @@ parent: 20260918-web-terminal-multiplexer
   を発見・修正——「変更しない」としていた ContextMenu.vue への差し戻しが実際に発生した。
   実測: web 1948 本・ルート一括 2949 本・smoke pass・`aidev coverage --strict` gaps=0。独立点検・cross-task
   check・レビュー2ラウンドで計8件の指摘を解消（負の確認は生ログ付きで decisions.md D1〜D4 に記録）。
-- [ ] Connection がエラーコードをプロパティで持つ: いまは new Error(`<code>: <message>`) の文字列で、web は書式を正規表現で読む（errorCodeOf）。書式が変わると黙って汎用の文言に落ちる（D4）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+- [x] Connection がエラーコードをプロパティで持つ: いまは new Error(`<code>: <message>`) の文字列で、web は書式を正規表現で読む（errorCodeOf）。書式が変わると黙って汎用の文言に落ちる（D4）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
+  → 着地: 20260925-connection-error-code（feature/connection-error-code）。`Connection.ts` が
+  サーバのエラー応答を reject する際、`Object.assign` で `code` プロパティを付与するように
+  変更（`message` の文字列書式は変えない、保守的な設計）。`clientError.ts` の `errorCodeOf` は
+  `.code` を最優先で読み、無ければ既存の正規表現フォールバックへ落ちる。`@wtm/protocol` の
+  `RpcError` 採用（message から code 接頭辞を除く「本筋」の完全な形）は、変更範囲の割に価値が
+  小さいとして見送り、理由を design.md に記録（decisions.md 参照）。review round1 で nit
+  1件（negative-control の diff/cmp 記録漏れ）を発見・修正。
+  実測: root 一括 2978 本・smoke pass・`aidev coverage --strict` gaps=0。
 - [x] Workspace.git の即時化: GitInfoPoller が 5 秒周期なので、workspace を作った直後は最大 5 秒 git が null で、メニューに worktree の項目が出ない（D3）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
   → 着地: 20260925-workspace-git-immediate（feature/workspace-git-immediate）。GitInfoPoller に
   `pollWorkspaceNow(workspaceId)` を追加（対象1件だけを probe。`pollNow()` のように全件を巻き込まない）し、

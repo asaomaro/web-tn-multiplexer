@@ -36,11 +36,17 @@ const MESSAGES: Record<ErrorCode, string> = {
 };
 
 /**
- * `Connection` が投げるエラー（`net/Connection.ts`：`new Error(`<code>: <message>`)`）から code を取り出す。
- * **`Connection` 自身は code をプロパティに持たない**ので、書式を読むしかない（decisions.md D4）。
- * 読めなければ null——呼ぶ側は汎用の文言に落とす。
+ * `Connection` が投げるエラーから code を取り出す。**`code` プロパティを最優先で読む**
+ * （20260925-connection-error-code。`Connection.ts` が `new Error(`<code>: <message>`)` の
+ * `Error` に `code` をプロパティとしても付与している）。`.code` を持たない値（クライアント側
+ * 合成のエラー等）は、従来どおり `<code>: <message>` の書式を正規表現でパースする
+ * フォールバックに落ちる（decisions.md D4）。読めなければ null——呼ぶ側は汎用の文言に落とす。
  */
 export function errorCodeOf(err: unknown): string | null {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code: unknown }).code;
+    if (typeof code === "string") return code;
+  }
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   return /^([a-z_]+): /.exec(message)?.[1] ?? null;
 }
