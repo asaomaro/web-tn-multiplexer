@@ -322,6 +322,66 @@ describe("SessionService — tabs and panes", () => {
     expect(persist.touchCount).toBe(1);
   });
 
+  // 20260925-pane-replace-focus-hint。
+  it("replacePane: 発行する pane.closed の successorPaneId は生存した pane（ドラッグした pane）を指す（AC2）", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const { pane: other } = await service.splitPane(pane.id, "right", undefined);
+    const paneClosedData: { paneId: string; successorPaneId?: string }[] = [];
+    bus.subscribe((e) => {
+      if (e.event === "pane.closed") paneClosedData.push(e.data);
+    });
+
+    service.replacePane(pane.id, other.id);
+
+    expect(paneClosedData).toEqual([{ paneId: other.id, successorPaneId: pane.id }]);
+  });
+
+  // `toEqual` は「キーが無い」と「値が undefined」を区別しないため、`successorPaneId` の
+  // **キー自体が無い**ことは `Object.hasOwn` で確認する（taskcheck T3 round1 の must 指摘：
+  // 元の `toEqual({ successorPaneId: undefined })` は無効な回帰テストだった）。
+  it("closePane: 発行する pane.closed に successorPaneId のキー自体が含まれない（回帰。AC3）", async () => {
+    const { pane } = await service.createWorkspace("/home/u", "api");
+    const { pane: other } = await service.splitPane(pane.id, "right", undefined);
+    const paneClosedData: { paneId: string; successorPaneId?: string }[] = [];
+    bus.subscribe((e) => {
+      if (e.event === "pane.closed") paneClosedData.push(e.data);
+    });
+
+    await service.closePane(other.id);
+
+    expect(paneClosedData).toHaveLength(1);
+    expect(Object.hasOwn(paneClosedData[0]!, "successorPaneId")).toBe(false);
+  });
+
+  it("closeTab: 発行する pane.closed に successorPaneId のキー自体が含まれない（回帰。AC3）", async () => {
+    const { workspace } = await service.createWorkspace("/home/u", "api");
+    const { tab, pane: tabPane } = await service.createTab(workspace.id, undefined);
+    await service.splitPane(tabPane.id, "right", undefined); // この tab に2枚目の pane を作る
+    const paneClosedData: { paneId: string; successorPaneId?: string }[] = [];
+    bus.subscribe((e) => {
+      if (e.event === "pane.closed") paneClosedData.push(e.data);
+    });
+
+    await service.closeTab(tab.id);
+
+    expect(paneClosedData.length).toBeGreaterThan(0);
+    for (const data of paneClosedData) expect(Object.hasOwn(data, "successorPaneId")).toBe(false);
+  });
+
+  it("closeWorkspace: 発行する pane.closed に successorPaneId のキー自体が含まれない（回帰。AC3）", async () => {
+    const { workspace, pane } = await service.createWorkspace("/home/u", "api");
+    await service.splitPane(pane.id, "right", undefined);
+    const paneClosedData: { paneId: string; successorPaneId?: string }[] = [];
+    bus.subscribe((e) => {
+      if (e.event === "pane.closed") paneClosedData.push(e.data);
+    });
+
+    await service.closeWorkspace(workspace.id);
+
+    expect(paneClosedData.length).toBeGreaterThan(0);
+    for (const data of paneClosedData) expect(Object.hasOwn(data, "successorPaneId")).toBe(false);
+  });
+
   it("replacePane: 何も起きなかったときはプロセスを破棄せず publish も保存の予約もしない", async () => {
     const { pane } = await service.createWorkspace("/home/u", "api");
     const events: string[] = [];

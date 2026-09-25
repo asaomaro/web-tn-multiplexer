@@ -28,7 +28,13 @@ export interface SessionLike {
  * pane.closed が全て先に届き、tab.closed・workspace.closed が後から 1 つずつ届く——その途中で「中身の無い、
  * これから閉じられる tab」へ表示を移すと、閉じた pane の xterm.js を作って購読しに行ってしまう。
  */
-export function repairView(cur: ViewTarget, s: SessionLike): ViewTarget | null {
+/**
+ * `successorHint`（20260925-pane-replace-focus-hint。省略可）: 直前に届いた `pane.closed` の
+ * `successorPaneId`。今の tab の中で今の focus 先が消えていた場合、既定の DFS-first-leaf
+ * より優先してこれを採用する（`replacePane` は生存した pane が常に後継のため）。使い捨て
+ * ——呼び出し側がそのイベント1回分だけ渡す想定で、ここでは保持しない。
+ */
+export function repairView(cur: ViewTarget, s: SessionLike, successorHint?: string): ViewTarget | null {
   const liveLeaves = (t: Tab): string[] => depthFirstPaneIds(t.layout).filter((id) => s.panes.get(id)?.tabId === t.id);
   const aliveTab = (id: string | null | undefined, workspaceId: string): Tab | null => {
     const t = id ? s.tabs.get(id) : undefined;
@@ -62,8 +68,16 @@ export function repairView(cur: ViewTarget, s: SessionLike): ViewTarget | null {
   const live = liveLeaves(tab);
   let focusedPaneId: string;
   if (tab.id === cur.tabId) {
-    // 同じ tab の中：今の pane が生きていればそのまま、閉じられていたら最初の葉（サーバの規則）。
-    focusedPaneId = cur.focusedPaneId && live.includes(cur.focusedPaneId) ? cur.focusedPaneId : live[0]!;
+    // 同じ tab の中：今の pane が生きていればそのまま。閉じられていたら、`successorHint`
+    // （`replacePane` 由来。20260925-pane-replace-focus-hint）が生きていればそれを、
+    // 無ければ最初の葉（サーバの closePane 既定の規則）へ。
+    if (cur.focusedPaneId && live.includes(cur.focusedPaneId)) {
+      focusedPaneId = cur.focusedPaneId;
+    } else if (successorHint && live.includes(successorHint)) {
+      focusedPaneId = successorHint;
+    } else {
+      focusedPaneId = live[0]!;
+    }
   } else {
     focusedPaneId = live.includes(tab.focusedPaneId) ? tab.focusedPaneId : live[0]!;
   }
