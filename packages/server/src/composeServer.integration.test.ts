@@ -449,6 +449,70 @@ describe("composeServer (integration)", () => {
     expect(result.path.startsWith(worktreeDir)).toBe(true);
   }, 15000);
 
+  it("workspace.create は、実際の git リポジトリなら定期ポーリング（5秒）を待たずに Workspace.git が埋まる（20260925-workspace-git-immediate。AC1・AC3）", async () => {
+    const stateDir = await makeTempDir("wtm-compose-gitnow-");
+    const repo = await makeTempDir("wtm-compose-gitnow-repo-");
+
+    const git = new ChildProcessGitRunner();
+    async function runGit(args: string[]): Promise<void> {
+      const r = await git.run(repo, args, 10_000);
+      if (r.code !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+    }
+    await runGit(["init", "-q", "-b", "main"]);
+    await runGit(["config", "user.email", "t@example.com"]);
+    await runGit(["config", "user.name", "t"]);
+    await runGit(["commit", "-q", "--allow-empty", "-m", "init"]);
+
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    cleanups.push(() => rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await server.listen(); // gitPoller.start() もここで走る（既定の初期 workspace は別の場所を指すので無関係）
+
+    const origin = `http://127.0.0.1:${port}`;
+    const loginRes = await fetch(`${origin}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin, host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ token: server.freshToken }),
+    });
+    const cookie = loginRes.headers.get("set-cookie")!.split(";")[0]!;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { cookie, origin, host: `127.0.0.1:${port}` } });
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    cleanups.push(async () => {
+      ws.close();
+    });
+
+    await requestUntilMatchingId(ws, "h1", "client.hello", { protocol: 1, kind: "desktop" });
+    const start = Date.now();
+    const created = (await requestUntilMatchingId(ws, "c1", "workspace.create", { cwd: repo, label: "repo" })) as {
+      workspace: { id: string };
+    };
+    const responseMs = Date.now() - start;
+    // AC3（粗い sanity check。**厳密な検証ではない**——taskcheck T5 round1 で確認: 実リポジトリの
+    // git 呼び出しは速く、`await` に戻す退行を入れてもこの閾値は超えないため、この assertion
+    // 単体では await への退行を検知できない。厳密な検証は index.test.ts の
+    // FakeGitInfoPoller〔releasePending() で明示的に遅延させる〕が担う——決定的で確実）。
+    // ここでは「明らかに `GIT_TIMEOUT_MS`〔3000ms〕級の遅延でブロックしていないか」という
+    // 粗い確認に留める。
+    expect(responseMs).toBeLessThan(2000);
+
+    // AC1: 定期ポーリング（5秒周期）の間隔を待たずに Workspace.git が埋まることを、
+    // 実ホームディレクトリを汚さない範囲（この work 専用の一時ディレクトリ）で確認する。
+    // 5秒よりずっと短い上限（2秒）でポーリングし、間に合わなければ失敗させる。
+    const deadline = Date.now() + 2000;
+    let gitInfo: unknown;
+    do {
+      gitInfo = server.session.snapshot().workspaces.find((w) => w.id === created.workspace.id)?.git;
+      if (gitInfo) break;
+      await new Promise((r) => setTimeout(r, 50));
+    } while (Date.now() < deadline);
+    expect(gitInfo).toMatchObject({ branch: "main" });
+  }, 15000);
+
   it("close() resolves promptly even while a browser WebSocket is still connected (レビュー指摘の回帰テスト)", async () => {
     // 以前は composeServer().close() が WebSocket を一切閉じなかったため、ブラウザが1つでも繋がった
     // ままだと httpServer.server.close() のコールバックが永久に発火しなかった（`wsServer`/`WsGateway` が

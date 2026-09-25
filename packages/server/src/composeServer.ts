@@ -202,7 +202,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   palettes.attach({ getPane: (id) => session.getPane(id), getTab: (id) => session.getTab(id), clients });
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(logger);
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees, agentIntegrations });
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees, agentIntegrations, gitPoller });
   const wsServer = new WsServerWs(httpServer.server, originRejections, auth.authorizeUpgrade, logger);
   // `/ws` は `listen()` の最後（復元と poller の開始の後）まで受け付けない（D102）。
   wsServer.setReady(false);

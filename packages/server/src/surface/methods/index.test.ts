@@ -14,6 +14,7 @@ import { DefaultSizeAuthority } from "../../clients/SizeAuthority.js";
 import { answerPaletteFor } from "../../clients/answerPalette.js";
 import { ControlSurface } from "../ControlSurface.js";
 import { registerAllMethods } from "./index.js";
+import type { GitInfoPoller } from "../../git/GitInfoPoller.js";
 import type { WorktreeService } from "../../git/WorktreeService.js";
 import type { AgentIntegrationService } from "../../agent/AgentIntegrationService.js";
 import type { NewCwdDeps } from "../../session/newCwd.js";
@@ -123,8 +124,9 @@ function makeContext(newCwdDeps?: NewCwdDeps) {
   const clients = new DefaultClientRegistry();
   const sizeAuthority = new DefaultSizeAuthority(clients, session);
   const surface = new ControlSurface(new MemoryLogger());
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees(), agentIntegrations: stubAgentIntegrations() });
-  return { terminals, session, clients, surface };
+  const gitPoller = new FakeGitInfoPoller();
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees: stubWorktrees(), agentIntegrations: stubAgentIntegrations(), gitPoller });
+  return { terminals, session, clients, surface, gitPoller };
 }
 
 describe("registerAllMethods — client / workspace / tab / pane flow", () => {
@@ -261,6 +263,21 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
     const focusResult = await ctx.surface.invoke(c, "pane.focus", { paneId: newPane.id });
     expect(focusResult.ok).toBe(true);
     expect(ctx.session.getTab(tab.id)).toBeDefined();
+  });
+
+  it("workspace.create は gitPoller.pollWorkspaceNow の完了を待たずに応答する（fire-and-forget。20260925-workspace-git-immediate。AC1・AC3。taskcheck T3 round1 で強化）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const wsResult = await ctx.surface.invoke(c, "workspace.create", { cwd: "/home/u", label: "api" });
+    expect(wsResult.ok).toBe(true);
+    if (!wsResult.ok) throw new Error("unreachable");
+    const { workspace } = wsResult.result as { workspace: { id: string } };
+    // FakeGitInfoPoller.pollWorkspaceNow は releasePending() を呼ぶまで解決しない。
+    // それでも invoke() が（ハングせずに）返ってきた＝応答は pollWorkspaceNow の完了を
+    // 待っていないことの直接の証拠（await していれば invoke() 自体がここまで到達しない）。
+    expect(ctx.gitPoller.polledWorkspaceIds).toEqual([]); // まだ完了させていない
+    ctx.gitPoller.releasePending();
+    await Promise.resolve();
+    expect(ctx.gitPoller.polledWorkspaceIds).toEqual([workspace.id]); // 正しい id で呼ばれていた
   });
 
   it("tab.move reorders tabIds and emits workspace.updated; a second tab is required (20260923-missing-keybinding-actions)", async () => {
@@ -472,6 +489,35 @@ describe("registerAllMethods — workspace.rename", () => {
     expect(missing).toEqual({ ok: false, error: { code: "not_found", message: expect.stringContaining("w999") } });
   });
 });
+
+/**
+ * workspace.create の配線を確かめるための代役（20260925-workspace-git-immediate）。
+ * `pollWorkspaceNow` を呼んだ workspaceId を記録するだけ（実際の git は呼ばない）。
+ * 返す Promise は `releasePending()` を呼ぶまで解決しない——taskcheck T3 round1 の指摘
+ * （同期的に解決する Fake では fire-and-forget と await の区別が付かない）を受けて、
+ * 「応答が返った時点ではまだ完了させていない」ことを明示的に検証できる形にした。
+ */
+class FakeGitInfoPoller implements GitInfoPoller {
+  readonly polledWorkspaceIds: string[] = [];
+  private readonly pendingResolvers: (() => void)[] = [];
+  start(): void {}
+  stop(): void {}
+  pollNow(): Promise<void> {
+    return Promise.resolve();
+  }
+  pollWorkspaceNow(workspaceId: string): Promise<void> {
+    return new Promise((resolve) => {
+      this.pendingResolvers.push(() => {
+        this.polledWorkspaceIds.push(workspaceId);
+        resolve();
+      });
+    });
+  }
+  /** 保留中の `pollWorkspaceNow` を今すぐ完了させる（テストから明示的に呼ぶ）。 */
+  releasePending(): void {
+    for (const resolve of this.pendingResolvers.splice(0)) resolve();
+  }
+}
 
 /**
  * worktree の方式は別のテストで確かめるので、ここでは呼ばれない代役を置く

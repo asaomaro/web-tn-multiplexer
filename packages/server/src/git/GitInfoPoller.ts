@@ -1,4 +1,4 @@
-import type { GitInfo, Workspace } from "@wtm/protocol";
+import type { GitInfo, Workspace, WorkspaceId } from "@wtm/protocol";
 import type { SessionService } from "../session/SessionService.js";
 import type { GitRunner } from "../infra/GitRunner.js";
 import { resolveCommonDir } from "./worktree.js";
@@ -12,6 +12,12 @@ export interface GitInfoPoller {
   stop(): void;
   /** テスト・診断用に、間隔を待たず今すぐ 1 周する。 */
   pollNow(): Promise<void>;
+  /**
+   * 1つの workspace だけを対象に、間隔を待たず今すぐ probe する（20260925-workspace-git-immediate。
+   * design「設計方針」）。`workspace.create` 直後に呼ばれる想定——`pollNow()`（全件）と違い、
+   * 他の workspace を巻き込まない。対象が見つからなければ何もしない。
+   */
+  pollWorkspaceNow(workspaceId: WorkspaceId): Promise<void>;
 }
 
 export class DefaultGitInfoPoller implements GitInfoPoller {
@@ -42,6 +48,12 @@ export class DefaultGitInfoPoller implements GitInfoPoller {
   async pollNow(): Promise<void> {
     const workspaces = this.session.snapshot().workspaces;
     await Promise.all(workspaces.map((ws) => this.pollWorkspace(ws)));
+  }
+
+  async pollWorkspaceNow(workspaceId: WorkspaceId): Promise<void> {
+    const ws = this.session.getWorkspace(workspaceId);
+    if (!ws) return;
+    await this.pollWorkspace(ws);
   }
 
   private async pollWorkspace(ws: Workspace): Promise<void> {
