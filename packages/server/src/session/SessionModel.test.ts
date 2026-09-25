@@ -353,6 +353,18 @@ describe("SessionModel — focus / navigation", () => {
       expect(model.getPane(p3)).toBeUndefined(); // レイアウトからだけでなく pane 一覧からも消える
     });
 
+    // 20260925-pane-replace-focus-hint。
+    it("戻り値の successorPaneId は生存した pane（ドラッグした pane）を指す（AC2）", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+
+      const result = model.replacePane(pane.id, p2);
+
+      expect(result?.successorPaneId).toBe(pane.id); // p2（削除される側）ではなく pane.id（生存）
+    });
+
     it("両側で split が畳まれる（2 pane だけの tab でも成立する。research.md F5）", () => {
       const model = new SessionModel();
       const { tab, pane } = model.createWorkspace("/home/u", "api", init);

@@ -64,7 +64,9 @@ export class StoreAdapter implements StorePort {
 
   applyEvent(e: ServerEvent): void {
     this.applyEventToSession(e);
-    this.applyViewRepair();
+    // `successorPaneId`（20260925-pane-replace-focus-hint）: pane.closed が運ぶ後継ヒントを、
+    // この1回の repair 呼び出しだけへ渡す（使い捨て。保持しない）。
+    this.applyViewRepair(e.event === "pane.closed" ? e.data.successorPaneId : undefined);
   }
 
   /**
@@ -73,12 +75,12 @@ export class StoreAdapter implements StorePort {
    * ダイアログを開いている間は、焦点そのものではなく「閉じたときに戻す先」を差し替える（焦点を動かすと
    * `TerminalPane` が `term.focus()` してダイアログからフォーカスを奪うため）。
    */
-  private applyViewRepair(): void {
+  private applyViewRepair(successorHint?: string): void {
     const session = useSessionStore(this.opts.pinia);
     const view = useViewStore(this.opts.pinia);
     const dialogOpen = view.openDialog !== null;
     const focused = dialogOpen ? (view.preDialogFocusPaneId ?? view.focusedPaneId) : view.focusedPaneId;
-    const next = repairView({ workspaceId: view.workspaceId, tabId: view.tabId, focusedPaneId: focused }, session);
+    const next = repairView({ workspaceId: view.workspaceId, tabId: view.tabId, focusedPaneId: focused }, session, successorHint);
     if (!next) return;
     if (next.workspaceId && next.tabId && (next.workspaceId !== view.workspaceId || next.tabId !== view.tabId)) view.setView(next.workspaceId, next.tabId);
     if (next.focusedPaneId === focused) return;

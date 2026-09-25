@@ -88,6 +88,41 @@ describe("repairView（D97）", () => {
     expect(seen.some((v) => v.tabId === "t1")).toBe(false);
   });
 
+  // 20260925-pane-replace-focus-hint。decisions.md D5（.aidev/works/20260924-pane-dnd-split-move）
+  // の再現ケース：replacePane 後のレイアウトが {a: 別pane, b: 後継pane} になり、DFS順だと
+  // 別pane（p_other）が選ばれてしまうが、successorHint（後継pane）を渡すとそちらが優先される。
+  it("successorHint が生きていれば、DFS-first-leaf より優先して採用する（AC4。D5 の再現）", () => {
+    // レイアウトの DFS順は [p_other, p_hint]——ヒント無しなら p_other が選ばれてしまう。
+    const s = session([ws("w1", ["t1"])], [tab("t1", "w1", two("p_other", "p_hint"), "p_hint")], [pane("p_other", "t1"), pane("p_hint", "t1")]);
+    // p_removed（replacePane で消えた targetPaneId）に focus していたクライアントを模す。
+    const result = repairView({ workspaceId: "w1", tabId: "t1", focusedPaneId: "p_removed" }, s, "p_hint");
+    expect(result?.focusedPaneId).toBe("p_hint");
+  });
+
+  it("successorHint が指す pane も既に存在しなければ、既存の DFS-first-leaf にフォールバックする（AC5）", () => {
+    const s = session([ws("w1", ["t1"])], [tab("t1", "w1", two("p1", "p2"), "p2")], [pane("p1", "t1")]);
+    const result = repairView({ workspaceId: "w1", tabId: "t1", focusedPaneId: "p2" }, s, "p-nonexistent");
+    expect(result?.focusedPaneId).toBe("p1"); // 既存の DFS-first-leaf のまま
+  });
+
+  it("successorHint が無くても、既存の DFS-first-leaf のまま動作する（回帰）", () => {
+    const s = session([ws("w1", ["t1"])], [tab("t1", "w1", two("p1", "p2"), "p2")], [pane("p1", "t1")]);
+    expect(repairView({ workspaceId: "w1", tabId: "t1", focusedPaneId: "p2" }, s)?.focusedPaneId).toBe("p1");
+  });
+
+  it("今の focus 先がまだ生きていれば、successorHint があっても無視する（AC4 は焦点が消えた場合だけ）", () => {
+    const s = session([ws("w1", ["t1"])], [tab("t1", "w1", two("p1", "p2"), "p2")], [pane("p1", "t1"), pane("p2", "t1")]);
+    expect(repairView({ workspaceId: "w1", tabId: "t1", focusedPaneId: "p1" }, s, "p2")).toBeNull(); // 何も変わらない
+  });
+
+  it("別の tab へ移る場合、successorHint は無視する（別 tab の分岐には適用しない）", () => {
+    // 自分の tab（t1）自体が閉じられ、別の tab（t2）へ移る場面。t2 の focusedPaneId は p9 で
+    // 生きているので、たとえ successorHint に別の値を渡しても t2 側では参照されない。
+    const s = session([ws("w1", ["t1", "t2"])], [tab("t2", "w1", leaf("p9"), "p9")], [pane("p9", "t2")]);
+    const result = repairView({ workspaceId: "w1", tabId: "t1", focusedPaneId: "p1" }, s, "p9-decoy");
+    expect(result).toEqual({ workspaceId: "w1", tabId: "t2", focusedPaneId: "p9" });
+  });
+
   it("別の tab の pane が閉じられても、自分の表示は動かさない", () => {
     const s = session([ws("w1", ["t1", "t2"])], [tab("t1", "w1", leaf("p1"), "p1"), tab("t2", "w1", leaf("p9"), "p9")], [pane("p1", "t1")]);
     expect(repairView({ workspaceId: "w1", tabId: "t1", focusedPaneId: "p1" }, s)).toBeNull();

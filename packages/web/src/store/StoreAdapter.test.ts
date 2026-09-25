@@ -190,6 +190,50 @@ describe("StoreAdapter", () => {
     expect(view.focusedPaneId).toBe("p1");
   });
 
+  // 20260925-pane-replace-focus-hint。decisions.md D5（.aidev/works/20260924-pane-dnd-split-move）
+  // の再現：レイアウトの DFS順は [p_other, p_hint]——ヒントが無ければ p_other が選ばれてしまう。
+  it("pane.closed の successorPaneId があれば、DFS-first-leaf より優先してそちらへ焦点を移す（AC6）", () => {
+    const { adapter } = makeAdapter();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted({ ...makeWorkspace("w1"), tabIds: ["t1"], activeTabId: "t1" });
+    session.tabUpserted({ ...makeTab("t1", "w1"), layout: { type: "split", id: "s1", dir: "right", ratio: 0.5, a: { type: "pane", paneId: "p_other" }, b: { type: "pane", paneId: "p_hint" } }, focusedPaneId: "p_hint" });
+    session.paneUpserted(makePane("p_other", "t1"));
+    session.paneUpserted(makePane("p_hint", "t1"));
+    view.setView("w1", "t1");
+    view.focusPane("p_target"); // replacePane で消える直前の pane にローカルで focus していた状態を模す
+
+    adapter.applyEvent({ event: "pane.closed", data: { paneId: "p_target", successorPaneId: "p_hint" } });
+
+    expect(view.focusedPaneId).toBe("p_hint"); // p_other（DFS順の最初）ではなく、ヒントが指す方
+  });
+
+  // taskcheck の should 指摘（T5 round1）：ヒントが「使い捨て」であること（次の無関係な
+  // pane.closed に引き継がれないこと）を直接確認するテストが無かった。
+  it("successorHint は使い捨て——次の無関係な pane.closed には引き継がれない（design「設計方針」）", () => {
+    const { adapter } = makeAdapter();
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted({ ...makeWorkspace("w1"), tabIds: ["t1"], activeTabId: "t1" });
+    session.tabUpserted({ ...makeTab("t1", "w1"), layout: { type: "split", id: "s1", dir: "right", ratio: 0.5, a: { type: "pane", paneId: "p_other" }, b: { type: "pane", paneId: "p_hint" } }, focusedPaneId: "p_hint" });
+    session.paneUpserted(makePane("p_other", "t1"));
+    session.paneUpserted(makePane("p_hint", "t1"));
+    view.setView("w1", "t1");
+    view.focusPane("p_target");
+
+    // 1回目：ヒント付き。p_hint が採用される（前のテストと同じ）。
+    adapter.applyEvent({ event: "pane.closed", data: { paneId: "p_target", successorPaneId: "p_hint" } });
+    expect(view.focusedPaneId).toBe("p_hint");
+
+    // 2回目：無関係な pane（p_third。session に存在しない＝既に死んでいる想定）がローカルの
+    // focus だったとして、ヒント無しの pane.closed が届く。p_other/p_hint はどちらもまだ
+    // 生きているので、ヒント無しなら DFS順どおり p_other が選ばれるはず——1回目の
+    // "p_hint" が誤って使い回されると、ここで p_hint が選ばれてしまう。
+    view.focusPane("p_third");
+    adapter.applyEvent({ event: "pane.closed", data: { paneId: "p_third" } });
+    expect(view.focusedPaneId).toBe("p_other"); // p_hint（前回のヒントの使い回し）ではない
+  });
+
   it("表示中の tab が閉じられたら残りの tab を、workspace が閉じられたら残りの workspace を表示する（D97）", () => {
     const { adapter } = makeAdapter();
     const session = useSessionStore(pinia);

@@ -73,7 +73,13 @@ export interface PaneExitedEvent {
 }
 export interface PaneClosedEvent {
   event: "pane.closed";
-  data: { paneId: string };
+  /**
+   * `successorPaneId`（20260925-pane-replace-focus-hint）: この pane に focus していた
+   * クライアントが選ぶべき後継 pane の推奨ヒント。`replacePane` だけが埋める
+   * （生存した pane が常に後継）。`closePane`/`closeTab`/`closeWorkspace` は含めない
+   * （クライアント側は既存の DFS-first-leaf の規則にフォールバックする）。
+   */
+  data: { paneId: string; successorPaneId?: string };
 }
 export interface PaneAgentStatusChangedEvent {
   event: "pane.agent_status_changed";

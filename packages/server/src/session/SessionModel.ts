@@ -59,6 +59,13 @@ export interface RemovalResult {
    *  （D42：直接 `closeWorkspace` した場合は複数になりうるため、単数の `closedTabId` から複数形に直した）。 */
   removedTabIds: TabId[];
   closedWorkspaceId: WorkspaceId | null;
+  /**
+   * 削除された pane に focus していたクライアントが選ぶべき後継 pane（20260925-pane-replace-
+   * focus-hint）。`replacePane` だけが埋める（生存した pane が常に後継）。他の操作
+   * （`closePane`/`closeTab`/`closeWorkspace`）は設定しない——`undefined` のままで、
+   * クライアント側は既存の DFS-first-leaf の規則にフォールバックする。
+   */
+  successorPaneId?: PaneId;
 }
 
 export class NotFoundError extends Error {
@@ -781,7 +788,8 @@ export class SessionModel {
     // グローバル focus を生存した pane（paneId）へ（20260925-pane-move-global-focus。design「設計方針」）。
     // 削除された pane が tab のローカル focus だったかどうかに関わらず、常に paneId を指す。
     this.setFocus(tab.workspaceId, tab.id, paneId);
-    return { removedPaneIds: [targetPaneId], removedTabIds: [], closedWorkspaceId: null };
+    // 後継ヒント（20260925-pane-replace-focus-hint。design「インターフェース / データ構造」）。
+    return { removedPaneIds: [targetPaneId], removedTabIds: [], closedWorkspaceId: null, successorPaneId: paneId };
   }
 
   zoomPane(paneId: PaneId, mode: "toggle" | "on" | "off"): void {

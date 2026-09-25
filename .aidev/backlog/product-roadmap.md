@@ -333,7 +333,18 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] pane 直接接続・制御ストリーム: herdr の terminal attach／session observe／session control 相当（pane 単体への直接接続・書き込み権限の排他制御・閲覧専用の購読ストリーム。既存の pane.subscribe は複数購読者を許す設計のため前提が異なる） (needs: 20260923-external-control-api)（出典: .aidev/works/20260923-external-control-api/decisions.md D2）（出典: .aidev/works/20260923-external-control-api/decisions.md）
 - [ ] キーバインドでの workspace 並べ替え（AC8: move_workspace_previous/next）は flat な隣接1件だけを入れ替える実装のため、手動グループの非アンカーメンバーを動かすと、隣が別グループ/無所属の workspace の場合に画面上は何も変化しないことがある（20260923-workspace-grouping レビューで発見。D&D 側は同レビューで修正済み。キーバインド側は workspace.move の delta 方式を anchor 方式へ変えるプロトコル改修が要るため今回は見送り）。（出典: .aidev/works/20260923-workspace-grouping/review.md）
 - [ ] クリップボード画像のリモート貼り付け: herdr は `remote_image_paste`（既定 Ctrl+V、`herdr --remote` 使用時だけ有効）でクライアントの画像クリップボードをリモートのペインへ貼り付けられるが、web-tn-multiplexer にはこれに相当する実装が無い（`packages/web/src/term/clipboard.ts` はテキストの readText/writeText のみ、画像用の navigator.clipboard.read()・ClipboardItem・サーバー側の画像アップロード経路とも未実装）。サーバーとブラウザが別マシンの構成（WSL2 のようにOSクリップボードが共有される環境を除く、純粋なリモート接続）では、pane 内のプロセスがクライアント側の画像クリップボードに触れる手段が無い。（出典: .aidev/works/20260923-workspace-grouping/review.md）
-- [ ] 複数クライアントで同じtabを見ているとき、片方のD&Dによる pane 分割解除（pane.replace）でドロップ先が閉じられると、そのpaneへローカルでfocusしていた別クライアントの focus 復帰先が想定とずれる: viewRepair.ts のフォールバック規則（閉じたpaneの代わりはレイアウト木の最初の葉。SessionModel.closePaneの規則をそのまま写したもの）は、SessionModel.replacePaneの「後継は必ずドラッグした pane 自身」という規則を知らない（pane.closed/layout.updated イベントに推奨後継のヒントが無いため、クライアント側では区別できない）。20260924-pane-dnd-split-move の cross-check で発見。直すには protocol（イベントへの後継ヒント追加）とviewRepair.ts双方の変更が要る。（出典: .aidev/works/20260924-pane-dnd-split-move/review.md）
+- [x] 複数クライアントで同じtabを見ているとき、片方のD&Dによる pane 分割解除（pane.replace）でドロップ先が閉じられると、そのpaneへローカルでfocusしていた別クライアントの focus 復帰先が想定とずれる: viewRepair.ts のフォールバック規則（閉じたpaneの代わりはレイアウト木の最初の葉。SessionModel.closePaneの規則をそのまま写したもの）は、SessionModel.replacePaneの「後継は必ずドラッグした pane 自身」という規則を知らない（pane.closed/layout.updated イベントに推奨後継のヒントが無いため、クライアント側では区別できない）。20260924-pane-dnd-split-move の cross-check で発見。直すには protocol（イベントへの後継ヒント追加）とviewRepair.ts双方の変更が要る。（出典: .aidev/works/20260924-pane-dnd-split-move/review.md）
+  → 着地: 20260925-pane-replace-focus-hint（feature/pane-replace-focus-hint）。
+  `PaneClosedEvent.data` に任意の `successorPaneId` を追加し、`replacePane` だけが生存した
+  pane（ドラッグした pane）を埋めて発行する。`closePane`/`closeTab`/`closeWorkspace` は
+  発行しない（既存の DFS-first-leaf のまま）。`viewRepair.ts` はヒントがあれば最優先で採用し、
+  `StoreAdapter.ts` が `pane.closed` からヒントを取り出して使い捨てで渡す。protocol→server→
+  web の3層にまたがる変更のため research 工程を実施。coding 中に taskcheck が
+  `exactOptionalPropertyTypes` による型エラーと、`toEqual({ successorPaneId: undefined })`
+  が「キー不在」と「値が undefined」を区別できない無効な回帰テストを発見（`Object.hasOwn`
+  ベースへ是正）。`StoreAdapter.test.ts` に元のバグ（decisions.md D5）を end-to-end で
+  再現する回帰テストを追加。review は5観点とも findings 0。
+  実測: server 829 本・ルート一括 3003 本・smoke pass・`aidev coverage --strict` gaps=0。
 - [x] レイアウトだけを書き換える pane 操作（swapPaneWith/moveToEdge/replacePane/moveToTab/moveToNewTab）はセッション全体のグローバル focus（this.focus）を更新しない: ローカル保存 view の無い新規クライアントが直後に再接続すると、移動先ではなく元の focus が指す pane へ復元されうる（20260924-pane-move-cross-tab decisions.md D4）
   → 着地: 20260925-pane-move-global-focus（feature/pane-move-global-focus）。5操作全ての
   成功パス末尾に `this.setFocus(workspaceId, tabId, paneId)`（動かした pane が新しい

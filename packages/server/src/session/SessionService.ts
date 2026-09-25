@@ -288,11 +288,23 @@ export class SessionService {
     await this.recreateIfEmpty(); // D24
   }
 
+  /**
+   * `pane.closed` を発行する（20260925-pane-replace-focus-hint）。`successorPaneId` が
+   * `undefined` のときはキー自体を含めない——`exactOptionalPropertyTypes` の下で
+   * `{ successorPaneId: undefined }` は型エラーになり、かつ「キーが無い」と「値が
+   * undefined」は `toEqual` 等では区別できないため、実際に省く形にしておく必要がある。
+   */
+  private publishPaneClosed(paneId: PaneId, successorPaneId: PaneId | undefined): void {
+    this.bus.publish({ event: "pane.closed", data: successorPaneId === undefined ? { paneId } : { paneId, successorPaneId } });
+  }
+
   private async closeWorkspaceOne(id: WorkspaceId): Promise<void> {
     const result = this.model.closeWorkspace(id);
     for (const paneId of result.removedPaneIds) this.terminals.dispose(paneId);
     // design「連鎖して閉じるときは pane.closed → tab.closed → workspace.closed の順」（D42 で漏れを修正）。
-    for (const paneId of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId } });
+    // successorPaneId（20260925-pane-replace-focus-hint）: closeWorkspace 由来では常に undefined
+    // （RemovalResult に設定されない）ので、既存どおりフィールドが現れないまま発行される。
+    for (const paneId of result.removedPaneIds) this.publishPaneClosed(paneId, result.successorPaneId);
     for (const tabId of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId } });
     this.bus.publish({ event: "workspace.closed", data: { workspaceId: id } });
     this.labelGen.delete(id);
@@ -430,7 +442,8 @@ export class SessionService {
     const result = this.model.closeTab(id);
     for (const paneId of result.removedPaneIds) this.terminals.dispose(paneId);
     // design「連鎖して閉じるときは pane.closed → tab.closed → workspace.closed の順」（D42 で漏れを修正）。
-    for (const paneId of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId } });
+    // successorPaneId（20260925-pane-replace-focus-hint）: closeTab 由来では常に undefined。
+    for (const paneId of result.removedPaneIds) this.publishPaneClosed(paneId, result.successorPaneId);
     for (const tabId of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId } });
     if (result.closedWorkspaceId) {
       this.bus.publish({ event: "workspace.closed", data: { workspaceId: result.closedWorkspaceId } });
@@ -485,7 +498,8 @@ export class SessionService {
     const workspaceId = tabId ? this.model.getTab(tabId)?.workspaceId : undefined; // tab が消える前に控える（D88）
     const result = this.model.closePane(paneId);
     for (const pid of result.removedPaneIds) this.terminals.dispose(pid);
-    for (const pid of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId: pid } });
+    // successorPaneId（20260925-pane-replace-focus-hint）: closePane 由来では常に undefined。
+    for (const pid of result.removedPaneIds) this.publishPaneClosed(pid, result.successorPaneId);
     for (const tid of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId: tid } });
     if (result.closedWorkspaceId) {
       this.bus.publish({ event: "workspace.closed", data: { workspaceId: result.closedWorkspaceId } });
@@ -574,7 +588,9 @@ export class SessionService {
     const result = this.model.replacePane(paneId, targetPaneId);
     if (!result) return false;
     for (const pid of result.removedPaneIds) this.terminals.dispose(pid);
-    for (const pid of result.removedPaneIds) this.bus.publish({ event: "pane.closed", data: { paneId: pid } });
+    // successorPaneId（20260925-pane-replace-focus-hint）: 生存した pane（paneId）を後継の
+    // ヒントとして届ける。design「振る舞いの詳細」。
+    for (const pid of result.removedPaneIds) this.publishPaneClosed(pid, result.successorPaneId);
     this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
     this.persist.touch();
     return true;
