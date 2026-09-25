@@ -1,4 +1,4 @@
-import type { AgentInfo, DisplayState } from "@wtm/protocol";
+import type { AgentInfo, DisplayState, Pane } from "@wtm/protocol";
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
@@ -76,7 +76,28 @@ export function aggregate(states: (DisplayState | null)[]): DisplayState | null 
 /**
  * 既読を進めてよいか（D56 の訂正 6）：pane が表示に含まれていて（破棄されていない）、かつウィンドウの
  * フォーカスが失われたと分かっていないとき（`document.hasFocus()` が false と確認できていなければ進める）。
+ * 既読を進める呼び出し元（`sweepMarkSeen`・`TerminalPane.vue` の `onMounted`。
+ * 20260925-seen-semantics-fix）は、いずれも必ずこの関数を経由すること——新しい発火点を
+ * 足すときも、判定ロジックをここ以外に複製しない。
  */
 export function shouldMarkSeen(paneVisible: boolean, windowFocused: boolean): boolean {
   return paneVisible && windowFocused;
+}
+
+/**
+ * session 内の pane を掃引し、`shouldMarkSeen` を満たすものだけ既読を進める
+ * （20260925-seen-semantics-fix。design「設計方針」）。`main.ts`（export を持たず単体テスト
+ * できないエントリポイント）から独立してテストできるよう、ここへ切り出した。
+ */
+export function sweepMarkSeen(
+  panes: Iterable<Pick<Pane, "id" | "agent">>,
+  isVisible: (paneId: string) => boolean,
+  windowFocused: boolean,
+  markSeen: (instanceId: string, seq: number) => void,
+): void {
+  for (const pane of panes) {
+    if (pane.agent && shouldMarkSeen(isVisible(pane.id), windowFocused)) {
+      markSeen(pane.agent.instanceId, pane.agent.completionSeq);
+    }
+  }
 }

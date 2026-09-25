@@ -7,6 +7,7 @@ import { KeyInputController } from "../keys/KeyInputController.js";
 import { KeyRouter, type KeyRouterClock } from "../keys/KeyRouter.js";
 import { DEFAULT_KEYMAP } from "../keys/keymap.js";
 import type { ConnectionPort } from "../net/ports.js";
+import { useSeenStore } from "../store/seen.js";
 import { useSessionStore } from "../store/session.js";
 import { useViewStore } from "../store/view.js";
 import { MouseBridge } from "../term/MouseBridge.js";
@@ -17,6 +18,9 @@ import TerminalPane from "./TerminalPane.vue";
 let pinia: Pinia;
 
 beforeEach(() => {
+  // seen store は wtm.seen.v1（localStorage）を読む。消さないと前のテストの既読が持ち越される
+  // （20260925-seen-semantics-fix。Sidebar.test.ts の並び順の扱いと同じ理由）。
+  localStorage.clear();
   pinia = createPinia();
 });
 afterEach(() => {
@@ -85,6 +89,50 @@ describe("TerminalPane", () => {
     const entry = registry.get("p1")!;
     expect(wrapper.find(".terminal-pane-mount").element.contains(entry.element)).toBe(true);
     wrapper.unmount();
+  });
+
+  // 20260925-seen-semantics-fix（design「振る舞いの詳細」手順3）。ウィンドウが既にフォーカス
+  // されたまま pane を表示に切り替えた遷移を拾う——main.ts の発火点だけでは拾えなかった。
+  describe("mount 時の既読（20260925-seen-semantics-fix）", () => {
+    function makeAgent(overrides: Partial<Pane["agent"]> = {}): NonNullable<Pane["agent"]> {
+      return { instanceId: "a1", kind: "claude", label: "Claude Code", state: "idle", completionSeq: 3, serverSeenSeq: 0, verified: true, since: 0, ...overrides };
+    }
+
+    it("ウィンドウにフォーカスがあれば、mount した pane のエージェントを既読にする", () => {
+      const registry = makeRegistry();
+      useSessionStore(pinia).tabUpserted(makeTab("t1"));
+      useSessionStore(pinia).paneUpserted(makePane("p1", { agent: makeAgent() }));
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const wrapper = mountPane("p1", registry);
+      const seen = useSeenStore(pinia);
+      expect(seen.getSeenSeq("a1", -1)).toBe(3);
+      wrapper.unmount();
+      hasFocus.mockRestore();
+    });
+
+    it("ウィンドウにフォーカスが無ければ、既読にしない", () => {
+      const registry = makeRegistry();
+      useSessionStore(pinia).tabUpserted(makeTab("t1"));
+      useSessionStore(pinia).paneUpserted(makePane("p1", { agent: makeAgent() }));
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      const wrapper = mountPane("p1", registry);
+      const seen = useSeenStore(pinia);
+      expect(seen.getSeenSeq("a1", -1)).toBe(-1);
+      wrapper.unmount();
+      hasFocus.mockRestore();
+    });
+
+    it("エージェントが無い pane は既読の対象にしない", () => {
+      const registry = makeRegistry();
+      useSessionStore(pinia).tabUpserted(makeTab("t1"));
+      useSessionStore(pinia).paneUpserted(makePane("p1", { agent: null }));
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const wrapper = mountPane("p1", registry);
+      const seen = useSeenStore(pinia);
+      expect(seen.seen).toEqual({});
+      wrapper.unmount();
+      hasFocus.mockRestore();
+    });
   });
 
   it("unmount で release し、要素を取り外す", () => {
