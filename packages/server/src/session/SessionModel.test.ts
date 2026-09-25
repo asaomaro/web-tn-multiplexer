@@ -190,6 +190,35 @@ describe("SessionModel — focus / navigation", () => {
 
       expect(model.swapPaneWith(pane.id, "p-nonexistent")).toBe(false);
     });
+
+    // 20260925-pane-move-global-focus。「入れ替え前から既に paneId が focus だった」ケースでは
+    // 更新が実際に起きたのか区別できないため、swap 前に**別の pane**へ明示的に focus を移してから、
+    // その pane（otherPaneId 側）と入れ替えることで、focus が paneId（第1引数）へ動くことを確認する。
+    it("成功すると、グローバル focus が入れ替えを要求した pane（paneId）を指す（AC1）", () => {
+      const model = new SessionModel();
+      const { workspace, tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+      model.focusPane(pane.id); // focus を otherPaneId 側（pane.id）へ明示的に移しておく
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: tab.id, paneId: pane.id });
+
+      // p2（focus されていない側）を paneId 側に渡して入れ替える。
+      const ok = model.swapPaneWith(p2, pane.id);
+
+      expect(ok).toBe(true);
+      // paneId（第1引数。ここでは p2）が新しい focus 先——otherPaneId（pane.id。直前まで focus）ではない。
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: tab.id, paneId: p2 });
+    });
+
+    it("失敗（同じ pane 同士）では、グローバル focus を変えない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getFocus();
+
+      model.swapPaneWith(pane.id, pane.id);
+
+      expect(model.getFocus()).toEqual(before);
+    });
   });
 
   // 20260924-pane-dnd-split-move：ドラッグでの分割（縁へドロップ）。
@@ -258,12 +287,42 @@ describe("SessionModel — focus / navigation", () => {
       expect(model.getTab(tab.id)?.layout).toEqual(before);
     });
 
+    // 20260925-pane-move-global-focus。taskcheck の should 指摘：swapPaneWith には失敗パスで
+    // focus が変わらないことを確認するテストがあったが、moveToEdge には対称なテストが無かった
+    // （T1 taskcheck round1）。
+    it("失敗（自分自身の縁）では、グローバル focus を変えない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getFocus();
+
+      model.moveToEdge(pane.id, pane.id, "right");
+
+      expect(model.getFocus()).toEqual(before);
+    });
+
     it("別 tab の pane へは動かさない", () => {
       const model = new SessionModel();
       const { pane } = model.createWorkspace("/home/u", "api", init);
       const { pane: otherTabPane } = model.createWorkspace("/home/u", "other", init);
 
       expect(model.moveToEdge(pane.id, otherTabPane.id, "right")).toBe(false);
+    });
+
+    // 20260925-pane-move-global-focus。swapPaneWith と同じ理由で、事前に別の pane へ focus を
+    // 移してから確認する（さもないと「元々 paneId が focus だった」ケースと区別できない）。
+    it("成功すると、グローバル focus が動かした pane（paneId）を指す（AC2）", () => {
+      const model = new SessionModel();
+      const { workspace, tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init);
+      model.focusPane(pane.id); // focus を targetPaneId 側（pane.id）へ明示的に移しておく
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: tab.id, paneId: pane.id });
+
+      const ok = model.moveToEdge(p2, pane.id, "top");
+
+      expect(ok).toBe(true);
+      // paneId（第1引数。ここでは p2）が新しい focus 先——targetPaneId（pane.id）ではない。
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: tab.id, paneId: p2 });
     });
   });
 
@@ -339,12 +398,64 @@ describe("SessionModel — focus / navigation", () => {
       expect(model.getTab(tab.id)?.layout).toEqual(before);
     });
 
+    // 20260925-pane-move-global-focus。cross-task check の should 指摘：swapPaneWith・
+    // moveToEdge には失敗パスで focus が変わらないことを確認するテストがあったが、
+    // replacePane・moveToTab・moveToNewTab には対称なテストが無かった（cross round1）。
+    it("失敗（自分自身）では、グローバル focus を変えない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getFocus();
+
+      model.replacePane(pane.id, pane.id);
+
+      expect(model.getFocus()).toEqual(before);
+    });
+
     it("別 tab の pane とは何もしない", () => {
       const model = new SessionModel();
       const { pane } = model.createWorkspace("/home/u", "api", init);
       const { pane: otherTabPane } = model.createWorkspace("/home/u", "other", init);
 
       expect(model.replacePane(pane.id, otherTabPane.id)).toBeNull();
+    });
+
+    // 20260925-pane-move-global-focus。
+    it("ドロップ先が focus 中だったとき、グローバル focus も生き残った pane（paneId）を指す（AC3）", () => {
+      const model = new SessionModel();
+      const { workspace, tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      model.splitPane(pane.id, "right", undefined, p2, init); // splitPane は p2 を focus する
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: tab.id, paneId: p2 });
+
+      model.replacePane(pane.id, p2);
+
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: tab.id, paneId: pane.id });
+    });
+
+    // 既存の条件付き setFocus（削除された pane が tab のローカル focus だった場合のみ）から
+    // 無条件呼び出しへ変えたことの本体——ここが taskcheck の負の確認の対象（decisions.md D2）。
+    // 削除対象（targetPaneId）が tab のローカル focus ではない第3の pane を用意し、
+    // 「救済」条件（`tab.focusedPaneId === targetPaneId`）に当たらないケースを作る。
+    it("ドロップ先が tab のローカル focus 中でなくても、グローバル focus は生き残った pane（paneId）を指す（AC3）", () => {
+      const model = new SessionModel();
+      const { workspace, tab, pane } = model.createWorkspace("/home/u", "api", init);
+      const p2 = model.reserveNextPaneId();
+      const { pane: right } = model.splitPane(pane.id, "right", undefined, p2, init);
+      const p3 = model.reserveNextPaneId();
+      model.splitPane(right.id, "down", undefined, p3, init); // layout: right(pane, down(p2, p3))
+      model.focusPane(p3); // tab のローカル focus を第3の pane（p3）へ
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(p3);
+
+      // pane（生存）が p2（削除対象。tab のローカル focus ではない）を置き換える。
+      const ok = model.replacePane(pane.id, p2);
+
+      expect(ok).not.toBeNull();
+      // tab のローカル focus は変わらない（`tab.focusedPaneId`（p3）は `targetPaneId`（p2）
+      // ではないため、既存の「救済」条件には当たらない——旧実装ではここで setFocus が
+      // 一度も呼ばれなかった）。
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(p3);
+      // それでもグローバル focus は生き残った pane（paneId）を指す（無条件呼び出しに変えた効果）。
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: tab.id, paneId: pane.id });
     });
   });
 
@@ -399,6 +510,17 @@ describe("SessionModel — focus / navigation", () => {
       expect(model.getTab(tab.id)?.layout).toEqual(before);
     });
 
+    // 20260925-pane-move-global-focus。cross-task check の should 指摘（cross round1）。
+    it("失敗（自分自身の tab）では、グローバル focus を変えない", () => {
+      const model = new SessionModel();
+      const { pane, tab } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getFocus();
+
+      model.moveToTab(pane.id, tab.id);
+
+      expect(model.getFocus()).toEqual(before);
+    });
+
     it("存在しない tab へは何もしない", () => {
       const model = new SessionModel();
       const { pane } = model.createWorkspace("/home/u", "api", init);
@@ -415,6 +537,37 @@ describe("SessionModel — focus / navigation", () => {
       model.moveToTab(pane.id, otherTab.id);
 
       expect(model.getTab(otherTab.id)?.zoomedPaneId).toBeNull();
+    });
+
+    // 20260925-pane-move-global-focus。
+    it("成功すると、グローバル focus が移動先の tab・pane を指す（AC4）", () => {
+      const model = new SessionModel();
+      const { workspace, pane } = model.createWorkspace("/home/u", "api", init);
+      const { tab: otherTab } = model.createTab(workspace.id, "logs", init);
+
+      const ok = model.moveToTab(pane.id, otherTab.id);
+
+      expect(ok).toBe(true);
+      expect(model.getFocus()).toEqual({ workspaceId: workspace.id, tabId: otherTab.id, paneId: pane.id });
+    });
+
+    // design「依拠する既存の事実」の実機確認どおり: 移動元 tab が移動元 workspace の
+    // activeTabId だった状態で空になり closeEmptyTabShell が発火しても、その内部の「救済」
+    // （移動元側の新しい active tab へ setFocus）に上書きされず、移動先を指したままであること
+    // を確認する（AC4）。
+    it("移動元 tab が移動元 workspace の active tab のまま空になり自動的に閉じても、グローバル focus は移動先を指す（AC4）", () => {
+      const model = new SessionModel();
+      const { workspace, tab: sourceTab, pane } = model.createWorkspace("/home/u", "api", init);
+      model.createTab(workspace.id, "logs", init); // 移動元 workspace が cascade で消えないようにしておく
+      model.focusTab(sourceTab.id); // otherTab の作成で active が移っているので、sourceTab を再び active に戻す
+      const { tab: otherWsTab, workspace: otherWs } = model.createWorkspace("/home/u/other", "other", init);
+      expect(model.getWorkspace(workspace.id)?.activeTabId).toBe(sourceTab.id);
+
+      const ok = model.moveToTab(pane.id, otherWsTab.id);
+
+      expect(ok).toBe(true);
+      expect(model.getTab(sourceTab.id)).toBeUndefined(); // 空になった移動元 tab は閉じる（closeEmptyTabShell 発火）
+      expect(model.getFocus()).toEqual({ workspaceId: otherWs.id, tabId: otherWsTab.id, paneId: pane.id });
     });
   });
 
@@ -488,6 +641,17 @@ describe("SessionModel — focus / navigation", () => {
       expect(model.moveToNewTab(pane.id, "w-nonexistent")).toBeNull();
     });
 
+    // 20260925-pane-move-global-focus。cross-task check の should 指摘（cross round1）。
+    it("失敗（存在しない workspace）では、グローバル focus を変えない", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const before = model.getFocus();
+
+      model.moveToNewTab(pane.id, "w-nonexistent");
+
+      expect(model.getFocus()).toEqual(before);
+    });
+
     it("移動元の workspace も空になれば連鎖して閉じる（既存の D18 規則。closeTabInternal と同じ）", () => {
       const model = new SessionModel();
       const { workspace, pane } = model.createWorkspace("/home/u", "api", init); // tab 1つ・pane 1つだけ
@@ -496,6 +660,38 @@ describe("SessionModel — focus / navigation", () => {
       model.moveToNewTab(pane.id, otherWs.id);
 
       expect(model.getWorkspace(workspace.id)).toBeUndefined();
+    });
+
+    // 20260925-pane-move-global-focus。
+    it("成功すると、グローバル focus が移動先の新しい tab・pane を指す（AC5）", () => {
+      const model = new SessionModel();
+      const { pane } = model.createWorkspace("/home/u", "api", init);
+      const { workspace: otherWs } = model.createWorkspace("/home/u", "other", init);
+
+      const result = model.moveToNewTab(pane.id, otherWs.id);
+
+      expect(result).not.toBeNull();
+      expect(model.getFocus()).toEqual({ workspaceId: otherWs.id, tabId: result?.tab.id, paneId: pane.id });
+    });
+
+    // design「依拠する既存の事実」の実機確認どおりの再現: cross-workspace かつ移動元 tab が
+    // 移動元 workspace の activeTabId だった状態で空になり closeEmptyTabShell が発火する
+    // ケース。旧実装では setFocus（移動先）が closeEmptyTabShell より前に呼ばれていたため、
+    // closeEmptyTabShell 内の「救済」（移動元側の新しい active tab へ setFocus）に上書き
+    // されていた（decisions.md 参照）。
+    it("移動元 tab が移動元 workspace の active tab のまま空になり自動的に閉じても、グローバル focus は移動先を指す（AC5）", () => {
+      const model = new SessionModel();
+      const { workspace, tab: sourceTab, pane } = model.createWorkspace("/home/u", "api", init);
+      model.createTab(workspace.id, "logs", init); // 移動元 workspace が cascade で消えないようにしておく
+      model.focusTab(sourceTab.id); // otherTab の作成で active が移っているので、sourceTab を再び active に戻す
+      const { workspace: otherWs } = model.createWorkspace("/home/u/other", "other", init);
+      expect(model.getWorkspace(workspace.id)?.activeTabId).toBe(sourceTab.id);
+
+      const result = model.moveToNewTab(pane.id, otherWs.id);
+
+      expect(result).not.toBeNull();
+      expect(model.getTab(sourceTab.id)).toBeUndefined(); // 空になった移動元 tab は閉じる（closeEmptyTabShell 発火）
+      expect(model.getFocus()).toEqual({ workspaceId: otherWs.id, tabId: result?.tab.id, paneId: pane.id });
     });
   });
 
