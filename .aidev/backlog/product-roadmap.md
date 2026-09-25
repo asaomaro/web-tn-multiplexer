@@ -61,8 +61,23 @@ parent: 20260918-web-terminal-multiplexer
   `key-bindings.spec.ts` 23/24 pass（1件は無関係な既存失敗。decisions.md D4）・新設3件は実ブラウザで
   AC1・AC2・AC4 を確認。smoke pass（2本）。taskcheck 6件（T1〜T6）＋cross、review 2ラウンド
   （1回目 should 1件→E2E追加で解消・2回目 nit 2件→対応済み）。
-- [ ] pane の枠（`PaneFrame.vue`）にフォーカスがある間も、prefix・直接のキーを効かせる: 上と同じ
-  問題が pane の枠（Enter・Space・↓・ContextMenu・Shift+F10 を無条件に止める既存の実装）にも残る。
+- [x] pane の枠（`PaneFrame.vue`）にフォーカスがある間も、prefix・直接のキーを効かせる: ~~上と同じ
+  問題が pane の枠（Enter・Space・↓・ContextMenu・Shift+F10 を無条件に止める既存の実装）にも残る。~~
+  （起票時の記述は不正確だった。20260925-pane-frame-focus-keys の調査で判明——`PaneFrame.vue` の
+  `onKeydown` は既に選択的で ctrl/alt/meta 付きは無条件で bubble し、マウスも `onMouseDown` の
+  `preventDefault()` でフォーカスを奪わない。「無条件に止める」問題自体が存在しなかった。実際に
+  残っていた穴は別種で、無修飾／shift 付きで pane の枠が止める5キーのうち chord 化できる4キー
+  （Enter・Space・ArrowDown・Shift+F10。ContextMenu だけ chord 化不可）が、キー割り当て
+  カスタマイズ画面で prefix の後・直接のキーとして予約されておらず、割り当てると理由不明に
+  効かなくなる、という穴だった。）20260925-pane-frame-focus-keys で対応:
+  `keymap.ts` の `RESERVED_AFTER_PREFIX` に `enter`・`space`・`down`・`shift+enter`・
+  `shift+space`・`shift+down`・`shift+f10` の7エントリ、`RESERVED_DIRECT`
+  （`ReadonlySet`→`ReadonlyMap` へ型変更）に `shift+f10` を追加。`PaneFrame.vue` 自体は無改修。
+  実測: `assign.test.ts`・`keymap.test.ts` 92本 green・monorepo 全体
+  （web 1986・protocol 68・server 829・cli 133本）green・root typecheck exit 0・
+  smoke pass（2本）・`aidev coverage --strict` AC1〜AC7 gaps=0。taskcheck 2ラウンド
+  （round1 ok・round2 must1/should1→対応済み）、review 2ラウンド
+  （1回目 must1件→shift 付き3キー追加で解消・2回目 nit2件→対応済み）。
   20260925-focus-trapped-keybindings は対象をサイドバー・tab バーのボタンに絞り、pane の枠は
   意図的に対象外とした（出典: .aidev/works/20260925-focus-trapped-keybindings/requirements.md
   「スコープ / 対象外」）。

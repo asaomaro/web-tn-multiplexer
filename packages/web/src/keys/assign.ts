@@ -135,8 +135,8 @@ function validateBinding(
 
   // 形の規則（AC5・AC6 の (c)(d)(f)）。
   if (via === "direct") {
-    if (RESERVED_DIRECT.has(chord))
-      return { ok: false, reason: `${chord} は貼り付けに使うので、直接のキーにできません。` }; // (f)
+    const reservedDirect = RESERVED_DIRECT.get(chord);
+    if (reservedDirect !== undefined) return { ok: false, reason: reservedDirect }; // (f)
     if (!isDirectChord(chord)) {
       return {
         ok: false,
