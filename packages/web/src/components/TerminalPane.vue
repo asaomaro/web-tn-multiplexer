@@ -2,6 +2,7 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { TerminalRegistryKey } from "../injection.js";
 import type { TermEntry } from "../term/TerminalRegistry.js";
+import { shouldMarkSeen, useSeenStore } from "../store/seen.js";
 import { useSessionStore } from "../store/session.js";
 import { useViewStore } from "../store/view.js";
 
@@ -17,6 +18,7 @@ if (!registry) throw new Error("TerminalPane: TerminalRegistryKey が provide �
 
 const session = useSessionStore();
 const view = useViewStore();
+const seen = useSeenStore();
 
 const pane = computed(() => session.panes.get(props.paneId));
 const failed = computed(() => pane.value?.status === "failed");
@@ -42,6 +44,12 @@ onMounted(() => {
   mountPoint.value?.appendChild(entry.element);
   syncTabStop();
   if (view.focusedPaneId === props.paneId) entry.term.focus();
+  // 20260925-seen-semantics-fix（design「振る舞いの詳細」手順3）：この pane が今まさに表示
+  // された、という事実そのものなので paneVisible は自明に true。ウィンドウが既にフォーカス
+  // されたまま表示に切り替わった遷移を拾う——main.ts の発火点（completionSeq の変化・window
+  // の focus）だけでは拾えなかった（`registry.isVisible` が非 reactive なため）。
+  const agent = pane.value?.agent;
+  if (agent && shouldMarkSeen(true, document.hasFocus())) seen.markSeen(agent.instanceId, agent.completionSeq);
 });
 
 onBeforeUnmount(() => {

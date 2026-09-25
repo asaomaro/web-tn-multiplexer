@@ -267,7 +267,17 @@ parent: 20260918-web-terminal-multiplexer
   check・レビュー2ラウンドで計8件の指摘を解消（負の確認は生ログ付きで decisions.md D1〜D4 に記録）。
 - [ ] Connection がエラーコードをプロパティで持つ: いまは new Error(`<code>: <message>`) の文字列で、web は書式を正規表現で読む（errorCodeOf）。書式が変わると黙って汎用の文言に落ちる（D4）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
 - [ ] Workspace.git の即時化: GitInfoPoller が 5 秒周期なので、workspace を作った直後は最大 5 秒 git が null で、メニューに worktree の項目が出ない（D3）（出典: .aidev/works/20260920-git-worktree-actions/decisions.md）
-- [ ] 既読（wtm.seen.v1）の意味論を直す: markVisibleAgentsSeen はウィンドウにフォーカスがあれば pane の表示を見ずに全 pane を既読にする（main.ts の「意図的な簡略化」）。結果、フォーカス中は displayStateFor が done を返せず、通知は「完了しました」と言うのにサイドバーに印が無い。正しい規則 shouldMarkSeen(paneVisible, windowFocused) は本番から一度も呼ばれていない。20260920-agent-notifications が TerminalRegistry.isVisible を足したので、結線できる前提が揃った（出典: .aidev/works/20260920-agent-notifications/decisions.md）
+- [x] 既読（wtm.seen.v1）の意味論を直す: markVisibleAgentsSeen はウィンドウにフォーカスがあれば pane の表示を見ずに全 pane を既読にする（main.ts の「意図的な簡略化」）。結果、フォーカス中は displayStateFor が done を返せず、通知は「完了しました」と言うのにサイドバーに印が無い。正しい規則 shouldMarkSeen(paneVisible, windowFocused) は本番から一度も呼ばれていない。20260920-agent-notifications が TerminalRegistry.isVisible を足したので、結線できる前提が揃った（出典: .aidev/works/20260920-agent-notifications/decisions.md）
+  → 着地: 20260925-seen-semantics-fix（feature/seen-semantics-fix）。main.ts の markVisibleAgentsSeen を、
+  store/seen.ts に新設したテスト可能な純関数 sweepMarkSeen（pane ごとに shouldMarkSeen(isVisible, hasFocus) で
+  判定してから markSeen する）の呼び出しに差し替えた。TerminalRegistry.isVisible が非 reactive なため、既存の
+  2発火点（completionSeq の変化・window の focus）だけでは拾えない「ウィンドウは既にフォーカスされたまま pane
+  を切り替えて表示する」遷移を、TerminalPane.vue の onMounted に直接判定を足して拾う。NotificationController の
+  shouldQueue（既に正しい）と shouldMarkSeen が論理否定の対関係にあることを review で確認——サイドバーの完了の
+  印と通知が構造的に一致するようになった。実測: web 1955 本・ルート一括 2956 本・smoke pass・
+  `aidev coverage --strict` gaps=0。独立点検・cross-task check・レビュー1ラウンドで計6件の指摘を解消
+  （負の確認は生ログ付きで decisions.md D1 に記録）。main.ts 自体の配線は単体テスト基盤が無く未検証のまま
+  （design.md に明記した既知の制約）。
 - [ ] E2E 一式の安定性: 4 回走らせて 2 回、別々の spec が負荷で落ちた（workspace-tab-pane の時間切れ・mobile の D105）。どちらも単独では通る。先行 work から続く課題で、通知の 7 本が加わって所要が延びている。workers や timeout の見直し、または重い spec の分離（出典: .aidev/works/20260920-agent-notifications/decisions.md）
 - [x] サイドバー幅・折りたたみ状態を保存する: UI は既にある（ドラッグで変えられる・prefix+b で畳める）のに ref() に置いているだけで、再読み込みのたびに 240px・展開に戻る。herdr は preferences に保存している。既存の wtm.prefs.v1 に 2 フィールド足すだけで済む（herdr 設定調査で投資対効果が最も高いと判断）（出典: .aidev/works/20260920-agent-notifications/research.md）
   → 着地: 20260921-herdr-settings-gaps（feature/herdr-settings-gaps）。`wtm.prefs.v1` に `sidebarWidth`・`sidebarCollapsed`（`packages/web/src/store/view.ts` の `loadSidebarWidth`・`commitSidebarWidth`・`toggleSidebar`）。ドラッグ中は書かず、終えたとき（`pointerup`・`pointercancel`・`lostpointercapture`・ダブルクリック・ダイアログが開いたとき）に 1 回だけ保存（`Sidebar.vue` の `endDrag`）。E2E `settings.spec.ts` の AC1・AC2（`storageState` を持ち越した新しい context で幅と折りたたみが戻る）

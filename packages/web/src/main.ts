@@ -4,7 +4,7 @@ import type { ITerminalOptions } from "@xterm/xterm";
 // 押し出され、端末の中身が一切見えない（親の統合 test で発見。D96）。
 import "@xterm/xterm/css/xterm.css";
 import { createPinia } from "pinia";
-import { createApp, watch } from "vue";
+import { createApp, nextTick, watch } from "vue";
 import App from "./App.vue";
 import { ActionDispatcher } from "./actions/ActionDispatcher.js";
 import { ActionDispatcherKey, ConnectionKey, DeviceKindKey, KeyInputControllerKey, NotificationControllerKey, TerminalRegistryKey, ViewSyncKey } from "./injection.js";
@@ -24,7 +24,7 @@ import { Connection } from "./net/Connection.js";
 import { InputGate } from "./net/InputGate.js";
 import type { ConnectionPort, TerminalSinkPort } from "./net/ports.js";
 import { StoreAdapter } from "./store/StoreAdapter.js";
-import { useSeenStore } from "./store/seen.js";
+import { sweepMarkSeen, useSeenStore } from "./store/seen.js";
 import { useSessionStore } from "./store/session.js";
 import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
@@ -279,17 +279,14 @@ window.addEventListener("keydown", (ev) => {
   if (!passThrough) ev.preventDefault();
 });
 
-// 既読の送出（design「エラー処理 / 異常系」隣接、D56 の訂正 6）。`store/seen`（T15）の `markSeen` を
-// 実際に呼ぶ経路がここまで無かった——pane が表示中（`TerminalPane` が acquire している）かつウィンドウの
-// フォーカスが失われたと分かっていない、を「表示中の pane 全部」で定期的に確かめる。厳密な「表示中」の
-// 判定は `TerminalPane` 側（acquire/release）の責務なので、ここでは簡略化して
-// 「session に存在する全 pane」を対象にする——非表示の pane も含むが、`markSeen` は `completionSeq` を
-// 前進させるだけの冪等な操作なので、対象を広げても実害は無い（意図的な簡略化）。
+// 既読の送出（design「エラー処理 / 異常系」隣接、D56 の訂正 6）。pane ごとに「実際に表示
+// されているか」×「ウィンドウにフォーカスがあるか」を見てから既読を進める
+// （20260925-seen-semantics-fix。design「設計方針」）。`registry.isVisible` は Vue の
+// reactive ではないため、`nextTick()` の後に読む（`TerminalRegistry.ts` の契約どおり）。
 function markVisibleAgentsSeen(): void {
-  if (!document.hasFocus()) return;
-  for (const pane of session.panes.values()) {
-    if (pane.agent) seen.markSeen(pane.agent.instanceId, pane.agent.completionSeq);
-  }
+  void nextTick(() => {
+    sweepMarkSeen(session.panes.values(), (paneId) => registry.isVisible(paneId), document.hasFocus(), seen.markSeen);
+  });
 }
 watch(() => [...session.panes.values()].map((p) => p.agent?.completionSeq ?? -1), markVisibleAgentsSeen, { deep: true });
 window.addEventListener("focus", markVisibleAgentsSeen);
