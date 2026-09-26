@@ -52,6 +52,10 @@ pnpm --filter @wtm/e2e test
   スマートフォン等のモバイルのブラウザが 1,000 行**。ブラウザごとに設定（`prefix+s` の「端末」、モバイルは上のバーの「設定」）で
   選べ、数を選んだときは `--scrollback` の値で頭を押さえる（サーバのミラーは `--scrollback` の行数を持つ。メモリの目安は `docs/tls-setup.md`
   「scrollback の行数とメモリ（`--scrollback`）」）。
+- **`prefix+e` は、フォーカス中の pane のスクロールバックをサーバの `$EDITOR` で開く**（herdr の `edit_scrollback`。
+  20260926-edit-scrollback）。エディタは **`wtm serve` を起動したときの環境変数 `EDITOR`**（未設定・空なら `vi`。Windows ネイティブは
+  `VISUAL`、無ければ `EDITOR`。どちらも無ければ開けずにトーストが出る）で、サーバの上の新しい pane に拡大表示で開く。エディタを
+  終えると元の pane へ戻る。一時ファイルは OS の一時ディレクトリの下の `wtm-scrollback-*`（本人だけが読める）に作り、閉じれば消える。
 - **新しい workspace・tab・分割は、既定で「いま見ている pane の、いまの場所」で開く**（herdr の `terminal.new_cwd` の `follow`。
   20260921-new-terminal-cwd）。pane で `cd` してから作ると、その `cd` した先で開く。ブラウザごとの設定（`prefix+s` の「端末」の
   「新しく開く場所」）で、ホーム・サーバを起動した場所・指定した場所（絶対パスか `~/` で始まるパス。`~` だけならホーム。`~user` は
@@ -340,6 +344,14 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       ドロップ、または Esc で取り消すと何も起きないこと（AC9・AC-I2）。複数のブラウザ（別タブ）で
       同じ tab を開いておくと、一方の分割・分割解除がもう一方にも反映されること（AC10）。
       既存のキーバインドでの分割・pane を閉じる操作は変わらず使えること（AC11・AC-I3）。
+- [ ] スクロールバックを `$EDITOR` で開く（20260926-edit-scrollback。AC1〜AC4・AC6・AC8。AC5・AC7 は単体テストで確かめる）：
+      `EDITOR=vim wtm serve …` で起動し、pane で `seq 1 3000` を実行してから `Ctrl+B e` を押す。期待：同じ tab に拡大表示の pane が
+      開き、vim に 1〜3000 の行（スクロールバックに押し出された行を含む。末尾は `seq` の後のプロンプト）が色の制御列なしで出る。
+      vim の中で `:!ls -ld "$(dirname %)" %` を実行すると、ディレクトリが `drwx------`、`scrollback.txt` が `-rw-------`
+      （場所は OS の一時ディレクトリ。`TMPDIR` を設定していなければ `/tmp/wtm-scrollback-*`）。`:q` で抜けると pane が閉じ、焦点が
+      元の pane へ戻り（打った文字が元の pane に出る）、`ls -d /tmp/wtm-scrollback-*` が何も見つけない。元の pane を `Ctrl+B z` で拡大表示にしてから同じ操作をすると、抜けた後も元の pane が
+      拡大表示のまま。`vim` を開いた中（代替画面）で `Ctrl+B e` を押しても、vim を開く前の履歴が開く。`EDITOR='code -w'` のような
+      引数付きの値でも開ける（VS Code の Remote 等で `code` が使える環境だけ）。エディタの pane を `Ctrl+B x` で閉じても一時ファイルは消える。
 - [ ] Windows の named pipe の権限限定（`AgentReportSocket`。design D5）：Unix の `chmod 0600` に
       相当する対策が Windows では未実装（既知の制約。同 work の decisions.md 参照）。Windows
       ネイティブで確認する場合、同じホストの別ユーザーから report socket へ接続できないことを
@@ -569,8 +581,10 @@ AC16 は AC1〜AC14 と AC18 を 3 環境で確かめる。上の一巡に無い
       境界が動き、Enter で抜ける）・`g`（goto。文字で絞り込み、Enter で移る）・`b`（サイドバーの折りたたみ）・`q`（このブラウザだけを
       切り離す。「再接続」で戻る）・`Ctrl+B` の二度押し（`Ctrl+B` そのものを端末へ送る。`cat -v` を動かして `Ctrl+B` を 2 回押すと
       `^B` が出る。ブラウザの側の処理なので、Windows ネイティブの PowerShell（`cat -v` が無く、PSReadLine が `Ctrl+B` に何も割り
-      当てていないことがある）では確かめず、Linux・WSL2 で確かめれば足りる）。後続に回したキー（`shift+r` 等）は「未対応（後続: …）」と
-      出る（`s` は設定を開く）。
+      当てていないことがある）では確かめず、Linux・WSL2 で確かめれば足りる）・`e`（スクロールバックをサーバの `$EDITOR` で開く。
+      エディタを終えると元の pane へ戻る。Windows ネイティブは `VISUAL` か `EDITOR` を設定して `wtm serve` を起動したときだけ開き、
+      どちらも無ければ「スクロールバックをエディタで開けませんでした」のトーストが出るのが正しい。20260926-edit-scrollback。
+      「未対応（後続: …）」と出るキーはもう無い）。`s` は設定を開く。
 - [ ] AC14：マウスで、pane・tab・サイドバーの行のクリックで移る（M1）・pane の境界のドラッグ（M2）・右クリックのメニュー（M3。
       pane・pane の枠・tab・サイドバーの workspace）・文字を選ぶとコピーされ「コピーしました」と出る（M4）・ダブルクリックで単語を
       選ぶ（M5）・ホイールで scrollback（M8）・スクロールバー（M9）。

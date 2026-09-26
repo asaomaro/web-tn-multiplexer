@@ -69,7 +69,7 @@ export type Action =
   | { type: "settings" } // prefix+s（20260920-agent-notifications で通知の設定として足し、20260921-herdr-settings-gaps で設定全体に広げた）
   | { type: "nextNotification" } // 同（prefix+o）
   | { type: "detach" }
-  | { type: "notYet"; work: string } // 後続のキー
+  | { type: "editScrollback" } // prefix+e（20260926-edit-scrollback の herdr `edit_scrollback` 相当）
   | { type: "reloadConfig" } // prefix+shift+r（20260922-appearance-settings-rest の herdr `reload_config` 相当）
   | { type: "navigate"; op: "up" | "down" | "paneDir" | "activate" | "cancel" | "openMenu"; dir?: Dir }
   | { type: "resizeBy"; dir: Dir; amount: number }

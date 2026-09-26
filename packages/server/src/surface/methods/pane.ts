@@ -1,5 +1,6 @@
 import {
   PaneCloseParams,
+  PaneEditScrollbackParams,
   PaneFocusDirectionParams,
   PaneFocusParams,
   PaneInputSetParams,
@@ -142,6 +143,17 @@ export function registerPaneMethods(surface: ControlSurface, deps: MethodDeps): 
       deps.session.resizePaneByDirection(params.paneId, params.direction, params.amount);
       deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId);
       return {};
+    },
+  });
+
+  // 20260926-edit-scrollback（herdr の pane.edit_scrollback）。エディタの pane も作る方式なので、分割と同じく先に操作の時刻を進める。
+  surface.register("pane.edit_scrollback", {
+    schema: PaneEditScrollbackParams,
+    handler: async (ctx, params) => {
+      deps.clients.touch(ctx.clientId);
+      const result = await deps.session.editScrollback(params.paneId);
+      deps.sizeAuthority.noteInteraction(ctx.clientId, result.pane.id);
+      return result;
     },
   });
 

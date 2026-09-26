@@ -40,6 +40,9 @@ class FakeFanout implements OutputFanout {
 /** 20260924-dark-mode-report。呼ばれた回数だけ数える——`Mirror` 全体を実装する必要は無い。 */
 class FakeMirror {
   notifyAppearanceMayHaveChangedCalls = 0;
+  plainText(): string {
+    return "";
+  }
   notifyAppearanceMayHaveChanged(): void {
     this.notifyAppearanceMayHaveChangedCalls++;
   }
@@ -189,6 +192,7 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
         ["tab.create", { workspaceId: workspace.id }],
         ["workspace.create", { cwd: "/home/u" }],
         ["pane.split", { paneId: pane.id, direction: "right" }],
+        ["pane.edit_scrollback", { paneId: pane.id }], // 20260926-edit-scrollback
       ] as const) {
         vi.setSystemTime(Date.now() + 1_000);
         ctx.clients.touch(other); // 別の人が後から操作した
@@ -200,6 +204,7 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
       }
     } finally {
       vi.useRealTimers();
+      await ctx.session.disposeScrollbackEditors();
     }
   });
 
@@ -336,6 +341,43 @@ describe("registerAllMethods — client / workspace / tab / pane flow", () => {
     const c = { clientId, sink: fakeSink(clientId) };
     const result = await ctx.surface.invoke(c, "pane.subscribe", { paneId: "p999", scrollbackLines: 100 });
     expect(result).toEqual({ ok: false, error: { code: "not_found", message: expect.stringContaining("p999") } });
+  });
+
+  it("pane.edit_scrollback はエディタの pane を作って返し、同じ tab で拡大表示にする（20260926-edit-scrollback の AC1）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    const { tab, pane } = await ctx.session.createWorkspace("/home/u", "api");
+    try {
+      const result = await ctx.surface.invoke(c, "pane.edit_scrollback", { paneId: pane.id });
+      if (!result.ok) throw new Error(`unexpected error: ${JSON.stringify(result.error)}`);
+      const editor = (result.result as { pane: { id: string; tabId: string } }).pane;
+      expect(editor.tabId).toBe(tab.id);
+      expect(ctx.session.getTab(tab.id)?.zoomedPaneId).toBe(editor.id);
+    } finally {
+      await ctx.session.disposeScrollbackEditors();
+    }
+  });
+
+  it("pane.edit_scrollback を送ったクライアントが、エディタの pane の tab のサイズ権限を取る（分割と同じ）", async () => {
+    const owner = ctx.clients.register("desktop");
+    const other = ctx.clients.register("desktop");
+    const { tab, pane } = await ctx.session.createWorkspace("/home/u", "api");
+    await ctx.surface.invoke({ clientId: owner, sink: fakeSink(owner) }, "client.view", { workspaceId: tab.workspaceId, tabId: tab.id, visible: [{ paneId: pane.id, cols: 60, rows: 30 }] });
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBe(owner);
+    try {
+      expect((await ctx.surface.invoke({ clientId: other, sink: fakeSink(other) }, "pane.edit_scrollback", { paneId: pane.id })).ok).toBe(true);
+      expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBe(other);
+    } finally {
+      await ctx.session.disposeScrollbackEditors();
+    }
+  });
+
+  it("pane.edit_scrollback の失敗は既存のエラーコードで返す（無い pane は not_found・paneId が無ければ invalid_params）", async () => {
+    const c = { clientId, sink: fakeSink(clientId) };
+    expect(await ctx.surface.invoke(c, "pane.edit_scrollback", { paneId: "p999" })).toEqual({
+      ok: false,
+      error: { code: "not_found", message: expect.stringContaining("p999") },
+    });
+    expect(await ctx.surface.invoke(c, "pane.edit_scrollback", {})).toMatchObject({ ok: false, error: { code: "invalid_params" } });
   });
 
   it("workspace.close cascades and, when it was the last workspace, a new one appears (D24)", async () => {

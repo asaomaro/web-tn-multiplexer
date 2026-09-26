@@ -1,14 +1,18 @@
 import type { AgentInfo, GitInfo, HostInfo, LayoutNode, Workspace } from "@wtm/protocol";
 import { RpcError } from "@wtm/protocol";
-import { beforeEach, describe, expect, it } from "vitest";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Disposable } from "../util/Disposable.js";
 import { MemoryLogger } from "../log/Logger.js";
 import { EventBus } from "../bus/EventBus.js";
 import type { CreatePaneOptions, TerminalManager } from "../terminal/TerminalManager.js";
 import type { TerminalHost } from "../terminal/TerminalHost.js";
 import type { PersistScheduler } from "./PersistScheduler.js";
-import { SessionModel } from "./SessionModel.js";
+import { NotFoundError, SessionModel } from "./SessionModel.js";
 import { SessionService } from "./SessionService.js";
+import * as Layout from "./LayoutTree.js";
 import type { NewCwdDeps } from "./newCwd.js";
 import type { WorkspaceLabelDeps } from "./workspaceLabel.js";
 import type { SessionFileData } from "../persist/SessionFile.js";
@@ -16,7 +20,9 @@ import type { SessionFileData } from "../persist/SessionFile.js";
 /** 即座に失敗させたい pane の id を登録しておける偽の TerminalManager（T17「テスト方針」）。 */
 class FakeTerminalHost implements TerminalHost {
   readonly pid = 4242;
-  readonly mirror = {} as TerminalHost["mirror"];
+  /** 20260926-edit-scrollback：ミラーの `plainText()` が返す中身。 */
+  scrollbackText = "";
+  readonly mirror = { plainText: () => this.scrollbackText } as unknown as TerminalHost["mirror"];
   readonly fanout = {} as TerminalHost["fanout"];
   private readonly exitListeners = new Set<(code: number) => void>();
   disposed = false;
@@ -60,9 +66,12 @@ class FakeTerminalManager implements TerminalManager {
   readonly createOptions: CreatePaneOptions[] = [];
   /** 次に create するとき、この終了コードで即座に失敗させる（null なら成功）。 */
   nextSpawnFailure: number | null = null;
+  /** create の直後に呼ぶ（20260926-edit-scrollback：起動の猶予の間に別の操作を割り込ませる）。 */
+  onCreate: ((paneId: string) => void) | null = null;
 
   create(paneId: string, opts: CreatePaneOptions): TerminalHost {
     this.createOptions.push(opts);
+    queueMicrotask(() => this.onCreate?.(paneId));
     const host = new FakeTerminalHost(paneId, this.nextSpawnFailure);
     this.nextSpawnFailure = null;
     this.hosts.set(paneId, host);
@@ -2238,5 +2247,309 @@ describe("SessionService — 最初の pane のいまの場所（名前の追従
     await new Promise((r) => setTimeout(r, 10));
     const label = await h.service.followedLabel(workspace.id, "/srv/x");
     expect(label, "決め直し済みと記録していないので、もう一度決める").not.toBeNull();
+  });
+});
+
+describe("SessionService — スクロールバックを $EDITOR で開く（20260926-edit-scrollback）", () => {
+  let tmpRoot: string;
+  beforeEach(async () => {
+    tmpRoot = await mkdtemp(join(tmpdir(), "wtm-edit-scrollback-svc-"));
+  });
+  afterEach(async () => {
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  function setup(opts: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; root?: string } = {}) {
+    const terminals = new FakeTerminalManager();
+    const bus = new EventBus();
+    const events: { event: string; data: unknown }[] = [];
+    bus.subscribe((e) => events.push(e as { event: string; data: unknown }));
+    const service = new SessionService({
+      model: new SessionModel(),
+      terminals,
+      bus,
+      persist: new FakePersistScheduler(),
+      serverVersion: "0.1.0-test",
+      host: HOST_INFO,
+      scrollbackLines: 1000,
+      spawnGraceMs: 5,
+      defaultCwd: "/home/u",
+      logger: new MemoryLogger(),
+      scrollbackEditor: { tmpRoot: opts.root ?? tmpRoot, platform: opts.platform ?? "linux", env: opts.env ?? {} },
+    });
+    return { terminals, bus, events, service };
+  }
+
+  it("対象を分割した新しい pane でエディタを起動し、拡大表示にして焦点を移す。作業場所は対象の場所（AC1・AC2）", async () => {
+    const { terminals, events, service } = setup();
+    const { tab, pane: source } = await service.createWorkspace("/home/u/api", "api");
+    events.length = 0;
+    const { pane } = await service.editScrollback(source.id);
+
+    const t = service.getTab(tab.id)!;
+    expect(Layout.leaves(t.layout)).toEqual([source.id, pane.id]);
+    expect(t.zoomedPaneId).toBe(pane.id);
+    expect(t.focusedPaneId).toBe(pane.id);
+    expect(pane.cwd).toBe("/home/u/api");
+    const opts = terminals.createOptions[1]!;
+    expect(opts.cwd).toBe("/home/u/api");
+    expect(opts.shell).toBe("/bin/sh");
+    expect(opts.args?.slice(0, 3)).toEqual(["-c", 'eval "${EDITOR:-vi} \\"\\$1\\""', "wtm-edit-scrollback"]);
+    expect(events.map((e) => e.event)).toEqual(["pane.created", "layout.updated"]);
+    expect((events[1]!.data as { tab: { zoomedPaneId: string | null } }).tab.zoomedPaneId).toBe(pane.id);
+  });
+
+  it("一時ファイルの中身は対象のミラーの平文で、専用の一時ディレクトリに置く（AC3・AC6）", async () => {
+    const { terminals, service } = setup();
+    const { pane: source } = await service.createWorkspace("/home/u/api", "api");
+    terminals.hosts.get(source.id)!.scrollbackText = "line1\nline2\n";
+    await service.editScrollback(source.id);
+    const path = terminals.createOptions[1]!.args![3]!;
+    const dirs = await readdir(tmpRoot);
+    expect(dirs).toHaveLength(1);
+    expect(dirs[0]!.startsWith("wtm-scrollback-")).toBe(true);
+    expect(path).toBe(join(tmpRoot, dirs[0]!, "scrollback.txt"));
+    expect(await readFile(path, "utf8")).toBe("line1\nline2\n");
+  });
+
+  describe("失敗したら新しい pane も一時ファイルも残さない（AC5・AC8）", () => {
+    async function expectNothingLeft(service: SessionService, before: number, events: { event: string }[]) {
+      expect(service.snapshot().panes).toHaveLength(before);
+      expect(events.filter((e) => e.event === "pane.created")).toEqual([]);
+      expect(await readdir(tmpRoot)).toEqual([]);
+    }
+
+    it("pane が無い → not_found", async () => {
+      const { events, service } = setup();
+      await service.createWorkspace("/home/u", "w");
+      events.length = 0;
+      await expect(service.editScrollback("p999")).rejects.toMatchObject({ code: "not_found" });
+      await expectNothingLeft(service, 1, events);
+    });
+
+    it("端末が無い（復元に失敗した pane 等） → not_found", async () => {
+      const { terminals, events, service } = setup();
+      const { pane } = await service.createWorkspace("/home/u", "w");
+      terminals.dispose(pane.id);
+      events.length = 0;
+      await expect(service.editScrollback(pane.id)).rejects.toMatchObject({ code: "not_found" });
+      await expectNothingLeft(service, 1, events);
+    });
+
+    it("Windows で VISUAL・EDITOR が無い → spawn_failed（一時ファイルを作る前）", async () => {
+      const { events, service } = setup({ platform: "win32", env: {} });
+      const { pane } = await service.createWorkspace("/home/u", "w");
+      events.length = 0;
+      await expect(service.editScrollback(pane.id)).rejects.toMatchObject({ code: "spawn_failed" });
+      await expectNothingLeft(service, 1, events);
+    });
+
+    it("一時ファイルを作れない → 投げる（方式の層で internal になる）", async () => {
+      const { events, service } = setup({ root: join(tmpRoot, "missing") });
+      const { pane } = await service.createWorkspace("/home/u", "w");
+      events.length = 0;
+      await expect(service.editScrollback(pane.id)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectNothingLeft(service, 1, events);
+    });
+
+    it("エディタが猶予中に 0 以外で終わる（起動できない） → spawn_failed", async () => {
+      const { terminals, events, service } = setup();
+      const { pane } = await service.createWorkspace("/home/u", "w");
+      events.length = 0;
+      terminals.nextSpawnFailure = 127;
+      await expect(service.editScrollback(pane.id)).rejects.toMatchObject({ code: "spawn_failed" });
+      await expectNothingLeft(service, 1, events);
+    });
+
+    it("書いている間に対象が閉じられた → not_found", async () => {
+      const { events, service } = setup();
+      const { pane: first } = await service.createWorkspace("/home/u", "w");
+      const { pane: second } = await service.splitPane(first.id, "right", undefined);
+      events.length = 0;
+      const pending = service.editScrollback(second.id);
+      await service.closePane(second.id);
+      await expect(pending).rejects.toMatchObject({ code: "not_found" });
+      await expectNothingLeft(service, 1, events);
+    });
+
+    it("起動の猶予の間に対象が閉じられた（分割できない） → 端末を捨てて投げる", async () => {
+      const { terminals, events, service } = setup();
+      const { pane: first } = await service.createWorkspace("/home/u", "w");
+      const { pane: second } = await service.splitPane(first.id, "right", undefined);
+      events.length = 0;
+      terminals.onCreate = () => {
+        terminals.onCreate = null;
+        void service.closePane(second.id);
+      };
+      await expect(service.editScrollback(second.id)).rejects.toBeInstanceOf(NotFoundError); // 方式の層で not_found になる
+      expect(terminals.createOptions).toHaveLength(3); // エディタの端末は作られた
+      expect(terminals.hosts.size).toBe(1); // 残っているのは first の端末だけ（エディタの端末は捨てた）
+      await expectNothingLeft(service, 1, events);
+    });
+  });
+
+  it("エディタが猶予中に 0 で終わったら、pane をコミットしてすぐ閉じる（拡大表示のまま残さない）", async () => {
+    const { terminals, events, service } = setup();
+    const { tab, pane: source } = await service.createWorkspace("/home/u", "w");
+    events.length = 0;
+    terminals.nextSpawnFailure = 0;
+    const { pane } = await service.editScrollback(source.id);
+    expect(service.getPane(pane.id)).toBeUndefined();
+    expect(events.map((e) => e.event)).toContain("pane.exited");
+    expect(Layout.leaves(service.getTab(tab.id)!.layout)).toEqual([source.id]);
+    expect(service.getTab(tab.id)!.zoomedPaneId).toBeNull();
+  });
+
+  describe("閉じたとき（AC4・AC8）", () => {
+    const gone = async () => vi.waitFor(async () => expect(await readdir(tmpRoot)).toEqual([]), { timeout: 5000 });
+
+    it("エディタが終わると pane が閉じ、焦点は対象へ（最初の葉ではなく）・拡大表示は解除・一時ディレクトリは消える", async () => {
+      const { terminals, events, service } = setup();
+      const { tab, pane: first } = await service.createWorkspace("/home/u", "w");
+      const { pane: source } = await service.splitPane(first.id, "right", undefined);
+      const { pane: editor } = await service.editScrollback(source.id);
+      expect(await readdir(tmpRoot)).toHaveLength(1);
+      events.length = 0;
+      terminals.hosts.get(editor.id)!.fireExit(0);
+      await vi.waitFor(() => expect(service.getPane(editor.id)).toBeUndefined());
+      const t = service.getTab(tab.id)!;
+      expect(t.focusedPaneId).toBe(source.id);
+      expect(t.zoomedPaneId).toBeNull();
+      expect(service.snapshot().focus?.paneId).toBe(source.id);
+      expect(events.find((e) => e.event === "pane.closed")?.data).toEqual({ paneId: editor.id, successorPaneId: source.id });
+      await gone();
+    });
+
+    it("開く前に対象が拡大表示なら、利用者がエディタの pane を閉じたときに対象の拡大表示へ戻す（layout.updated に載る）", async () => {
+      const { events, service } = setup();
+      const { tab, pane: first } = await service.createWorkspace("/home/u", "w");
+      const { pane: source } = await service.splitPane(first.id, "right", undefined);
+      service.zoomPane(source.id, "on");
+      const { pane: editor } = await service.editScrollback(source.id);
+      expect(service.getTab(tab.id)!.zoomedPaneId).toBe(editor.id);
+      events.length = 0;
+      await service.closePane(editor.id);
+      expect(service.getTab(tab.id)!.zoomedPaneId).toBe(source.id);
+      expect(service.getTab(tab.id)!.focusedPaneId).toBe(source.id);
+      const layout = events.filter((e) => e.event === "layout.updated");
+      expect(layout).toHaveLength(1);
+      expect((layout[0]!.data as { tab: { zoomedPaneId: string | null } }).tab.zoomedPaneId).toBe(source.id);
+      await gone();
+    });
+
+    it("対象が先に閉じられていたら、焦点は既定の規則（最初の葉）で、拡大表示も戻さない", async () => {
+      const { events, service } = setup();
+      const { tab, pane: first } = await service.createWorkspace("/home/u", "w");
+      const { pane: source } = await service.splitPane(first.id, "right", undefined);
+      service.zoomPane(source.id, "on");
+      const { pane: editor } = await service.editScrollback(source.id);
+      await service.closePane(source.id);
+      events.length = 0;
+      await service.closePane(editor.id);
+      expect(service.getTab(tab.id)!.focusedPaneId).toBe(first.id);
+      expect(service.getTab(tab.id)!.zoomedPaneId).toBeNull();
+      expect(events.find((e) => e.event === "pane.closed")?.data).toEqual({ paneId: editor.id });
+      await gone();
+    });
+
+    it("元の pane が別の tab へ移っていたら、どちらの tab にも拡大表示をかけない", async () => {
+      const { service } = setup();
+      const { workspace, tab, pane: first } = await service.createWorkspace("/home/u", "w");
+      const other = await service.createTab(workspace.id, undefined);
+      const { pane: source } = await service.splitPane(first.id, "right", undefined);
+      service.zoomPane(source.id, "on");
+      const { pane: editor } = await service.editScrollback(source.id);
+      expect(service.moveToTab(source.id, other.tab.id)).toBe(true);
+      await service.closePane(editor.id);
+      expect(service.getTab(tab.id)!.zoomedPaneId).toBeNull();
+      expect(service.getTab(other.tab.id)!.zoomedPaneId).toBeNull();
+      await gone();
+    });
+
+    it("中央へのドロップ（replacePane）でエディタの pane が閉じられても一時ディレクトリは消える", async () => {
+      const { service } = setup();
+      const { pane: first } = await service.createWorkspace("/home/u", "w");
+      const { pane: editor } = await service.editScrollback(first.id);
+      expect(service.replacePane(first.id, editor.id)).toBe(true);
+      await gone();
+    });
+
+    it("tab ごと・workspace ごと閉じても一時ディレクトリは消える", async () => {
+      const { service } = setup();
+      const { workspace, tab, pane } = await service.createWorkspace("/home/u", "w");
+      const second = await service.createTab(workspace.id, undefined);
+      await service.editScrollback(pane.id);
+      await service.closeTab(tab.id);
+      await gone();
+      await service.editScrollback(second.pane.id);
+      expect(await readdir(tmpRoot)).toHaveLength(1);
+      await service.closeWorkspace(workspace.id);
+      await gone();
+    });
+
+    it("猶予中に 0 で終わったエディタも一時ディレクトリを残さない", async () => {
+      const { terminals, service } = setup();
+      const { pane } = await service.createWorkspace("/home/u", "w");
+      terminals.nextSpawnFailure = 0;
+      await service.editScrollback(pane.id);
+      await gone();
+    });
+
+    it("停止時（disposeScrollbackEditors）は開いたままのエディタの一時ディレクトリも消す。その後に閉じても投げない", async () => {
+      const { service } = setup();
+      const { pane } = await service.createWorkspace("/home/u", "w");
+      const { pane: editor } = await service.editScrollback(pane.id);
+      await service.disposeScrollbackEditors();
+      expect(await readdir(tmpRoot)).toEqual([]);
+      await service.closePane(editor.id);
+    });
+
+    it("停止時は、閉じた直後でまだ削除の途中のものも待つ", async () => {
+      const { service } = setup();
+      const { pane } = await service.createWorkspace("/home/u", "w");
+      const { pane: first } = await service.editScrollback(pane.id);
+      const { pane: second } = await service.editScrollback(pane.id);
+      await service.closePane(first.id);
+      await service.closePane(second.id);
+      await service.disposeScrollbackEditors(); // waitFor で待たずに、戻った時点で空であること
+      expect(await readdir(tmpRoot)).toEqual([]);
+    });
+  });
+
+  it("再起動後はエディタの pane も既定のシェルで戻る（保存された shell も一時ファイルも使わない。AC12）", async () => {
+    const { terminals, service } = setup();
+    const data: SessionFileData = {
+      schema: 1,
+      savedAt: "2026-09-26T00:00:00Z",
+      nextId: { w: 2, t: 2, p: 3, s: 2, a: 1, g: 1 },
+      groups: [],
+      workspaces: [
+        {
+          id: "w1",
+          label: "api",
+          cwd: "/home/u/api",
+          activeTabId: "t1",
+          tabs: [
+            {
+              id: "t1",
+              label: "main",
+              focusedPaneId: "p2",
+              zoomedPaneId: "p2",
+              layout: { type: "split", id: "s1", dir: "right", ratio: 0.5, a: { type: "pane", paneId: "p1" }, b: { type: "pane", paneId: "p2" } },
+              panes: [
+                { id: "p1", label: null, cwd: "/home/u/api", shell: "" },
+                { id: "p2", label: null, cwd: "/home/u/api", shell: "/bin/sh" },
+              ],
+            },
+          ],
+        },
+      ],
+      focus: { workspaceId: "w1", tabId: "t1", paneId: "p2" },
+    };
+    await service.restore(data);
+    expect(terminals.createOptions.map((o) => [o.shell, o.args])).toEqual([
+      [undefined, undefined],
+      [undefined, undefined],
+    ]);
   });
 });

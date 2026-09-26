@@ -6,6 +6,8 @@ import { DefaultTerminalHost, type TerminalHost } from "./TerminalHost.js";
 export interface CreatePaneOptions {
   cwd: string;
   shell?: string;
+  /** `shell` を渡したときの引数（20260926-edit-scrollback）。省略は引数なし。 */
+  args?: string[];
   cols: number;
   rows: number;
   env?: Record<string, string>;
@@ -50,7 +52,7 @@ export class DefaultTerminalManager implements TerminalManager {
   create(paneId: PaneId, opts: CreatePaneOptions): TerminalHost {
     const defaultShell = opts.shell ? undefined : this.processInspector.defaultShell();
     const shell = opts.shell ?? defaultShell!.shell;
-    const args = opts.shell ? [] : defaultShell!.args;
+    const args = opts.shell ? (opts.args ?? []) : defaultShell!.args;
     const proc = this.ptyBackend.spawn({
       shell,
       args,

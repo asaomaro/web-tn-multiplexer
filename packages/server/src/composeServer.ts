@@ -306,6 +306,8 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
         wsServer.closeAll(1001, "server shutting down");
         await new Promise<void>((resolve) => httpServer.server.close(() => resolve()));
       } finally {
+        // スクロールバックの一時ディレクトリ（20260926-edit-scrollback）。途中の処理が投げても消す。
+        await session.disposeScrollbackEditors();
         // session.json を書き終えてから放す（D103。持っていなければ——ロックで断られた起動等——何もしない）。
         await lock.release();
       }

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -37,6 +37,33 @@ describe("composeServer (integration)", () => {
       await fn();
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "close() は開いたままのスクロールバックのエディタの一時ディレクトリを消す（20260926-edit-scrollback の AC8）",
+    async () => {
+      const stateDir = await makeTempDir("wtm-compose-");
+      const tmpRoot = await makeTempDir("wtm-compose-tmp-");
+      cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+      cleanups.push(() => rm(tmpRoot, { recursive: true, force: true }));
+      const saved = { TMPDIR: process.env["TMPDIR"], EDITOR: process.env["EDITOR"] };
+      const server = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
+      try {
+        await server.listen();
+        const source = server.session.snapshot().panes[0]!;
+        process.env["TMPDIR"] = tmpRoot; // 一時ディレクトリの置き場（os.tmpdir() は呼ぶたびに読む）
+        process.env["EDITOR"] = "sleep 30 #"; // 閉じるまで終わらないエディタ
+        await server.session.editScrollback(source.id);
+        expect((await readdir(tmpRoot)).filter((n) => n.startsWith("wtm-scrollback-"))).toHaveLength(1);
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+        await server.close();
+      }
+      expect(await readdir(tmpRoot)).toEqual([]);
+    },
+  );
 
   it("refuses to compose for a non-loopback host without a certificate (D12/D37 の前提)", async () => {
     const stateDir = await makeTempDir("wtm-compose-");

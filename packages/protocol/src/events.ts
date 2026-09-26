@@ -75,8 +75,9 @@ export interface PaneClosedEvent {
   event: "pane.closed";
   /**
    * `successorPaneId`（20260925-pane-replace-focus-hint）: この pane に focus していた
-   * クライアントが選ぶべき後継 pane の推奨ヒント。`replacePane` だけが埋める
-   * （生存した pane が常に後継）。`closePane`/`closeTab`/`closeWorkspace` は含めない
+   * クライアントが選ぶべき後継 pane の推奨ヒント。`replacePane`（生存した pane が常に後継）と、
+   * スクロールバックのエディタの pane を閉じたとき（開いた元の pane。20260926-edit-scrollback）だけが埋める。
+   * それ以外の `closePane`/`closeTab`/`closeWorkspace` は含めない
    * （クライアント側は既存の DFS-first-leaf の規則にフォールバックする）。
    */
   data: { paneId: string; successorPaneId?: string };

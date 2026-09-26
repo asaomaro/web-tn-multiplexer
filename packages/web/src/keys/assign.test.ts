@@ -269,14 +269,10 @@ describe("validateAssignment — prefix の後のキー（AC4・AC6 (a)(b)(c)）
     ).toContain("pane の枠のメニュー");
   });
 
-  it("「後続」の案内のキー（e）は空いているものとして通る（別の操作が優先される）", () => {
-    // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てに昇格した
-    // ので、「後続」の案内として残っているのは e だけ（下のテストで、shift+r は既に
-    // reload_config が使っている＝空いていないことを確かめる）。
-    expect(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "e" }))).toEqual({
-      ok: true,
-      binding: "prefix+e",
-    });
+  it("e は edit_scrollback が既定で使っているので、別の操作への割り当ては拒否する（20260926-edit-scrollback で「後続」の案内から昇格）", () => {
+    expect(
+      reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "e" }))),
+    ).toContain("スクロールバックをエディタで開く");
   });
 
   it("shift+r は reload_config が既定で使っているので、別の操作への割り当ては拒否する", () => {

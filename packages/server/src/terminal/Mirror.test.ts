@@ -290,3 +290,50 @@ describe("XtermMirror — appearance report (CSI ?996n / mode 2031)", () => {
     mirror.dispose();
   });
 });
+
+describe("XtermMirror — plainText（20260926-edit-scrollback の AC3）", () => {
+  it("スクロールバックへ押し出された行も含めて、全行を順に返す", async () => {
+    const mirror = new XtermMirror(20, 3, 1000);
+    const lines = Array.from({ length: 10 }, (_, i) => `line${String(i + 1).padStart(2, "0")}`);
+    await writeAndWait(mirror, lines.join("\r\n"));
+    expect(mirror.plainText()).toBe(`${lines.join("\n")}\n`);
+    mirror.dispose();
+  });
+
+  it("折り返しで分かれた行は 1 行に戻す（折り返しの境目の空白も落とさない）", async () => {
+    const mirror = new XtermMirror(10, 5, 1000);
+    await writeAndWait(mirror, "abcdefghi jklmnopqrs tuv\r\nnext");
+    expect(mirror.plainText()).toBe("abcdefghi jklmnopqrs tuv\nnext\n");
+    mirror.dispose();
+  });
+
+  it("全角の文字が右端に入らず折り返したときの空きのセルは、1 行に戻すときに挟まない", async () => {
+    const mirror = new XtermMirror(10, 5, 1000);
+    await writeAndWait(mirror, "abcdefghiあいう");
+    expect(mirror.plainText()).toBe("abcdefghiあいう\n");
+    mirror.dispose();
+  });
+
+  it("色などの制御列を含まず、各行の右端の空白と末尾の空行を落とす", async () => {
+    const mirror = new XtermMirror(20, 6, 1000);
+    await writeAndWait(mirror, "\x1b[31mred\x1b[0m plain   \r\n\x1b[1mbold\x1b[0m");
+    expect(mirror.plainText()).toBe("red plain\nbold\n");
+    mirror.dispose();
+  });
+
+  it("代替画面（vim・less 等）の中でも通常バッファを読む", async () => {
+    const mirror = new XtermMirror(20, 3, 1000);
+    await writeAndWait(mirror, "history-1\r\nhistory-2\r\n\x1b[?1049haltscreen");
+    expect(mirror.bottomLines(3).join("")).toContain("altscreen"); // 前提：代替画面に切り替わっている
+    const text = mirror.plainText();
+    expect(text).toContain("history-1\nhistory-2");
+    expect(text).not.toContain("altscreen");
+    mirror.dispose();
+  });
+
+  it("何も書いていなければ空文字", () => {
+    const mirror = new XtermMirror(20, 3, 1000);
+    expect(mirror.plainText()).toBe("");
+    mirror.dispose();
+  });
+});

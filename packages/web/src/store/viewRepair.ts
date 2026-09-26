@@ -31,7 +31,7 @@ export interface SessionLike {
 /**
  * `successorHint`（20260925-pane-replace-focus-hint。省略可）: 直前に届いた `pane.closed` の
  * `successorPaneId`。今の tab の中で今の focus 先が消えていた場合、既定の DFS-first-leaf
- * より優先してこれを採用する（`replacePane` は生存した pane が常に後継のため）。使い捨て
+ * より優先してこれを採用する（`replacePane` は生存した pane が、スクロールバックのエディタの pane は開いた元の pane が後継。20260926-edit-scrollback）。使い捨て
  * ——呼び出し側がそのイベント1回分だけ渡す想定で、ここでは保持しない。
  */
 export function repairView(cur: ViewTarget, s: SessionLike, successorHint?: string): ViewTarget | null {
@@ -69,7 +69,7 @@ export function repairView(cur: ViewTarget, s: SessionLike, successorHint?: stri
   let focusedPaneId: string;
   if (tab.id === cur.tabId) {
     // 同じ tab の中：今の pane が生きていればそのまま。閉じられていたら、`successorHint`
-    // （`replacePane` 由来。20260925-pane-replace-focus-hint）が生きていればそれを、
+    // （`replacePane`・エディタの pane 由来。20260925-pane-replace-focus-hint）が生きていればそれを、
     // 無ければ最初の葉（サーバの closePane 既定の規則）へ。
     if (cur.focusedPaneId && live.includes(cur.focusedPaneId)) {
       focusedPaneId = cur.focusedPaneId;

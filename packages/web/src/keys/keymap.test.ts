@@ -63,8 +63,8 @@ const LEGACY_DEFAULT_PREFIX_MAP: ReadonlyArray<readonly [string, Action]> = [
   // 20260922-appearance-settings-rest T7 で reload_config をカタログへ登録し、
   // 「後続」の案内から実物の操作へ昇格した（意図した既定の変更。keymap.ts の NOT_YET_BINDINGS 参照）。
   ["shift+r", { type: "reloadConfig" }],
-  // 後続
-  ["e", { type: "notYet", work: "端末機能の拡張" }],
+  // 20260926-edit-scrollback で edit_scrollback をカタログへ登録し、「後続」の案内から実物の操作へ昇格した（意図した既定の変更）。
+  ["e", { type: "editScrollback" }],
 ];
 
 describe("既定の表は旧 DEFAULT_KEYMAP と 1:1（AC1・AC2）", () => {
@@ -348,20 +348,22 @@ describe("resolveKeymap — 範囲（AC7）", () => {
   });
 });
 
-describe("resolveKeymap — 「後続」の案内（AC2）", () => {
-  // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てに昇格し、
-  // 「後続」の案内（NOT_YET_BINDINGS）からは外れた（keymap.ts 参照。[[D10]] は無関係、
-  // これは keymap.ts 自体の変更）。shift+r を別の操作へ割り当て直す挙動そのものは、他の既定操作
-  // と同じ「上書きが既定に勝つ」一般則（上の describe「上書きと衝突」参照）で説明でき、
-  // ここ（AC2 の「後続」の案内に特有の節）では扱わない——残っている「後続」の案内は e だけ。
-  it("e を別の操作に割り当てたら、そちらが優先で「後続」の案内は消える", () => {
-    const { keymap } = resolveKeymap(prefs({ bindings: { goto: ["prefix+e"] } }));
-    expect(keymap.prefixMap.get("e")).toEqual({ type: "goto" });
+describe("resolveKeymap — edit_scrollback（20260926-edit-scrollback。「後続」の案内だった e）", () => {
+  it("既定は prefix+e", () => {
+    expect(DEFAULT_KEYMAP.bindingsOf("edit_scrollback")).toEqual(["prefix+e"]);
+    expect(DEFAULT_KEYMAP.ownerOf("prefix", "e")).toBe("edit_scrollback");
   });
 
-  it("prefix が alt+e でも、e（修飾が違う別の chord）の「後続」の案内は残る", () => {
+  it("e を別の操作に割り当てた利用者の設定はそのまま保たれ、edit_scrollback は割り当てなしになる（AC10）", () => {
+    const { keymap, problems } = resolveKeymap(prefs({ bindings: { goto: ["prefix+e"] } }));
+    expect(keymap.prefixMap.get("e")).toEqual({ type: "goto" });
+    expect(keymap.bindingsOf("edit_scrollback")).toEqual([]);
+    expect(problems).toEqual([]);
+  });
+
+  it("prefix が alt+e でも、e（修飾が違う別の chord）は edit_scrollback のまま", () => {
     const { keymap } = resolveKeymap(prefs({ prefix: "alt+e" }));
-    expect(keymap.prefixMap.get("e")).toEqual({ type: "notYet", work: "端末機能の拡張" });
+    expect(keymap.prefixMap.get("e")).toEqual({ type: "editScrollback" });
     expect(keymap.prefixMap.size).toBe(44);
   });
 });

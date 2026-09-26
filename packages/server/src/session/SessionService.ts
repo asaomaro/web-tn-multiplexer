@@ -21,6 +21,7 @@ import type {
 import { RpcError } from "@wtm/protocol";
 import type { SessionFileData, SessionFilePane, SessionFileTab, SessionFileWorkspace } from "../persist/SessionFile.js";
 import type { TerminalManager } from "../terminal/TerminalManager.js";
+import { removeScrollbackDir, scrollbackEditorArgv, writeScrollbackFile } from "../terminal/scrollbackEditor.js";
 import type { EventBus } from "../bus/EventBus.js";
 import { NotFoundError, SessionModel } from "./SessionModel.js";
 import * as Layout from "./LayoutTree.js";
@@ -84,6 +85,8 @@ export interface SessionServiceOptions {
    * テストは偽物を渡して、手元のファイルシステムに依存させない。
    */
   workspaceLabelDeps?: WorkspaceLabelDeps | undefined;
+  /** スクロールバックを `$EDITOR` で開く（20260926-edit-scrollback）ときの一時ディレクトリの置き場・OS・環境変数。テストで差し替える。 */
+  scrollbackEditor?: { tmpRoot?: string; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } | undefined;
   /** 復元の合計の期限を測る時計（ms）。既定は単調な `monotonicNow`（壁時計は戻りうる。D103 の独立点検 #8）。テストで差し替える。 */
   clock?: { now(): number } | undefined;
   /**
@@ -119,6 +122,11 @@ export class SessionService {
   private readonly workspaceLabelDeps: WorkspaceLabelDeps;
   private readonly agentReportSocketPath: string | undefined;
   private readonly getAutoResumeEnabled: () => boolean;
+  private readonly scrollbackEditorEnv: { tmpRoot: string | undefined; platform: NodeJS.Platform; env: NodeJS.ProcessEnv };
+  /** 開いているスクロールバックのエディタの pane → 開いた元の pane・開く前の拡大表示・一時ディレクトリ（20260926-edit-scrollback）。 */
+  private readonly scrollbackEditors = new Map<PaneId, { sourcePaneId: PaneId; previousZoomedPaneId: PaneId | null; dir: string }>();
+  /** pane を閉じたときに始めた一時ディレクトリの削除（停止時に待つ）。 */
+  private readonly scrollbackCleanups = new Set<Promise<void>>();
   /**
    * 上限を超えたまままだ返っていない、根を探す問い合わせの数（review ラウンド 1・2）。0 でない間は新しく根を探さずフォルダ名にする——応答しない fs
    * （止まった NFS 等）への stat は取り消せず libuv のスレッドを塞ぐので、重ねてサーバ全体の fs を止めない。遅いだけなら返った時点で元に戻る。
@@ -154,6 +162,11 @@ export class SessionService {
     this.clock = opts.clock ?? { now: monotonicNow };
     this.agentReportSocketPath = opts.agentReportSocketPath;
     this.getAutoResumeEnabled = opts.getAutoResumeEnabled ?? (() => true);
+    this.scrollbackEditorEnv = {
+      tmpRoot: opts.scrollbackEditor?.tmpRoot,
+      platform: opts.scrollbackEditor?.platform ?? process.platform,
+      env: opts.scrollbackEditor?.env ?? process.env,
+    };
     const labelDeps = opts.workspaceLabelDeps ?? defaultWorkspaceLabelDeps;
     this.workspaceLabelDeps = {
       ...labelDeps,
@@ -412,6 +425,12 @@ export class SessionService {
    * undefined」は `toEqual` 等では区別できないため、実際に省く形にしておく必要がある。
    */
   private publishPaneClosed(paneId: PaneId, successorPaneId: PaneId | undefined): void {
+    const editor = this.scrollbackEditors.get(paneId);
+    if (editor) {
+      this.scrollbackEditors.delete(paneId);
+      const cleanup = this.removeScrollbackDirQuietly(editor.dir).finally(() => this.scrollbackCleanups.delete(cleanup));
+      this.scrollbackCleanups.add(cleanup);
+    }
     this.bus.publish({ event: "pane.closed", data: successorPaneId === undefined ? { paneId } : { paneId, successorPaneId } });
   }
 
@@ -609,13 +628,71 @@ export class SessionService {
     return { pane, ...(place.fellBack ? { cwdFallback: true as const } : {}) };
   }
 
+  /**
+   * スクロールバックを `$EDITOR` で開く（20260926-edit-scrollback。herdr の `pane.edit_scrollback`）。対象の pane を分割した新しい pane で
+   * エディタを起動して拡大表示にする。閉じたときの焦点・拡大表示の復帰と一時ディレクトリの削除は `closePane`・`publishPaneClosed`。
+   */
+  async editScrollback(paneId: PaneId): Promise<{ pane: Pane }> {
+    const source = this.requirePane(paneId);
+    const host = this.terminals.get(paneId);
+    if (!host) throw new RpcError("not_found", `pane has no terminal: ${paneId}`);
+    const { tmpRoot, platform, env } = this.scrollbackEditorEnv;
+    if (scrollbackEditorArgv("", platform, env) === null) throw new RpcError("spawn_failed", "no editor: set VISUAL or EDITOR for the server");
+    const previousZoomedPaneId = this.requireTab(source.tabId).zoomedPaneId;
+    const { dir, path } = await writeScrollbackFile(host.mirror.plainText(), tmpRoot);
+    let committed = false;
+    try {
+      const current = this.requirePane(paneId); // 書いている間に閉じられていないか
+      const argv = scrollbackEditorArgv(path, platform, env)!;
+      const newPaneId = this.model.reserveNextPaneId();
+      const spawn = await this.spawnForPane(newPaneId, current.cwd, { shell: argv[0]!, args: argv.slice(1) });
+      if (!spawn.ok) throw new RpcError("spawn_failed", `failed to start an editor for the scrollback of ${paneId}`);
+      let pane: Pane;
+      try {
+        ({ pane } = this.model.splitPane(paneId, "right", undefined, newPaneId, { cwd: current.cwd, shell: argv[0]!, cols: current.cols, rows: current.rows }));
+        this.model.zoomPane(newPaneId, "on");
+      } catch (err) {
+        this.terminals.dispose(newPaneId);
+        throw err;
+      }
+      this.scrollbackEditors.set(newPaneId, { sourcePaneId: paneId, previousZoomedPaneId, dir });
+      committed = true;
+      this.bus.publish({ event: "pane.created", data: { pane } });
+      this.bus.publish({ event: "layout.updated", data: { tab: this.requireTab(pane.tabId) } });
+      this.persist.touch();
+      if (spawn.alreadyExited) await this.closePaneAfterExit(pane.id, 0);
+      return { pane };
+    } finally {
+      if (!committed) await this.removeScrollbackDirQuietly(dir);
+    }
+  }
+
+  /** 停止時（`composeServer.close`）: 開いたままのエディタの一時ディレクトリと、削除の途中のものを待って消す。 */
+  async disposeScrollbackEditors(): Promise<void> {
+    const dirs = [...this.scrollbackEditors.values()].map((e) => e.dir);
+    this.scrollbackEditors.clear();
+    await Promise.all([...dirs.map((d) => this.removeScrollbackDirQuietly(d)), ...this.scrollbackCleanups]);
+  }
+
+  private async removeScrollbackDirQuietly(dir: string): Promise<void> {
+    try {
+      await removeScrollbackDir(dir);
+    } catch (err) {
+      this.logger.warn("failed to remove a scrollback temp dir", { dir, error: String(err) });
+    }
+  }
+
   async closePane(paneId: PaneId): Promise<void> {
     const pane = this.model.getPane(paneId);
     const tabId = pane?.tabId;
     const workspaceId = tabId ? this.model.getTab(tabId)?.workspaceId : undefined; // tab が消える前に控える（D88）
-    const result = this.model.closePane(paneId);
+    const editor = this.scrollbackEditors.get(paneId);
+    const result = this.model.closePane(paneId, editor?.sourcePaneId);
+    // エディタの pane なら、開く前の拡大表示に戻す（焦点は上の後継の希望で戻る。20260926-edit-scrollback）
+    const zoomBack = editor?.previousZoomedPaneId;
+    if (zoomBack && result.removedTabIds.length === 0 && this.model.getPane(zoomBack)?.tabId === tabId) this.model.zoomPane(zoomBack, "on");
     for (const pid of result.removedPaneIds) this.terminals.dispose(pid);
-    // successorPaneId（20260925-pane-replace-focus-hint）: closePane 由来では常に undefined。
+    // successorPaneId（20260925-pane-replace-focus-hint）: closePane 由来ではエディタの pane の元の pane だけ（20260926-edit-scrollback）。
     for (const pid of result.removedPaneIds) this.publishPaneClosed(pid, result.successorPaneId);
     for (const tid of result.removedTabIds) this.bus.publish({ event: "tab.closed", data: { tabId: tid } });
     if (result.closedWorkspaceId) {
@@ -906,12 +983,16 @@ export class SessionService {
    * pane が閉じられないまま残ってしまう（レビュー指摘）。この場合は呼び出し側が、pane をモデルへ
    * コミットした直後に `closePaneAfterExit` を自分で呼ぶ。
    */
-  private async spawnForPane(paneId: PaneId, cwd: string): Promise<{ ok: boolean; alreadyExited: boolean }> {
+  private async spawnForPane(
+    paneId: PaneId,
+    cwd: string,
+    command?: { shell: string; args: string[] },
+  ): Promise<{ ok: boolean; alreadyExited: boolean }> {
     const host = this.terminals.create(paneId, {
       cwd,
       cols: HEADLESS_COLS,
       rows: HEADLESS_ROWS,
-      ...(this.shell ? { shell: this.shell } : {}),
+      ...(command ? { shell: command.shell, args: command.args } : this.shell ? { shell: this.shell } : {}),
       env: this.envForPane(paneId),
     });
     const result = await raceSpawn(host, this.spawnGraceMs);

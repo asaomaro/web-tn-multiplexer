@@ -36,13 +36,6 @@ interface HelpGroup {
 
 const settings = useSettingsStore();
 
-/** 「後続」の案内（`notYet`）。**そのキーがまだ「後続」の案内のときだけ**出す（別の操作に割り当てたら出さない）。 */
-function notYetEntry(chord: string): HelpEntry[] {
-  const action = settings.keymap.prefixMap.get(chord);
-  if (action?.type !== "notYet") return [];
-  return [{ keys: `prefix+${chord}`, label: `未対応（後続: ${action.work}）`, grayed: true }];
-}
-
 /**
  * 操作の行。表記は現在の割り当て。割り当てなしは「なし」（灰色）。
  * H/J/K/L（swap）は herdr のヘルプにも出てこないので、ここでも出さない（`helpHidden`。D76。編集は設定の節「キー」でできる）。
@@ -102,14 +95,11 @@ const helpGroups = computed<HelpGroup[]>(() => [
     entries: [
       { keys: settings.keymap.prefix, label: "prefix（押したあと、次のキーで操作します）" },
       ...actionEntries("全体"),
-      // shift+r は 20260922-appearance-settings-rest T7 で reload_config（全体）の既定割り当てに
-      // 昇格したので、上の actionEntries("全体") が既にこの行を出す（`notYetEntry("shift+r")` は
-      // 呼ぶ必要が無くなった——常に空を返すだけになる）。
     ],
   },
   { name: "移動", entries: navigateEntries.value },
   { name: "workspace / tab", entries: actionEntries("workspace / tab") },
-  { name: "pane", entries: [...actionEntries("pane"), ...notYetEntry("e")] },
+  { name: "pane", entries: actionEntries("pane") },
 ]);
 
 const SCROLL_LINE = 32;

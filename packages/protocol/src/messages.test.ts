@@ -10,6 +10,7 @@ import {
   GroupToggleCollapsedParams,
   METHOD_SCHEMAS,
   NewCwd,
+  PaneEditScrollbackParams,
   PaneMoveToEdgeParams,
   PaneMoveToNewTabParams,
   PaneMoveToTabParams,
@@ -127,6 +128,14 @@ describe("messages", () => {
     expect(WorktreeRemoveParams.parse({ workspaceId: "w1", path: "/tmp/wt1" })).toEqual({ workspaceId: "w1", path: "/tmp/wt1" });
     expect(WorktreeRemoveParams.parse({ workspaceId: "w1", path: "/tmp/wt1", force: true })).toEqual({ workspaceId: "w1", path: "/tmp/wt1", force: true });
     expect(() => WorktreeRemoveParams.parse({ workspaceId: "w1", path: "" })).toThrow(); // 空文字は拒否
+  });
+
+  it("pane.edit_scrollback は paneId だけを受け、それ以外の値は取り除く（20260926-edit-scrollback の AC14）", () => {
+    expect(PaneEditScrollbackParams.parse({ paneId: "p1" })).toEqual({ paneId: "p1" });
+    expect(PaneEditScrollbackParams.parse({ paneId: "p1", path: "/etc/passwd", editor: "rm -rf /" })).toEqual({ paneId: "p1" });
+    expect(() => PaneEditScrollbackParams.parse({})).toThrow();
+    expect(() => PaneEditScrollbackParams.parse({ paneId: "" })).toThrow();
+    expect(METHOD_SCHEMAS["pane.edit_scrollback"]).toBe(PaneEditScrollbackParams);
   });
 
   it("registers a schema for every method the WebSocket table defines", () => {

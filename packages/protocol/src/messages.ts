@@ -305,6 +305,13 @@ export type PaneResizeParams = z.infer<typeof PaneResizeParams>;
 export const PaneInputSetParams = z.object({ paneId, rightClick: rightClickTarget });
 export type PaneInputSetParams = z.infer<typeof PaneInputSetParams>;
 
+// 20260926-edit-scrollback（herdr の pane.edit_scrollback）。一時ファイルのパスやエディタはサーバが決め、ここでは受け取らない。
+export const PaneEditScrollbackParams = z.object({ paneId });
+export type PaneEditScrollbackParams = z.infer<typeof PaneEditScrollbackParams>;
+export interface PaneEditScrollbackResult {
+  pane: Pane;
+}
+
 // --- layout -----------------------------------------------------------------
 
 export const LayoutSetSplitRatioParams = z.object({
@@ -426,6 +433,7 @@ export const METHOD_SCHEMAS = {
   "pane.zoom": PaneZoomParams,
   "pane.resize": PaneResizeParams,
   "pane.input.set": PaneInputSetParams,
+  "pane.edit_scrollback": PaneEditScrollbackParams,
   "layout.set_split_ratio": LayoutSetSplitRatioParams,
   "worktree.list": WorktreeListParams,
   "worktree.create": WorktreeCreateParams,
@@ -477,6 +485,7 @@ export interface MethodResultMap {
   "pane.zoom": Record<string, never>;
   "pane.resize": Record<string, never>;
   "pane.input.set": Record<string, never>;
+  "pane.edit_scrollback": PaneEditScrollbackResult;
   "layout.set_split_ratio": Record<string, never>;
   "worktree.list": WorktreeListResult;
   "worktree.create": WorktreeCreateResult;

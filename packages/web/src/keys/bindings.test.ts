@@ -25,17 +25,18 @@ describe("操作のカタログ（design「操作のカタログ」）", () => {
   // 20260922-appearance-settings-rest T7 で reload_config（全体）をカタログへ正式登録し 35 個に。
   // 20260923-missing-keybinding-actions で12個追加し 47 個になった（NOT_YET_BINDINGS の案内から昇格。keymap.ts 参照）。
   // 20260923-workspace-grouping で move_workspace_previous/next の2個を追加し 49 個になった。
-  it("49 個あり、id は重複しない・表示名は空でない", () => {
-    expect(ACTIONS).toHaveLength(49);
-    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(49);
+  // 20260926-edit-scrollback で edit_scrollback（pane）を追加し 50 個になった。
+  it("50 個あり、id は重複しない・表示名は空でない", () => {
+    expect(ACTIONS).toHaveLength(50);
+    expect(new Set(ACTIONS.map((a) => a.id)).size).toBe(50);
     for (const a of ACTIONS) expect(a.label.length, a.id).toBeGreaterThan(0);
   });
 
-  it("群は 全体 5・workspace / tab 21・pane 23（この順に並ぶ）", () => {
+  it("群は 全体 5・workspace / tab 21・pane 24（この順に並ぶ）", () => {
     const groups = ACTIONS.map((a) => a.group);
     expect(groups.filter((g) => g === "全体")).toHaveLength(5);
     expect(groups.filter((g) => g === "workspace / tab")).toHaveLength(21);
-    expect(groups.filter((g) => g === "pane")).toHaveLength(23);
+    expect(groups.filter((g) => g === "pane")).toHaveLength(24);
     // 群ごとにまとまっている（全体 → workspace / tab → pane）
     expect(groups.join(",")).toBe(
       [...groups]
@@ -109,6 +110,8 @@ describe("操作のカタログ（design「操作のカタログ」）", () => {
     });
     expect(actionFor(actionDef("resize_mode")!)).toEqual({ type: "enterMode", mode: "resize" });
     expect(actionFor(actionDef("copy_mode")!)).toEqual({ type: "enterMode", mode: "copy" });
+    expect(actionFor(actionDef("edit_scrollback")!)).toEqual({ type: "editScrollback" });
+    expect(actionDef("edit_scrollback")).toMatchObject({ group: "pane", defaults: ["prefix+e"] });
     expect(actionFor(actionDef("open_notification_target")!)).toEqual({ type: "nextNotification" });
     expect(actionFor(actionDef("previous_tab")!)).toEqual({ type: "tabDelta", delta: -1 });
   });
@@ -131,7 +134,7 @@ describe("操作のカタログ（design「操作のカタログ」）", () => {
     expect(isActionId("split_vertical")).toBe(true);
     // 20260922-appearance-settings-rest T7 で reload_config をカタログへ登録したので、今は通る。
     expect(isActionId("reload_config")).toBe(true);
-    expect(isActionId("edit_scrollback")).toBe(false); // 後続の案内（NOT_YET）はカタログの外
+    expect(isActionId("edit_scrollback")).toBe(true); // 20260926-edit-scrollback で「後続」の案内から昇格
     expect(isActionId(42)).toBe(false);
     expect(isActionId(undefined)).toBe(false);
     expect(actionDef("bogus")).toBeUndefined();

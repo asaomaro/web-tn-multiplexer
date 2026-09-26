@@ -166,8 +166,8 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
       case "nextNotification":
         this.notifications.focusNext();
         return;
-      case "notYet":
-        this.view.toast(`未対応（後続: ${action.work}）`);
+      case "editScrollback":
+        this.editScrollback();
         return;
       case "reloadConfig":
         this.reloadConfig();
@@ -582,6 +582,24 @@ export class ActionDispatcher implements ActionPort, FocusPort, UiPort {
       .catch(() => {
         hold?.cancel();
         this.view.toast("分割できませんでした");
+      });
+  }
+
+  /** 20260926-edit-scrollback。開いたエディタの pane（サーバが拡大表示にする）へ焦点を移す。入力の関所は分割と同じ（D99）。 */
+  private editScrollback(): void {
+    const paneId = this.view.focusedPaneId;
+    if (!paneId) return;
+    const hold = this.input?.holdInput(paneId);
+    this.conn
+      .request("pane.edit_scrollback", { paneId })
+      .then((r) => {
+        // エディタがすぐ終わると、応答の前に pane が閉じている（焦点は pane.closed の後継で元の pane に戻っている）
+        if (this.session.panes.has(r.pane.id)) this.view.focusPane(r.pane.id);
+        this.releaseHold(hold, r.pane.id);
+      })
+      .catch(() => {
+        hold?.cancel();
+        this.view.toast("スクロールバックをエディタで開けませんでした");
       });
   }
 
