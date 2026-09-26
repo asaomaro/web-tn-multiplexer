@@ -35,8 +35,12 @@ export class RpcFailure extends Error {
 }
 
 export interface WtmClient {
-  /** `client.hello` を `kind: "external"` で送る（decisions.md D4）。 */
-  hello(): Promise<ClientHelloResult>;
+  /**
+   * `client.hello` を `kind: "external"` で送る（decisions.md D4）。`onEventAfterHello` を渡すと、hello の応答を
+   * 受け取ったその場（同期）でイベントの購読に登録する——応答と同じ受信の塊で直後に届いたイベントも取りこぼさず、
+   * 応答より前の（snapshot より古い）イベントは渡さない（20260926-agent-automation-api decisions.md D9）。
+   */
+  hello(onEventAfterHello?: (evt: ServerEvent) => void): Promise<ClientHelloResult>;
   request<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>>;
   /** INPUT フレームを送る。サーバからの ack は無い（design「依拠する既存の事実」）。 */
   sendInput(paneId: string, bytes: Uint8Array): void;
@@ -68,7 +72,7 @@ interface RawEnvelope {
  * 振り分ける（`ws.once("message", ...)` を都度張り直すと、何も待っていない間に届いた message を
  * 取りこぼす。smoke.ts のコメント参照）。
  */
-class WsWtmClient implements WtmClient {
+export class WsWtmClient implements WtmClient {
   private readonly pending = new Map<string, PendingRequest>();
   private nextId = 1;
   private readonly eventListeners: ((evt: ServerEvent) => void)[] = [];
@@ -77,7 +81,7 @@ class WsWtmClient implements WtmClient {
   private readonly closeListeners: ((code: number, reason: string) => void)[] = [];
   private closedBySelf = false;
 
-  constructor(private readonly ws: WebSocket) {
+  constructor(private readonly ws: Pick<WebSocket, "on" | "send" | "close">) {
     ws.on("message", (data: Buffer, isBinary: boolean) => {
       if (isBinary) this.handleBinary(new Uint8Array(data));
       else this.handleText(data.toString("utf8"));
@@ -124,7 +128,7 @@ class WsWtmClient implements WtmClient {
     }
   }
 
-  private requestRaw(method: string, params: unknown): Promise<unknown> {
+  private requestRaw(method: string, params: unknown, onResponse?: () => void): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = String(this.nextId++);
       const timer = setTimeout(() => {
@@ -134,6 +138,7 @@ class WsWtmClient implements WtmClient {
       this.pending.set(id, {
         resolve: (v) => {
           clearTimeout(timer);
+          onResponse?.();
           resolve(v);
         },
         reject: (e) => {
@@ -145,8 +150,9 @@ class WsWtmClient implements WtmClient {
     });
   }
 
-  async hello(): Promise<ClientHelloResult> {
-    return (await this.requestRaw("client.hello", { protocol: 1, kind: "external" })) as ClientHelloResult;
+  async hello(onEventAfterHello?: (evt: ServerEvent) => void): Promise<ClientHelloResult> {
+    const subscribe = onEventAfterHello ? () => this.eventListeners.push(onEventAfterHello) : undefined;
+    return (await this.requestRaw("client.hello", { protocol: 1, kind: "external" }, subscribe)) as ClientHelloResult;
   }
 
   async request<M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {

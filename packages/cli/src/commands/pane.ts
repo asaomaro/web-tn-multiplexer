@@ -93,14 +93,20 @@ function followOutput(client: WtmClient, paneId: string, raw: boolean): Promise<
   });
 }
 
+/**
+ * 購読して最初の SNAPSHOT を読む（hello は呼び出し側が済ませておく）。購読の解除も呼び出し側が行う
+ * （`pane read` は表示してから解除する・`--follow` なら解除しない）。`agent read` も同じ経路を使う。
+ */
+export async function readPaneSnapshot(client: WtmClient, paneId: string, scrollbackLines: number, timeoutMs: number): Promise<string> {
+  const snapshotPromise = waitForSnapshot(client, paneId, timeoutMs);
+  await client.request("pane.subscribe", { paneId, scrollbackLines });
+  return snapshotPromise;
+}
+
 export async function runPaneRead(cmd: PaneReadCmd, store: SessionStore): Promise<void> {
   await withSession(cmd.opts, store, async (client) => {
     const hello = await client.hello();
-    const scrollbackLines = hello.snapshot.limits.scrollbackLines;
-
-    const snapshotPromise = waitForSnapshot(client, cmd.paneId, cmd.timeoutMs);
-    await client.request("pane.subscribe", { paneId: cmd.paneId, scrollbackLines });
-    const text = await snapshotPromise;
+    const text = await readPaneSnapshot(client, cmd.paneId, hello.snapshot.limits.scrollbackLines, cmd.timeoutMs);
     printLine(cmd.raw ? text : stripAnsi(text));
 
     if (!cmd.follow) {

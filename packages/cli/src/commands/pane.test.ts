@@ -127,6 +127,25 @@ describe("runPaneRead", () => {
     expect(client.request).toHaveBeenCalledWith("pane.unsubscribe", { paneId: "p1" });
   });
 
+  it("--follow 無しでは、SNAPSHOT を表示してから unsubscribe する（解除の応答を待たずに表示する）", async () => {
+    const order: string[] = [];
+    const client = fakeClient({
+      panes: ["p1"],
+      requestImpl: (method) => {
+        order.push(method);
+        return method === "pane.unsubscribe" ? new Promise(() => undefined) : {};
+      },
+    });
+    mockedPrintLine.mockImplementation(() => void order.push("printLine"));
+    mockedWithSession.mockImplementation(async (_o, _s, fn) => fn(client));
+
+    void runPaneRead({ kind: "pane-read", opts: OPTS, paneId: "p1", follow: false, raw: false, timeoutMs: 1000 }, store);
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledWith("pane.subscribe", expect.anything()));
+    client.emitSnapshot("p1", 80, 24, "hello");
+    await vi.waitFor(() => expect(order).toContain("pane.unsubscribe"));
+    expect(order).toEqual(["pane.subscribe", "printLine", "pane.unsubscribe"]);
+  });
+
   it("--raw なら ANSI をそのまま出す", async () => {
     const client = fakeClient();
     (client.request as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {

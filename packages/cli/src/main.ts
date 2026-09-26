@@ -4,6 +4,7 @@
  * `parseArgs` → 対応する `commands/*` を呼ぶ → 例外は `reportAndExit` が終了コードへ変換する（T11）。
  */
 import { parseArgs } from "./cliArgs.js";
+import { runAgentGet, runAgentList, runAgentRead, runAgentWait } from "./commands/agent.js";
 import { runTabClose, runTabCreate } from "./commands/tab.js";
 import { runPaneClose, runPaneInput, runPaneRead, runPaneRun, runPaneSplit } from "./commands/pane.js";
 import { runLogin, runSnapshot, runWatch } from "./commands/session.js";
@@ -27,10 +28,15 @@ function printHelp(): void {
       "wtmctl pane read <paneId> [--follow] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
       "wtmctl snapshot [--url <URL>] [--token <TOKEN>]",
       "wtmctl watch [--json] [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent list [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent get <paneId> [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent wait <paneId> [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
       "",
       "環境変数: WTMCTL_URL（既定 http://127.0.0.1:7780）・WTMCTL_TOKEN",
       "",
       "pane input/pane run は、実プロセスへ実際に届いたことまでは保証しません（INPUT フレームに ack はありません）。",
+      "agent wait は --until 省略時 idle/done/blocked のどれかで返り、--timeout 省略時は無期限に待ちます。",
     ].join("\n"),
   );
 }
@@ -69,6 +75,14 @@ async function main(): Promise<void> {
       return runSnapshot(cmd, store);
     case "watch":
       return runWatch(cmd, store);
+    case "agent-list":
+      return runAgentList(cmd, store);
+    case "agent-get":
+      return runAgentGet(cmd, store);
+    case "agent-wait":
+      return runAgentWait(cmd, store);
+    case "agent-read":
+      return runAgentRead(cmd, store);
     default: {
       // 網羅性チェック：`Command` に新しい種類が足されたのにここへ分岐を足し忘れると、ここで型エラーになる
       // （coding のタスク横断点検で見つけた——`switch` 単体では TS は非網羅を黙って許す。この tsconfig は
