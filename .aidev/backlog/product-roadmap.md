@@ -233,7 +233,14 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] 拒否の理由の取り違え（狭い経路）: 前段のプロキシが Host を許可外の名前に書き換える構成（`--origin` は正しい）でサーバを起動し直すと、`/api/session` は Host で 403・`/ws` は起動の途中の 503 になり、Web が `rejected`（「`--origin` を加えて起動し直してください」）を出す。既にその `--origin` は付いているので理由が誤り（「再試行」で回復する）。403＋503 の切り分けを足す (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/review.md 統合 review ラウンド2 の nit）
 - [ ] サイズ権限の移譲の時計: `SizeAuthority.transferOwnership` が `lastInteractionAt`（`ClientRegistry` の `Date.now()`）の降順で移譲先を選ぶが、D103・D106 でログの間引き・ログイン制限・不正フレームの窓を単調な時計に移した後も、ここだけ壁時計のまま（時刻が巻き戻ると「最後に操作した人が勝つ」が反転しうる） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/walkthrough.md 作成時の発見）
 - [ ] E2E の観測点をブラウザ側にそろえる共通部品: support/frames.ts の CDP／中継と panes.ts の client.view 観測を入口 1 つに整理し、spec がテスト自身の WebSocket クライアントだけで合否を決められないようにする（条項 e2e-observe-browser の実装面）（出典: .aidev/works/20260918-web-terminal-multiplexer/retro.md）
-- [ ] pnpm のスクリプトを「失敗が見える」形にする: pnpm -s の再帰実行は失敗時に何も出力せず終了コードだけが変わる。ルートの script か CI の呼び出しで出力と終了コードを必ず残す（この work で誤った結論を decisions.md に書き、後で訂正した）（出典: .aidev/works/20260918-web-terminal-multiplexer/retro.md）
+- [x] pnpm のスクリプトを「失敗が見える」形にする: pnpm -s の再帰実行は失敗時に何も出力せず終了コードだけが変わる。ルートの script か CI の呼び出しで出力と終了コードを必ず残す（この work で誤った結論を decisions.md に書き、後で訂正した）（出典: .aidev/works/20260918-web-terminal-multiplexer/retro.md）
+  20260926-pnpm-script-visible-failures で対応。原因は2段: (1) `pnpm -s` の `-r` 実行は対象が2パッケージ以上だと
+  子の出力を失敗時も含めて全部捨てる、(2) `-s` 時に pnpm が子へ渡す `npm_config_reporter=silent` を継承すると
+  ラッパー内側の pnpm も黙る。ルートの `typecheck`・`build` を `scripts/run-quiet.mjs` 経由にし、`-s` のときだけ
+  出力をためて失敗時に吐き出す（環境変数は外す）。`-s` 無しは素通し。`test`（vitest）・`lint` は影響なし（実測）。
+  実測: 型エラーを仕込んで `pnpm -s typecheck`/`-s build`/`typecheck`/`build` の4通りとも失敗内容が出る、
+  戻すと `-s` は0バイト・exit 0、ラッパー無し・環境変数を消さない形はそれぞれ無出力・バナーのみで落ちる
+  （decisions.md D2 の A〜H）。vitest 3010 passed・smoke pass。doccheck 4ラウンド・taskcheck 2ラウンド・review 2ラウンド。
 - [ ] AC17 の実機計測の結果を反映する: GPU のある実機で大量出力中の 16 pane を測り直し、合否を決める。D98 の閾値（2MB / 256KB）の見直しを含む（出典: .aidev/works/20260918-web-terminal-multiplexer/retro.md）
 - [ ] 配色トークンの衝突を解く: --wtm-menu-border と --wtm-menu-active-bg がどちらも #44475a。(1) 選択中の pane の枠（2px の線）と地色 --wtm-bg(#1e1f29) の輝度比が約 1.8:1 で非テキストの目安 3:1 を下回る。(2) spaces 区画の最後の行が表示中のとき、行の背景と .sidebar-agents の border-top が同色で区切り線が消える。直すときは :focus-visible の outline-offset:-1px が選択線の内側 1px に重なる点も一緒に見る（出典: .aidev/works/20260920-ui-selection-visuals/design.md）
 - [ ] xterm.js のカーソルの描き方を決める: cursorStyle / cursorInactiveStyle をリポジトリで一度も設定しておらず（TerminalRegistry.ts の new Terminal）、フォーカスの無い pane のカーソルの見え方が xterm.js の既定任せ（出典: .aidev/works/20260920-ui-selection-visuals/design.md）
