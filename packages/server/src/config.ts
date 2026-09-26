@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { ConfigError } from "./configError.js";
+import { DEFAULT_SESSION_NAME, resolveSessionStateDir } from "./persist/namedSession.js";
 import { isLoopbackHost, unbracketHost } from "./util/net.js";
 
 /** design.md「起動オプション（wtm serve）」の既定値。 */
@@ -18,6 +21,8 @@ export interface ServeOptions {
   /** `--origin` で追加された許可 Origin（複数指定可）。 */
   extraOrigins: string[];
   stateDir: string;
+  /** 名前付き session で起動したときだけその名前（`--session default`・指定なしは `undefined`。20260926-named-session）。 */
+  sessionName: string | undefined;
   scrollbackLines: number;
   shell: string | undefined;
   /** 20260924-worktree-dir-config。既定値の解決はしない（`shell` と同じ。既定は `defaultWorktreeRoot()` 側に委ねる）。 */
@@ -31,6 +36,7 @@ export interface RawServeArgs {
   key?: string;
   origin?: string[];
   stateDir?: string;
+  session?: string;
   scrollback?: string;
   shell?: string;
   worktreeDir?: string;
@@ -46,14 +52,24 @@ export function defaultStateDir(env: NodeJS.ProcessEnv = process.env, os: NodeJS
   return join(base, "web-tn-multiplexer");
 }
 
-export class ConfigError extends Error {
-  /** `main.ts` が終了コード 2 で使う理由の要約。 */
-  readonly hint: string;
-  constructor(message: string, hint: string) {
-    super(message);
-    this.name = "ConfigError";
-    this.hint = hint;
+export { ConfigError };
+
+/**
+ * 公式フック連携の report を受け取るローカル socket のパス（design「4. ローカル report 経路」。`composeServer.ts` から移した）。
+ * Unix はファイルシステムパス、Windows は named pipe（ファイルシステムパスを持たないため、`stateDir` のハッシュをグローバル
+ * 名前空間内の名前に使う。同じ `stateDir` からは常に同じ名前になる）。
+ */
+export function agentReportSocketPathFor(stateDir: string, os: NodeJS.Platform = platform()): string {
+  if (os === "win32") {
+    const hash = createHash("sha256").update(stateDir).digest("hex").slice(0, 16);
+    return `\\\\.\\pipe\\wtm-agent-report-${hash}`;
   }
+  return join(stateDir, "agent-report.sock");
+}
+
+/** Unix ドメイン socket のパスのバイト長の上限（Linux は実測で 108 まで listen できる。macOS 等は 104 から NUL を引いた 103 とみなす。decisions D2）。 */
+export function maxUnixSocketPathBytes(os: NodeJS.Platform): number {
+  return os === "linux" ? 108 : 103;
 }
 
 function parsePort(raw: string | undefined, fallback: number): number {
@@ -95,7 +111,7 @@ function parseOrigin(raw: string): string {
  * 起動オプションを解釈・検証する。**ループバック以外で証明書が無ければ `ConfigError`**
  * （zellij 方式。design.md「認証と TLS」・research.md F9.1）。
  */
-export function resolveServeOptions(args: RawServeArgs, env: NodeJS.ProcessEnv = process.env): ServeOptions {
+export function resolveServeOptions(args: RawServeArgs, env: NodeJS.ProcessEnv = process.env, os: NodeJS.Platform = platform()): ServeOptions {
   // `--host [::1]` のような角括弧付きの IPv6 は角括弧を外す（`listen()` は角括弧付きを名前として引き、`ENOTFOUND` で
   // 落ちる）。以後の `isLoopbackHost`・`isWildcardHost` は角括弧の無い形だけを見る（D102）。
   const host = unbracketHost(args.host ?? DEFAULTS.host);
@@ -112,13 +128,31 @@ export function resolveServeOptions(args: RawServeArgs, env: NodeJS.ProcessEnv =
     throw new ConfigError("--cert and --key must be given together", "--cert と --key は両方指定してください。");
   }
 
+  // 名前付き session（20260926-named-session）：`--state-dir`（無ければ既定）の下の `sessions/<name>`。規則外の名前はここで
+  // ConfigError（ロック・ログ等を作る前）。
+  const stateDir = resolveSessionStateDir(args.stateDir ?? defaultStateDir(env, os), args.session);
+  const sessionName = args.session === undefined || args.session === DEFAULT_SESSION_NAME ? undefined : args.session;
+  if (os !== "win32") {
+    const socketPath = agentReportSocketPathFor(stateDir, os);
+    const bytes = Buffer.byteLength(socketPath);
+    const max = maxUnixSocketPathBytes(os);
+    if (bytes > max) {
+      // 長すぎると公式フック連携の socket の listen が EINVAL で失敗し、token を作った後に終了コード 1 で落ちていた。
+      throw new ConfigError(
+        `the state dir path is too long: ${socketPath} is ${bytes} bytes (max ${max})`,
+        `状態ディレクトリのパスが長すぎて、公式フック連携の socket を作れません。${sessionName !== undefined ? "--session に短い名前を付けるか、" : ""}--state-dir に短いパスを指定してください。`,
+      );
+    }
+  }
+
   return {
     host,
     port,
     cert: args.cert,
     key: args.key,
     extraOrigins: (args.origin ?? []).map(parseOrigin),
-    stateDir: args.stateDir ?? defaultStateDir(env),
+    stateDir,
+    sessionName,
     scrollbackLines: parseScrollback(args.scrollback),
     shell: args.shell,
     worktreeDir: args.worktreeDir,
@@ -164,7 +198,7 @@ export function stateDirInUseError(
       `the state dir ${stateDir} is already in use by another wtm (${who})`,
       [
         "同じ --state-dir を別の wtm（wtm serve か wtm token reset）が使っています（wtm serve を 2 つ動かすと全シェルを二重に起動し、session.json・auth.json を互いに上書きします）。",
-        "別のポートで並行して動かすなら、--state-dir に別のディレクトリを指定してください。",
+        "別のポートで並行して動かすなら、--session <名前> で別の名前付き session にするか、--state-dir に別のディレクトリを指定してください。",
         stale,
       ].join(""),
     );
@@ -191,7 +225,7 @@ export function listenFailureHint(code: string | undefined): string | undefined 
         "そのポートは別のプロセスが使っています。",
         "--port で別のポートを指定してください。",
         // 同じ state-dir の wtm はポートを変えても 2 つ目が `wtm.lock` で止まる（D103）ので、状態ディレクトリも分けるよう添える。
-        "wtm を並行して動かすなら --state-dir も分けてください。",
+        "wtm を並行して動かすなら --state-dir も分けてください（--session <名前> で名前付き session にしても分かれます）。",
       ].join("");
     case "EACCES":
       return [

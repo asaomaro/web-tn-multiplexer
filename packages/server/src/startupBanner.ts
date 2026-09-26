@@ -11,6 +11,8 @@ export interface StartupInfo {
   lanAddresses: readonly string[];
   /** 今回作った token（作っていなければ `undefined`）。 */
   freshToken: string | undefined;
+  /** 名前付き session で起動したときだけ（20260926-named-session）。 */
+  session?: NamedSessionInfo | undefined;
 }
 
 /**
@@ -22,6 +24,7 @@ export interface StartupInfo {
  */
 export function startupLines(info: StartupInfo): string[] {
   const lines = [`wtm: listening on ${formatUrlHost(info.host)} port ${info.port} (${info.scheme})`];
+  if (info.session !== undefined) lines.push(`wtm: session ${info.session.name}（状態ディレクトリ: ${info.session.stateDir}）`);
   const urls = accessUrls(info.scheme, info.host, info.port, info.lanAddresses, info.extraOrigins);
   if (urls.length === 0) {
     lines.push("wtm: 開ける URL を表示できません（ゾーン付きの IPv6 アドレス等は URL にできません）。ブラウザで開く URL を --origin で渡すと、ここに表示します");
@@ -36,7 +39,7 @@ export function startupLines(info: StartupInfo): string[] {
     }
   } else {
     for (const url of urls) lines.push(`wtm: open ${url}/`);
-    lines.push("wtm: token を忘れた場合は「wtm token reset」で作り直せます");
+    lines.push(`wtm: token を忘れた場合は「${tokenResetCommand(info.session)}」で作り直せます`);
   }
   return lines;
 }
@@ -45,10 +48,33 @@ export function startupLines(info: StartupInfo): string[] {
  * 作った token を、起動の表示（`startupLines`）で出せないまま終わるときの表示（「作った token は必ず一度表示される」。
  * D102・D103）。token は auth.json に保存済みで、次の起動では表示されない。起動の途中で終了のシグナルを受けたときも出す。
  */
-export function lastChanceTokenLines(token: string): string[] {
+export function lastChanceTokenLines(token: string, session?: NamedSessionInfo): string[] {
   return [
     `wtm: token（今回作成・この表示が最後）: ${token}`,
     // 起動の失敗・表示の失敗・起動の途中の終了のシグナルのどれでも出すので、理由は問わない言い方にする。
-    "wtm: 起動を最後まで終えませんでしたが token は保存済みです。次の起動ではこの token でログインできます（失くしたら「wtm token reset」で作り直せます）",
+    `wtm: 起動を最後まで終えませんでしたが token は保存済みです。次の起動ではこの token でログインできます（失くしたら「${tokenResetCommand(session)}」で作り直せます）`,
   ];
+}
+
+/**
+ * 起動した名前付き session。`stateDirBase` は利用者が `--state-dir` を渡したときだけ、その絶対パス（session はこれと名前の組で
+ * 決まる。相対パスのままだと起動した場所でしか正しくない）。
+ */
+export interface NamedSessionInfo {
+  name: string;
+  stateDir: string;
+  stateDirBase?: string | undefined;
+}
+
+/** 名前付き session なら `--session`（と `--state-dir` を渡して起動したならその絶対パス）付き。付けないと別の session の token を作り直してしまう。 */
+function tokenResetCommand(session: NamedSessionInfo | undefined): string {
+  if (session === undefined) return "wtm token reset";
+  const dir = session.stateDirBase;
+  return `wtm token reset${dir === undefined ? "" : ` --state-dir ${shellQuote(dir)}`} --session ${session.name}`;
+}
+
+/** 案内に載せるパスの引用。展開されない単一引用符（bash・PowerShell の両方で文字どおり）。記号の無いパスは引用しない。 */
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

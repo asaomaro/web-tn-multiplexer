@@ -1,7 +1,9 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
   DEFAULTS,
+  agentReportSocketPathFor,
   bindFailureHint,
   defaultStateDir,
   isBindFailure,
@@ -85,6 +87,59 @@ describe("defaultStateDir", () => {
   });
 });
 
+describe("resolveServeOptions の名前付き session（20260926-named-session）", () => {
+  const env = { XDG_STATE_HOME: "/home/u/.local/state" };
+  const base = "/home/u/.local/state/web-tn-multiplexer";
+
+  it("--session が無い・default なら既定の状態ディレクトリ（今までどおり）で、sessionName は undefined", () => {
+    expect(resolveServeOptions({}, env, "linux")).toMatchObject({ stateDir: base, sessionName: undefined });
+    expect(resolveServeOptions({ session: "default" }, env, "linux")).toMatchObject({ stateDir: base, sessionName: undefined });
+    expect(resolveServeOptions({ stateDir: "/s" }, env, "linux")).toMatchObject({ stateDir: "/s", sessionName: undefined });
+  });
+
+  it("--session work は <既定>/sessions/work、--state-dir D と併せると D/sessions/work", () => {
+    expect(resolveServeOptions({ session: "work" }, env, "linux")).toMatchObject({
+      stateDir: join(base, "sessions", "work"),
+      sessionName: "work",
+    });
+    expect(resolveServeOptions({ stateDir: "/s", session: "work" }, env, "linux").stateDir).toBe(join("/s", "sessions", "work"));
+  });
+
+  it("規則外の名前は ConfigError", () => {
+    for (const bad of ["..", "../x", "a/b", "", "con", "-x"]) {
+      expect(() => resolveServeOptions({ session: bad }, env, "linux"), bad).toThrow(ConfigError);
+    }
+  });
+
+  it("公式フック連携の socket のパスが上限を超えると ConfigError（Linux は 108 バイトまで通す。macOS 等は 103）", () => {
+    const dirFor = (bytes: number): string => "/" + "d".repeat(bytes - "/".length - "/agent-report.sock".length);
+    expect(Buffer.byteLength(agentReportSocketPathFor(dirFor(108), "linux"))).toBe(108);
+    expect(() => resolveServeOptions({ stateDir: dirFor(108) }, env, "linux")).not.toThrow();
+    expect(() => resolveServeOptions({ stateDir: dirFor(109) }, env, "linux")).toThrow(/too long/);
+    expect(() => resolveServeOptions({ stateDir: dirFor(103) }, env, "darwin")).not.toThrow();
+    expect(() => resolveServeOptions({ stateDir: dirFor(104) }, env, "darwin")).toThrow(ConfigError);
+    // Windows は named pipe（パスの長さに依らない）ので検査しない
+    expect(() => resolveServeOptions({ stateDir: dirFor(300) }, env, "win32")).not.toThrow();
+  });
+
+  it("案内は --state-dir を短くすることを示し、名前付き session のときだけ --session を短くすることも示す", () => {
+    const hintOf = (args: Parameters<typeof resolveServeOptions>[0]): string => {
+      try {
+        resolveServeOptions(args, env, "linux");
+      } catch (err) {
+        return (err as ConfigError).hint;
+      }
+      throw new Error("no ConfigError");
+    };
+    const plain = hintOf({ stateDir: "/" + "d".repeat(200) });
+    expect(plain).toContain("--state-dir に短いパス");
+    expect(plain).not.toContain("--session"); // 既定の session に --session を足すとパスは長くなる
+    const named = hintOf({ stateDir: "/" + "d".repeat(60), session: "x".repeat(40) });
+    expect(named).toContain("--session に短い名前");
+    expect(named).toContain("--state-dir に短いパス");
+  });
+});
+
 describe("listenFailureHint（待ち受けの失敗の案内。D102）", () => {
   it("ポートが使用中：--port と、並行して動かすなら --state-dir も分けることを案内する", () => {
     const hint = listenFailureHint("EADDRINUSE");
@@ -93,6 +148,7 @@ describe("listenFailureHint（待ち受けの失敗の案内。D102）", () => {
     expect(hint).toContain("--port");
     // 同じ state-dir の 2 つ目はポートを変えても wtm.lock で止まる（D103）ので、state-dir も分けるよう添える
     expect(hint).toContain("並行して動かすなら --state-dir も分け");
+    expect(hint).toContain("--session <名前>"); // 20260926-named-session
   });
 
   it("権限なし：Linux の 1024 未満のポートと、Windows の除外ポート範囲を案内する", () => {
@@ -153,6 +209,7 @@ describe("stateDirInUseError（同じ state-dir の二重起動。D103）", () =
     expect(err.message).toContain("/s");
     expect(err.message).toContain("pid 4242");
     expect(err.hint).toContain("--state-dir に別のディレクトリ");
+    expect(err.hint).toContain("--session <名前> で別の名前付き session"); // 20260926-named-session
     expect(err.hint).toContain("/s/wtm.lock を消して");
   });
 

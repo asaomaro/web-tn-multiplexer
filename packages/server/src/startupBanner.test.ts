@@ -23,6 +23,43 @@ describe("startupLines（起動時の表示。D101・D102・D103）", () => {
     ]);
   });
 
+  it("名前付き session なら listening の次の行に session 名と状態ディレクトリを出す（20260926-named-session）", () => {
+    const lines = startupLines({
+      ...base,
+      host: "127.0.0.1",
+      scheme: "http",
+      port: 7781,
+      freshToken: undefined,
+      session: { name: "work", stateDir: "/s/sessions/work" },
+    });
+    expect(lines).toEqual([
+      "wtm: listening on 127.0.0.1 port 7781 (http)",
+      "wtm: session work（状態ディレクトリ: /s/sessions/work）",
+      "wtm: open http://127.0.0.1:7781/",
+      "wtm: token を忘れた場合は「wtm token reset --session work」で作り直せます",
+    ]);
+    // token を作った初回（URL あり・URL が組み立てられない）でも listening の直後に出す
+    const session = { name: "work", stateDir: "/s/sessions/work" };
+    expect(startupLines({ ...base, host: "0.0.0.0", freshToken: "TOK", session }).slice(0, 3)).toEqual([
+      "wtm: listening on 0.0.0.0 port 8443 (https)",
+      "wtm: session work（状態ディレクトリ: /s/sessions/work）",
+      "wtm: open https://localhost:8443/#token=TOK",
+    ]);
+    expect(startupLines({ ...base, host: "fe80::1%eth0", freshToken: "TOK", session })[1]).toBe("wtm: session work（状態ディレクトリ: /s/sessions/work）");
+    expect(lastChanceTokenLines("TOK", session)[1]).toContain("「wtm token reset --session work」");
+    // --state-dir を渡して起動したなら、その絶対パスも付ける（session は --state-dir と名前の組で決まる）。記号を含めば単一引用符で
+    // 囲む（二重引用符だと bash が $ やバッククォートを展開して別の場所を指す）
+    const withDir = (dir: string) => ({ ...session, stateDirBase: dir });
+    expect(lastChanceTokenLines("TOK", withDir("/data/wtm"))[1]).toContain("「wtm token reset --state-dir /data/wtm --session work」");
+    expect(startupLines({ ...base, host: "127.0.0.1", freshToken: undefined, session: withDir("/my dir") }).at(-1)).toBe(
+      "wtm: token を忘れた場合は「wtm token reset --state-dir '/my dir' --session work」で作り直せます",
+    );
+    expect(lastChanceTokenLines("TOK", withDir("/tmp/a$HOME`x`"))[1]).toContain("--state-dir '/tmp/a$HOME`x`' --session work");
+    expect(lastChanceTokenLines("TOK", withDir("/tmp/it's"))[1]).toContain("--state-dir '/tmp/it'\\''s' --session work");
+    expect(lastChanceTokenLines("TOK", withDir("C:\\Users\\me\\wtm"))[1]).toContain("--state-dir 'C:\\Users\\me\\wtm' --session work");
+    expect(lastChanceTokenLines("TOK")[1]).toContain("「wtm token reset」");
+  });
+
   it("ゾーン付きの IPv6（URL にできない）で待ち受けても投げず、作った token を表示する（以前は Invalid URL で token を失った）", () => {
     const lines = startupLines({ ...base, host: "fe80::1%eth0", freshToken: "TOK" });
     expect(lines[0]).toBe("wtm: listening on [fe80::1%eth0] port 8443 (https)");

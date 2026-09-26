@@ -4,8 +4,11 @@
 # 2本目（20260923-external-control-api）: wtmctl（packages/cli）が足した外部操作 CLI という新しい入口を、
 # ビルド済みの dist/main.js を子プロセスとして実際に起動して確かめる（login 不要のセッションキャッシュ
 # 再利用を含む）。1本目が `pnpm -s build` で全パッケージを先にビルドするので、2本目は再ビルドしない。
+# 3本目（20260926-named-session）: 名前付き session の新しい入口（`wtm token reset --session`・`wtm session list`・
+# `wtm session delete`）を、ビルド済みの `wtm`（packages/server/dist/main.js）で一時ディレクトリに対して一巡させる。
 smokeCommands:
   - pnpm -s build && pnpm -s smoke
   - pnpm --filter @wtm/cli run smoke
+  - d=$(mktemp -d) && mkdir -p "$d/sessions/smoke" && node packages/server/dist/main.js token reset --session smoke --state-dir "$d" && test -f "$d/sessions/smoke/auth.json" && node packages/server/dist/main.js session list --state-dir "$d" | grep -q '^smoke ' && node packages/server/dist/main.js session delete smoke --state-dir "$d" && test ! -e "$d/sessions/smoke"; rc=$?; rm -rf "$d"; exit $rc
 smokeTimeoutSec: 180
 tracker: none

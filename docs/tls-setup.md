@@ -403,7 +403,7 @@ Windows が `%LOCALAPPDATA%\web-tn-multiplexer`）を使う `wtm serve` は、**
 
 ```
 wtm: the state dir /home/you/.local/state/web-tn-multiplexer is already in use by another wtm (pid 12345)
-同じ --state-dir を別の wtm（wtm serve か wtm token reset）が使っています（…）。別のポートで並行して動かすなら、--state-dir に別のディレクトリを指定してください。…
+同じ --state-dir を別の wtm（wtm serve か wtm token reset）が使っています（…）。別のポートで並行して動かすなら、--session <名前> で別の名前付き session にするか、--state-dir に別のディレクトリを指定してください。…
 ```
 
 手元用（7780・HTTP）と LAN 用（8443・HTTPS）を並行して動かすなら、状態ディレクトリを分ける：
@@ -414,9 +414,60 @@ wtm serve --host 0.0.0.0 --port 8443 --cert wtm.pem --key wtm-key.pem \
   --state-dir ~/.local/state/wtm-lan                        # LAN 用：別の状態ディレクトリ
 ```
 
+`--state-dir` のパスを自分で決める代わりに、下の「名前付き session」の `--session lan` でも同じように分けられる。
 状態ディレクトリごとに token と workspace・pane は別になる（別のセッション）。**同じ pane を手元と LAN の両方から
 使いたいなら、1 つの wtm を `--host 0.0.0.0 --cert … --key …` で動かし、手元からも表示される
 `https://localhost:<port>` の URL を開く**。
+
+### 名前付き session（`--session <名前>`。herdr の `--session` 相当）
+
+状態ディレクトリのパスを自分で決める代わりに、**名前だけで**別の状態（token・workspace・pane・連携の設定・ログ）を
+使い分けられる（20260926-named-session）。名前付き session の状態は、既定の状態ディレクトリの下の
+`sessions/<名前>/` に置く（`--state-dir D` と併せると `D/sessions/<名前>/`）。無ければ作る。
+
+```sh
+wtm serve                                                   # 既定の session（今までどおり。127.0.0.1:7780）
+wtm serve --session lan --host 0.0.0.0 --port 8443 --cert wtm.pem --key wtm-key.pem
+                                                            # 名前付き session「lan」：~/.local/state/web-tn-multiplexer/sessions/lan/
+wtm session list                                            # 一覧（動いているか・状態ディレクトリ）
+wtm session list --json                                     # 同じ内容を JSON で（delete も --json を受ける）
+wtm token reset --session lan                               # その session の token だけを作り直す（止めてから。無い名前は断る）
+wtm session delete lan                                      # 動いていない名前付き session を丸ごと消す
+```
+
+- **`--session` を付けなければ何も変わらない**。今までの状態（`session.json`・`auth.json` 等）は動かさず、そのまま
+  既定の session として使う。`--session default` は付けないのと同じ。
+- 名前付き session も**既定のポートは 7780**。並行して動かすなら `--port` を分ける（同じポートは `EADDRINUSE` で止まる）。
+  同じ名前の 2 つ目は `wtm.lock` で止まる（既定の session と同じ）。
+- 起動すると `wtm: listening on …` の次の行に `wtm: session lan（状態ディレクトリ: …）` と出る。token を作り直す案内も
+  `wtm token reset --session lan`（`--state-dir` を渡して起動したなら `--state-dir …` も）になる（`--session` を付けずに
+  作り直すと、既定の session の token が変わる）。`wtm token reset --session <名前>` は、その名前付き session が
+  無ければ何も作らずに断る（終了コード 2。打ち間違いで空の session を作らない。作るのは `wtm serve --session`）。
+- 名前に使えるのは **1〜64 文字の ASCII の英数字と `.` `_` `-`**。`.`・`..`・先頭の `-`・末尾の `.`・Windows の予約名
+  （`con`・`nul`・`com1`・`lpt1` 等。`con.txt` のように `.` の前が予約名のものも）は使えない（`/` や `..` で状態
+  ディレクトリの外を指せないようにするため。どの OS でも同じ規則）。規則外なら何も作らずに終了コード 2 で止まる。
+- **名前は短めに**（Linux・macOS・WSL2）：公式フック連携の socket（`<状態ディレクトリ>/agent-report.sock`）のパスには
+  OS の上限（Linux は 108 バイト、macOS は 103 バイト。macOS は未検証）があり、超えると
+  `wtm: the state dir path is too long: …` で起動しない（終了コード 2）。既定の状態ディレクトリ
+  （Linux の `/home/<ユーザー名>/.local/state/web-tn-multiplexer`）なら、ユーザー名が 8 文字で 34 文字の名前まで通る。
+- `wtm session list` の `status` は `wtm.lock` から判定する（`running` なら行末に `(pid …)` を添える。別のホストのロックは
+  `(pid … on <ホスト名>)`）。規則外の名前のディレクトリ・シンボリックリンク・ファイルは一覧に出さない。
+- `wtm session delete <名前>` は、`default`・動いている session・存在しない名前・シンボリックリンクを消さずに断る
+  （終了コード 1。規則外の名前は `wtm serve` と同じく終了コード 2）。動いていないのに断られる（落ちて残った・別のホストの
+  `wtm.lock`）ときは、案内のとおりその session の `wtm.lock` を消してからやり直す（下の「別のホスト・作り直したコンテナの
+  `wtm.lock` は手で消す」と同じ）。名前は `wtm session list` が表示する綴りのとおりに
+  （大文字小文字を区別しない FS でも、別の綴りでは消さない）。消すときは、まず `wtm.lock` を取ったまま
+  `sessions/<名前>~deleting-…` へ名前を変えてから中身を消す。名前を変える前に同じ名前の `wtm serve` を起動すると
+  `wtm.lock` で止まり、変えた後なら空の新しい session として起動する（消している途中のものとは混ざらない）。
+- **herdr との違い**：
+  - **動いている session を止めるコマンドは無い**（herdr の `herdr session stop <name>`）。その `wtm serve` を起動した端末で
+    Ctrl+C するか、`wtm session list` に出る pid に `kill <pid>`（SIGTERM で `session.json` を書いて終わる）。
+  - **`attach` は無い**。別の session は別の URL（ポート）なので、その URL をブラウザで開く。画面での session 名の表示・
+    切り替え、session ごとのポートの記憶、環境変数（herdr の `HERDR_SESSION`）での既定の選択も無い（後続。
+    `.aidev/backlog/product-roadmap.md`）。
+  - `--state-dir` と併せられる（herdr の状態の置き場所は設定ディレクトリ固定）。
+  - wtmctl は URL で繋ぐので、名前付き session には `--url http://127.0.0.1:<そのポート>` を渡す（ログインのキャッシュは
+    URL ごとなので混ざらない）。
 
 ### worktree の作成先（`--worktree-dir`）
 

@@ -154,4 +154,43 @@ describe("StateDirLock（状態ディレクトリの排他。D103）", () => {
     });
     expect(isPidAlive(999_999)).toBe(false);
   });
+
+  describe("inspect（読み取り専用の使用中の判定。20260926-named-session）", () => {
+    it("ロックが無ければ undefined で、ファイルもディレクトリも作らない", async () => {
+      const nested = join(dir, "none");
+      expect(await make({}, nested).inspect()).toBeUndefined();
+      expect(existsSync(nested)).toBe(false);
+    });
+
+    it("生きている持ち主なら pid を返し、ロックを消さない", async () => {
+      await writeFile(lockPath, "4242\nhost-a\n");
+      expect(await make({ isAlive: (pid) => pid === 4242 }).inspect()).toEqual({ pid: 4242 });
+      expect(await lines()).toEqual(["4242", "host-a"]);
+    });
+
+    it("持ち主が生きていなければ undefined（落ちたプロセスの残り）で、ロックを消さない", async () => {
+      await writeFile(lockPath, "4242\nhost-a\n");
+      expect(await make({ isAlive: () => false }).inspect()).toBeUndefined();
+      expect(existsSync(lockPath)).toBe(true);
+    });
+
+    it("別のホストの持ち主は使用中とみなし、そのホスト名を返す", async () => {
+      await writeFile(lockPath, "7\nhost-b\n");
+      expect(await make({ isAlive: () => false }).inspect()).toEqual({ pid: 7, otherHost: "host-b" });
+    });
+
+    it("自分と同じ pid：このプロセスで持っていれば使用中、持っていなければ前に同じ pid で動いたプロセスの残り", async () => {
+      const held = make({ pid: 4242 });
+      await held.acquire();
+      expect(await make({ pid: 4242, isAlive: () => false }).inspect()).toEqual({ pid: 4242 });
+      await held.release();
+      await writeFile(lockPath, "4242\nhost-a\n");
+      expect(await make({ pid: 4242, isAlive: () => true }).inspect()).toBeUndefined();
+    });
+
+    it("中身が pid でなければ undefined", async () => {
+      await writeFile(lockPath, "garbage\n");
+      expect(await make({ isAlive: () => true }).inspect()).toBeUndefined();
+    });
+  });
 });

@@ -235,8 +235,27 @@ parent: 20260918-web-terminal-multiplexer
       .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、
       20260923-other-agents-session-resume の requirements 確定時にスコープから明示的に外した分。
       「session identity」型6エージェントの行と対になる）。
-- [ ] セッション永続化の拡張: 名前付き session〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典:
+- [x] セッション永続化の拡張: 名前付き session〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典:
       .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
+      → 着地: 20260926-named-session（feature/named-session）。herdr の `--session <name>`・`session list`・`session delete`
+      に当たる `wtm serve --session <名前>`・`wtm token reset --session <名前>`・`wtm session list [--json]`・
+      `wtm session delete <名前> [--json]`。状態は herdr と同じ形で `<既定の状態ディレクトリ>/sessions/<名前>/`
+      （`packages/server/src/persist/namedSession.ts:42` `resolveSessionStateDir`、`config.ts:133`）。`--session` を付けなければ
+      状態ディレクトリ・表示は今までどおり（既存の保存状態は動かさない）。名前は herdr の規則に先頭の `-`・末尾の `.`・Windows の
+      予約名の禁止を足した（`namedSession.ts:21` `sessionNameProblem`。decisions D2）。削除はロックを持ったまま rename してから消す
+      （`namedSession.ts:133`。D4）。公式フック連携の Unix socket のパスが長すぎる名前・`--state-dir` は起動前に終了コード 2
+      （Linux の上限 108 バイトは実測）。
+      実測: 単体・結合テスト 3291 本 green（`pnpm -s test` を 2 回）・負の確認 29 変異すべて検知・smoke pass（3 本。3 本目を追加）。
+      独立点検（タスク 9 件・cross）27＋3 件・独立 review 2 ラウンド（should 2・nit 4。nit 1 は許容）。E2E は未実行。
+      Windows ネイティブ・macOS は未検証（`docs/verification.md` に手動確認を追加）。`docs/herdr-parity.md` H33 を更新済み。
+- [ ] 名前付き session の残り（止める）: herdr の `herdr session stop <name>` に当たる `wtm session stop <名前>`。本製品のサーバは外から
+      止める経路を持たず、`wtm.lock` の pid へシグナルを送る形は pid の再利用で無関係なプロセスを止めうるので、止めるための
+      安全な経路（認証つき等）の設計が要る。今は Ctrl+C か `wtm session list` の pid へ `kill`〔D8〕 (needs: 20260926-named-session)
+      （出典: .aidev/works/20260926-named-session/decisions.md D1）。
+- [ ] 名前付き session の残り（画面と既定）: ブラウザの画面での session 名の表示・session の切り替え（herdr の `session attach`。
+      Web 版では別の URL〔ポート〕を開くことに当たる）、session ごとのポートの記憶（名前だけで同じポートに起動し直す）、
+      環境変数での既定の session の選択（herdr の `HERDR_SESSION`）〔D8〕 (needs: 20260926-named-session)
+      （出典: .aidev/works/20260926-named-session/decisions.md D1・requirements.md の対象外）。
 - [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）〔D8〕 (needs: 20260918-web-terminal-multiplexer)
       （出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
 - [ ] セッション永続化の拡張: 更新時の引き継ぎ（live handoff）〔D8〕 (needs: 20260918-web-terminal-multiplexer)

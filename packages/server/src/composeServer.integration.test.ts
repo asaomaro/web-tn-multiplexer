@@ -65,6 +65,58 @@ describe("composeServer (integration)", () => {
     },
   );
 
+  it("--session work は <state-dir>/sessions/work に状態を作り、既定の session の状態を読みも書きもしない。同じ名前の 2 つ目は wtm.lock で断り、別の名前は並行して動く（20260926-named-session AC1・AC5）", async () => {
+    const base = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    // 既定の session に目印の workspace を保存し、動いている wtm のロック（このプロセスが持つ）も残しておく
+    const def = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: base, origin: [] });
+    cleanups.unshift(() => def.close());
+    await def.listen();
+    await def.session.createWorkspace(process.cwd(), "marker-default");
+    await def.persist.flush();
+    await new Promise((res) => setTimeout(res, 300));
+    const snap = async (name: string) => {
+      const path = join(base, name);
+      return { content: await readFile(path, "utf8"), mtimeMs: (await stat(path)).mtimeMs };
+    };
+    const before = { session: await snap("session.json"), auth: await snap("auth.json"), lock: await snap(STATE_DIR_LOCK_FILE) };
+
+    const work = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: base, session: "work", origin: [] });
+    cleanups.unshift(() => work.close());
+    await work.listen();
+    await work.persist.flush();
+    const workDir = join(base, "sessions", "work");
+    expect(work.options.stateDir).toBe(workDir);
+    expect(work.options.sessionName).toBe("work");
+    expect(work.freshToken).toBeDefined(); // 既定の session の token を読まず、自分の token を作った
+    expect(work.session.snapshot().workspaces.some((w) => w.label === "marker-default")).toBe(false);
+    for (const name of [STATE_DIR_LOCK_FILE, "auth.json", "session.json"]) expect(existsSync(join(workDir, name)), name).toBe(true);
+    await new Promise((res) => setTimeout(res, 800)); // 保存の予約が走る余地
+    expect({ session: await snap("session.json"), auth: await snap("auth.json"), lock: await snap(STATE_DIR_LOCK_FILE) }).toEqual(before);
+
+    const again = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: base, session: "work", origin: [] });
+    cleanups.unshift(() => again.close());
+    const err = await again.listen().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as ConfigError).message).toContain(workDir);
+
+    const other = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: base, session: "other", origin: [] });
+    cleanups.unshift(() => other.close());
+    await other.listen();
+    expect(existsSync(join(base, "sessions", "other", STATE_DIR_LOCK_FILE))).toBe(true);
+    expect(work.httpServer.server.listening).toBe(true);
+    expect(other.httpServer.server.listening).toBe(true);
+  }, 20000);
+
+  it("規則外の --session は composeServer が ConfigError で断り、状態ディレクトリに何も作らない（20260926-named-session AC2）", async () => {
+    const base = await makeTempDir("wtm-compose-");
+    cleanups.push(() => rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    for (const bad of ["..", "../escape", "a/b", "con"]) {
+      await expect(composeServer({ host: "127.0.0.1", stateDir: base, session: bad, origin: [] }), bad).rejects.toThrow(ConfigError);
+    }
+    expect(await readdir(base)).toEqual([]);
+  });
+
   it("refuses to compose for a non-loopback host without a certificate (D12/D37 の前提)", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));

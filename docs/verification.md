@@ -43,8 +43,14 @@ pnpm --filter @wtm/e2e test
 動かし方の注意（詳しくは `docs/tls-setup.md`「起動と運用の注意」）：
 
 - **同じ状態ディレクトリの `wtm serve` は 1 つしか動かせない**（ポートが違っても。`wtm.lock`）。手元用（7780）と
-  LAN 用（8443）を並行して動かすなら、LAN 用に `--state-dir` で別のディレクトリを渡す。2 つ目は
+  LAN 用（8443）を並行して動かすなら、LAN 用に `--state-dir` で別のディレクトリを渡す（または `--session lan` で
+  名前付き session にする。下の項目）。2 つ目は
   `wtm: the state dir … is already in use by another wtm (pid …)` で止まる（終了コード 2）。
+- **名前付き session**（`wtm serve --session <名前>`。herdr の `--session` 相当。20260926-named-session）：状態は既定の状態
+  ディレクトリの下の `sessions/<名前>/`。`--session` を付けなければ今までどおり。並行して動かすなら `--port` も分ける。一覧は
+  `wtm session list [--json]`、token の作り直しは `wtm token reset --session <名前>`、消すのは（止めてから）
+  `wtm session delete <名前>`。名前は 1〜64 文字の ASCII の英数字と `.` `_` `-`（詳しくは `docs/tls-setup.md`
+  「名前付き session」）。止めるコマンドは無い（Ctrl+C か `wtm session list` の pid に `kill`）。
 - **`wtm token reset` は `wtm serve` を止めてから**（動いている間は断る。終了コード 2）。
 - **`wtm serve` を起動した端末を閉じると wtm も終わる**（SIGHUP。`nohup` でも同じ）。検証の途中で端末を閉じるなら
   tmux の中で動かす。
@@ -409,6 +415,12 @@ WSL2 を経由せず、Windows 上で直接 `node.exe` を実行して `wtm serv
       「前提」の `function wtm …` を実行してから）、続けて `$LASTEXITCODE` を見る。`wtm token reset` も同じく。期待：どちらも何も起動・作成
       せずに止まり、`wtm: the state dir …\web-tn-multiplexer is already in use by another wtm (pid …)`（`token reset` は
       `wtm: cannot reset the token: the state dir … is in use by a running wtm (pid …)`）が出て、`$LASTEXITCODE` が `2`。
+- [ ] 名前付き session（20260926-named-session。Windows ネイティブでは未検証）：`wtm serve --session work --port 7781` を
+      実行し、`wtm: session work（状態ディレクトリ: …\web-tn-multiplexer\sessions\work）` の行と token 付きの URL が出ること、
+      別の PowerShell の窓で `wtm session list` を実行して `work` の行の status が `running`、行末に `(pid …)` と出ることを確かめる。`wtm serve --session con`
+      と `wtm serve --session "work."` は何も作らずに止まり `$LASTEXITCODE` が `2`。`work` の wtm を Ctrl+C で止めてから
+      `wtm session delete work` を実行し、`…\sessions\work` が消えること（`$LASTEXITCODE` が `0`）、既定の session
+      （`wtm serve`）の workspace・token がそのままであることを確かめる。
 - [ ] 落ちて残ったロックを取り直す（pid の生死の判定。D103）：`Get-Content "$env:LOCALAPPDATA\web-tn-multiplexer\wtm.lock"`
       で中身（1 行目が wtm の pid、2 行目がホスト名）を見て、`Stop-Process -Id <1 行目の pid> -Force` で wtm を強制終了する
       （落ちたときと同じく、ロックを消さずに終わる）。`Test-Path "$env:LOCALAPPDATA\web-tn-multiplexer\wtm.lock"` が `True`
