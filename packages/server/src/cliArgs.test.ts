@@ -58,6 +58,40 @@ describe("parseArgs（CLI の引数）", () => {
     expect(configErrorOf(["token", "--port", "1", "reset", "--state-dir", "/s"]).message).toContain("--port");
   });
 
+  it("--session を serve と token reset で読む（20260926-named-session）", () => {
+    expect(parseArgs(["serve", "--session", "work", "--port", "7781"])).toMatchObject({
+      command: "serve",
+      session: "work",
+      serve: { session: "work", port: "7781" },
+    });
+    expect(parseArgs(["token", "reset", "--session", "work", "--state-dir", "/s"])).toMatchObject({
+      command: "token-reset",
+      session: "work",
+      stateDir: "/s",
+    });
+    expect(parseArgs(["serve"]).session).toBeUndefined();
+    expect(configErrorOf(["serve", "--session"]).message).toBe("missing value for --session");
+  });
+
+  it("wtm session list / delete <name> を読む。--state-dir と --json だけ使える（20260926-named-session）", () => {
+    expect(parseArgs(["session", "list"])).toMatchObject({ command: "session-list", stateDir: undefined, json: false });
+    expect(parseArgs(["session", "list", "--json", "--state-dir", "/s"])).toMatchObject({ command: "session-list", stateDir: "/s", json: true });
+    expect(parseArgs(["session", "delete", "work"])).toMatchObject({ command: "session-delete", sessionTarget: "work", json: false });
+    expect(parseArgs(["session", "--json", "delete", "work"])).toMatchObject({ command: "session-delete", sessionTarget: "work", json: true });
+    expect(configErrorOf(["session"]).message).toContain("missing subcommand: wtm session");
+    expect(configErrorOf(["session", "delete"]).message).toContain("missing session name: wtm session delete <name>");
+    expect(configErrorOf(["session", "delete", "a", "b"]).message).toContain("unknown subcommand");
+    expect(configErrorOf(["session", "list", "x"]).message).toContain("unknown subcommand");
+    expect(configErrorOf(["session", "stop", "work"]).message).toContain("unknown subcommand: wtm session stop work");
+    expect(configErrorOf(["session", "list", "--port", "1"]).message).toContain("--port is not an option of wtm session");
+    expect(configErrorOf(["session", "delete", "work", "--session", "x"]).message).toContain("--session is not an option of wtm session");
+  });
+
+  it("--json は session 以外では ConfigError（20260926-named-session）", () => {
+    expect(configErrorOf(["serve", "--json"]).message).toContain("--json is not an option of wtm serve");
+    expect(configErrorOf(["token", "reset", "--json"]).message).toContain("--json is not an option of wtm token reset");
+  });
+
   it("未知のオプション・値の無いオプションは ConfigError。コマンドが無い・help・--help・-h だけが help", () => {
     expect(() => parseArgs(["serve", "--nope"])).toThrow(ConfigError);
     expect(() => parseArgs(["token", "reset", "--state-dir"])).toThrow(ConfigError);

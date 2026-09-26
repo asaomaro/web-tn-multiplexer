@@ -1,27 +1,31 @@
 #!/usr/bin/env node
-import { bindFailureHint, defaultStateDir, ConfigError, stateDirInUseError } from "./config.js";
+import { bindFailureHint, defaultStateDir, ConfigError } from "./config.js";
 import { composeServer } from "./composeServer.js";
-import { FsAuthFile } from "./persist/AuthFile.js";
-import { StateDirInUseError, StateDirLock } from "./persist/StateDirLock.js";
-import { DefaultAuthService } from "./auth/AuthService.js";
 import type { RawServeArgs } from "./config.js";
+import { type CommandIo, runSessionDelete, runSessionList, runTokenReset } from "./sessionCommands.js";
 import { parseArgs } from "./cliArgs.js";
 import { OsNetworkInfo } from "./infra/OsNetworkInfo.js";
 import { lastChanceTokenLines, startupLines } from "./startupBanner.js";
+import { resolve } from "node:path";
 import { formatUrlHost } from "./util/net.js";
 
 function printHelp(): void {
   console.log(
     [
       "wtm serve [--host H] [--port P] [--cert FILE] [--key FILE] [--origin ORIGIN]...",
-      "          [--state-dir DIR] [--scrollback N] [--shell PATH] [--worktree-dir DIR]",
-      "wtm token reset [--state-dir DIR]",
+      "          [--state-dir DIR] [--session NAME] [--scrollback N] [--shell PATH] [--worktree-dir DIR]",
+      "wtm token reset [--state-dir DIR] [--session NAME]",
+      "wtm session list [--state-dir DIR] [--json]",
+      "wtm session delete NAME [--state-dir DIR] [--json]",
     ].join("\n"),
   );
 }
 
 async function runServe(args: RawServeArgs): Promise<void> {
   const server = await composeServer(args);
+  const { sessionName, stateDir } = server.options;
+  const sessionInfo =
+    sessionName !== undefined ? { name: sessionName, stateDir, stateDirBase: args.stateDir !== undefined ? resolve(args.stateDir) : undefined } : undefined;
   const { host, port } = server.options;
   // **作った token は必ず一度表示する**（D102・D103）。token は bind の直後に作り auth.json に保存するので、この後に何が
   // 起きても——`listen()` の後段の失敗（最初のシェルを起動できない等）・成功した後の表示の組み立ての失敗（インタフェースの
@@ -33,7 +37,7 @@ async function runServe(args: RawServeArgs): Promise<void> {
     const token = server.freshToken;
     if (token === undefined || tokenShown) return;
     tokenShown = true;
-    for (const line of lastChanceTokenLines(token)) console.error(line);
+    for (const line of lastChanceTokenLines(token, sessionInfo)) console.error(line);
   };
 
   // 終了のシグナル（SIGINT・SIGTERM・SIGHUP）は `listen()` の**前に**受け付ける（D103 の独立点検 #4）。以前は起動の表示の
@@ -95,6 +99,7 @@ async function runServe(args: RawServeArgs): Promise<void> {
       extraOrigins: server.options.extraOrigins,
       lanAddresses: new OsNetworkInfo().lanAddresses(),
       freshToken: server.freshToken,
+      session: sessionInfo,
     });
     for (const line of lines) console.log(line);
     tokenShown = true; // `startupLines` は作った token を必ず含む（URL が 1 つも無くても）
@@ -109,29 +114,7 @@ async function runServe(args: RawServeArgs): Promise<void> {
   }
 }
 
-/**
- * `wtm token reset`（D103）：`wtm serve` と同じ状態ディレクトリのロック（`wtm.lock`）を取ってから auth.json を書き換える。
- * 動いている `wtm serve` は token とセッションをメモリに持ったまま auth.json を読み直さないので、動いている間に書き換えると
- * 新しい token を受け付けず、次のログイン等で auth.json を古い token に書き戻す。だから動いていれば断る（終了コード 2）。
- */
-async function runTokenReset(stateDir: string | undefined): Promise<void> {
-  const dir = stateDir ?? defaultStateDir();
-  const lock = new StateDirLock(dir);
-  try {
-    await lock.acquire();
-  } catch (err) {
-    if (err instanceof StateDirInUseError) throw stateDirInUseError(err, dir, "token-reset");
-    throw err;
-  }
-  try {
-    const auth = new DefaultAuthService(new FsAuthFile(dir));
-    await auth.initialize();
-    const token = await auth.resetToken();
-    console.log(`wtm: new token: ${token}`);
-  } finally {
-    await lock.release();
-  }
-}
+const consoleIo: CommandIo = { out: (line) => console.log(line), err: (line) => console.error(line) };
 
 async function main(): Promise<void> {
   try {
@@ -141,7 +124,11 @@ async function main(): Promise<void> {
     if (parsed.command === "serve") {
       await runServe(parsed.serve);
     } else if (parsed.command === "token-reset") {
-      await runTokenReset(parsed.stateDir);
+      await runTokenReset(parsed.stateDir ?? defaultStateDir(), parsed.session, consoleIo);
+    } else if (parsed.command === "session-list") {
+      process.exitCode = await runSessionList(parsed.stateDir ?? defaultStateDir(), parsed.json === true, consoleIo);
+    } else if (parsed.command === "session-delete") {
+      process.exitCode = await runSessionDelete(parsed.stateDir ?? defaultStateDir(), parsed.sessionTarget!, parsed.json === true, consoleIo);
     } else {
       printHelp();
     }

@@ -121,6 +121,16 @@ export class StateDirLock {
     throw new Error(`could not acquire ${this.path}`);
   }
 
+  /**
+   * 読み取り専用で、ロックの持ち主が使用中か（`wtm session list`。20260926-named-session）。使用中なら持ち主、そうでなければ
+   * `undefined`（ロックが無い・中身を読めない・持ち主が生きていない）。ファイルもディレクトリも作らない・消さない。
+   */
+  async inspect(): Promise<{ pid: number; otherHost?: string } | undefined> {
+    const holder = await this.readHolderOnce();
+    if (holder === undefined || !this.isInUse(holder)) return undefined;
+    return this.isOtherHost(holder) ? { pid: holder.pid, otherHost: holder.host! } : { pid: holder.pid };
+  }
+
   /** 放す。失敗しても投げない（上記）。 */
   async release(): Promise<void> {
     if (!this.held) return;

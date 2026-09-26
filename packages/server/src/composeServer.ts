@@ -1,9 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { platform } from "node:os";
-import { createHash } from "node:crypto";
 import type { HostInfo } from "@wtm/protocol";
-import { ConfigError, type RawServeArgs, type ServeOptions, resolveServeOptions, stateDirInUseError } from "./config.js";
+import { ConfigError, type RawServeArgs, type ServeOptions, agentReportSocketPathFor, resolveServeOptions, stateDirInUseError } from "./config.js";
 import { FileLogger, type Logger } from "./log/Logger.js";
 import { EventBus } from "./bus/EventBus.js";
 import { NodePtyBackend } from "./pty/NodePtyBackend.js";
@@ -89,19 +88,6 @@ function manifestDirFor(): string {
 function agentHookScriptFor(): string {
   // packages/server/dist/composeServer.js から見て ../assets/agent-hook-report.cjs
   return join(import.meta.dirname, "..", "assets", "agent-hook-report.cjs");
-}
-
-/**
- * 公式フック連携の report を受け取るローカル socket のパス（design「4. ローカル report 経路」）。
- * Unix はファイルシステムパス、Windows は named pipe（ファイルシステムパスを持たないため、
- * `stateDir` のハッシュをグローバル名前空間内の名前に使う。同じ `stateDir` からは常に同じ名前になる）。
- */
-function agentReportSocketPathFor(stateDir: string): string {
-  if (platform() === "win32") {
-    const hash = createHash("sha256").update(stateDir).digest("hex").slice(0, 16);
-    return `\\\\.\\pipe\\wtm-agent-report-${hash}`;
-  }
-  return join(stateDir, "agent-report.sock");
 }
 
 /** 起動オプションから、部品をすべて組み立てる（composition root）。`main.ts` と `smoke.ts` の両方から使う。 */
