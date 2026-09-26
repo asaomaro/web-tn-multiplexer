@@ -178,10 +178,17 @@ parent: 20260918-web-terminal-multiplexer
   `packages/web/src/store/settings.ts`（`paneBorders`/`paneGaps`）・設定画面 `SettingsDialog.vue`。
   ~~`PaneFrame.vue` の「常に padding・太さ3段階」設計と両立しない~~——太さ3段階は余白を取る辺の太さとしてそのまま両立した。
   実測: unit 3042 本 green（全パッケージ）・負の確認 17 変異すべて検知・smoke pass（2本）。E2E は未実行）
-- [ ] 外観と設定の残り（未着手分）: サイドバー行の色の条件付け・独自トークン（H21）、設定の onboarding（H25b）
+- [x] 外観と設定の残り（H25b 分）: 設定の onboarding（はじめの案内）（20260926-settings-onboarding。PR: feature/settings-onboarding ブランチから作成。
+  判定 `packages/web/src/store/onboarding.ts:19`（`isFreshBrowser`。保存された設定・キー一覧の案内の印・既読のどれも無いブラウザだけ）・
+  `:53`（自動操作のブラウザでは出さない。decisions D11）、案内 `packages/web/src/components/OnboardingDialog.vue`（確定 `:183` は変えたものだけを
+  設定画面と同じ setter で反映・スキップ `:162` は何も変えない。どちらも `wtm.prefs.v1` に `onboarding: false`）、開き直し
+  `packages/web/src/components/SettingsDialog.vue:917`、起動確認 `packages/server/src/smoke.ts:166`（実物の Chromium で案内が開き、Esc で端末へ
+  フォーカスが戻る）。herdr の現行版（説明＋続けると連携の節）と 0.2 系（通知の選択）を合成し、テーマ・キーのプリセット・通知を選べる。
+  実測: unit 3363 本 green（全パッケージ・続けて 2 回）・負の確認は全変異を検知（生き残った変異にはテストを足してやり直し）・smoke pass（3 本）。E2E は未実行）
+- [ ] 外観と設定の残り（未着手分）: サイドバー行の色の条件付け・独自トークン（H21）
   〔D8〕(needs: 20260918-web-terminal-multiplexer)（
   20260922-appearance-settings-rest の requirements「対象外」／decisions.md [[D11]]で切り出し。
-  H23 の枠の描画モード・隙間の入切は 20260926-pane-frame-auto-mode で着地。
+  H23 の枠の描画モード・隙間の入切は 20260926-pane-frame-auto-mode、H25b の onboarding は 20260926-settings-onboarding で着地。
   出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [x] セッション永続化の拡張（エージェントの会話の再開のうち Claude Code・Codex）: 20260923-agent-session-resume
       で対応。両エージェント公式の hooks 機構（`SessionStart`）を使い、pane ごとに会話IDを本製品自身の
@@ -459,3 +466,4 @@ parent: 20260918-web-terminal-multiplexer
   .aidev/works/20260925-pane-move-global-focus/decisions.md）
 - [ ] 消えたフォルダにいる pane の場所を「分からない」として扱う: Linux の監視は `/proc/<pid>/cwd` の readlink をそのまま `Pane.cwd` に入れるので、外で消されたフォルダ（消した worktree 等）にシェルがいると `"/path (deleted)"` が入る（`packages/server/src/platform/LinuxProcessInspector.ts:65`・`:120`）。新しく開く場所に加え、20260926-workspace-label-follow-cwd からは workspace の自動の名前にも `xxx (deleted)` が出うる。末尾の ` (deleted)` を読めなかったものとして扱う（出典: .aidev/works/20260926-workspace-label-follow-cwd/review.md）
 - [ ] 空になった後の作り直し・起動時の最初の workspace でも、作った直後に git の情報を取る: `workspace.create` の RPC だけが `pollWorkspaceNow` を呼ぶ（`packages/server/src/surface/methods/workspace.ts:17-21`）ので、`SessionService.recreateIfEmpty`・`ensureNotEmpty` が作った workspace は次の周期（最長 5 秒）までサイドバーの git の情報が空で、左上の pane の `cd` にもバスで気づかない（周期で拾う）（出典: .aidev/works/20260926-workspace-label-follow-cwd/review.md）
+- [ ] ダイアログを開いたまま 4401 でログイン画面へ切り替わると、戻ったあと view.openDialog が残ったまま showModal されず、KeyRouter が dialog モードのままキーを食う: SettingsDialog.vue（:105-124 の dialogContext の watch に immediate が無い）ほか既存のダイアログ。はじめの案内（OnboardingDialog.vue）は 20260926-settings-onboarding で immediate にして直した。onAuthRequired で closeDialog するか、各ダイアログの watch を immediate にするかを決める（出典: .aidev/works/20260926-settings-onboarding/review.md）

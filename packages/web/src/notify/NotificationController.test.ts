@@ -849,6 +849,31 @@ describe("NotificationController — 案内（AC5）", () => {
     expect(hints(), "もう出ない").toHaveLength(0);
   });
 
+  // 20260926-settings-onboarding の AC9：はじめの案内を確定したら、同じことを問う案内を出さない。
+  it("markHintAnswered：出ている案内を消して消費する（設定は変えない）", async () => {
+    vi.useFakeTimers();
+    const h = makeController();
+    h.setFocused(true);
+    await fireBlocked(h);
+    expect(hints()).toHaveLength(1);
+    h.c.markHintAnswered();
+    const store = useNotificationsStore(pinia);
+    expect(hints()).toHaveLength(0);
+    expect(store.hintDone).toBe(true);
+    expect(store.hintPending).toBe(false);
+    expect(store.prefs.desktop).toBe(false);
+  });
+
+  it("markHintAnswered：まだ出ていなくても、以後の知らせで案内を出さない", async () => {
+    vi.useFakeTimers();
+    const h = makeController();
+    h.setFocused(true);
+    h.c.markHintAnswered();
+    await fireBlocked(h);
+    expect(hints()).toHaveLength(0);
+    expect(useNotificationsStore(createPinia()).hintDone, "再読み込みしても残る").toBe(true);
+  });
+
   it("案内の印は localStorage に残る（フォーカスが戻る前に再読み込みしても失わない）", async () => {
     vi.useFakeTimers();
     const h = makeController();

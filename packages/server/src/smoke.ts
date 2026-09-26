@@ -156,6 +156,67 @@ async function checkWebUiRendersAndAcceptsInput(origin: string, token: string, p
   }
 }
 
+/**
+ * はじめの案内（20260926-settings-onboarding）を実物の Chromium で確かめる。自動操作のブラウザ（`navigator.webdriver`）では
+ * 案内を出さない（decisions D11）ので、**人が使うブラウザに見せたページ**で開く。新しい context＝localStorage が空＝初めての
+ * ブラウザ。案内が開いて見出しにフォーカスがあること → Esc（スキップ）で閉じると**端末へフォーカスが戻る**こと（happy-dom では
+ * 確かめられない。design D6）→ そのままキーを打てること（届いたかは呼び出し側が PTY の出力で確かめる）→ 案内済みが保存され、
+ * 開き直しても出ないこと。
+ */
+async function checkOnboardingInRealBrowser(origin: string, token: string, marker: string): Promise<void> {
+  const browser = await chromium.launch();
+  try {
+    const context = await browser.newContext();
+    await context.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false, configurable: true });
+    });
+    const page = await context.newPage();
+    await page.goto(`${origin}/#token=${token}`);
+    await page.waitForSelector("dialog.onboarding-dialog[open]", { timeout: 15_000 });
+    const opened = await page.evaluate(() => ({
+      focused: document.activeElement?.id ?? null,
+      terminalShown: document.querySelector(".xterm-helper-textarea") !== null,
+    }));
+    if (opened.focused !== "onboarding-title") throw new Error(`onboarding opened but focus is not on its title: ${JSON.stringify(opened)}`);
+    if (!opened.terminalShown) throw new Error("onboarding opened before the terminal was shown (D6)");
+    console.log("smoke(web): 初めてのブラウザで、はじめの案内が端末の表示のあとに開き、見出しにフォーカスがある");
+
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("dialog.onboarding-dialog[open]", { state: "detached", timeout: 5000 });
+    const closed = await page.evaluate(() => ({
+      focusedClass: document.activeElement?.className ?? null,
+      prefs: localStorage.getItem("wtm.prefs.v1"),
+    }));
+    if (!String(closed.focusedClass).includes("xterm-helper-textarea")) {
+      throw new Error(`focus did not return to the terminal after closing onboarding: ${JSON.stringify(closed)}`);
+    }
+    if (closed.prefs !== JSON.stringify({ onboarding: false })) throw new Error(`onboarding was not marked done: ${JSON.stringify(closed)}`);
+    console.log("smoke(web): Esc で閉じると端末へフォーカスが戻り、案内済みだけが保存される");
+
+    // クリックせずにそのまま打つ（フォーカスが端末に戻っていなければ PTY に届かない）。
+    await page.keyboard.type(`echo ${marker}`);
+    await page.keyboard.press("Enter");
+
+    await page.reload();
+    await page.waitForSelector(".xterm-helper-textarea", { timeout: 15_000 });
+    // 端末にフォーカスが入った（接続の hello のあと `restoreView` が pane を選び、端末が描かれた）のを待ってから数える。
+    // 案内は同じ流れの次の tick で開くので、この印のあとに少し余裕を置けば、出るなら出ている。
+    // 案内が（誤って）開けばフォーカスは案内へ移るので、どちらかの印を待つ。
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.classList.contains("xterm-helper-textarea") === true ||
+        document.querySelector("dialog.onboarding-dialog[open]") !== null,
+      undefined,
+      { timeout: 15_000 },
+    );
+    await page.waitForTimeout(300);
+    if (await page.locator("dialog.onboarding-dialog[open]").count()) throw new Error("onboarding opened again after it was marked done");
+    console.log("smoke(web): 開き直しても、はじめの案内は出ない");
+  } finally {
+    await browser.close();
+  }
+}
+
 async function main(): Promise<void> {
   const stateDir = await mkdtemp(join(tmpdir(), "wtm-smoke-"));
   const port = await getFreePort();
@@ -221,6 +282,11 @@ async function main(): Promise<void> {
     await checkWebUiRendersAndAcceptsInput(origin, token, created.pane.id, webMarker);
     await client.waitForOutput(created.pane.id, webMarker, 8000);
     console.log("smoke(web): echo round trip ok（ブラウザでの入力が PTY まで届いた）");
+
+    const onboardingMarker = `wtm-smoke-onboarding-${Date.now()}`;
+    await checkOnboardingInRealBrowser(origin, token, onboardingMarker);
+    await client.waitForOutput(created.pane.id, onboardingMarker, 8000);
+    console.log("smoke(web): はじめの案内を閉じたあと、クリックせずに打った文字が PTY まで届いた");
 
     console.log("smoke: PASS");
     process.exitCode = 0;

@@ -26,6 +26,7 @@ import type { ConnectionPort, TerminalSinkPort } from "./net/ports.js";
 import { StoreAdapter } from "./store/StoreAdapter.js";
 import { sweepMarkSeen, useSeenStore } from "./store/seen.js";
 import { useSessionStore } from "./store/session.js";
+import { useOnboardingStore } from "./store/onboarding.js";
 import { useSettingsStore } from "./store/settings.js";
 import { useViewStore } from "./store/view.js";
 import { useAgentIntegrationsStore } from "./store/agentIntegrations.js";
@@ -59,6 +60,8 @@ const session = useSessionStore(pinia);
 const view = useViewStore(pinia);
 const seen = useSeenStore(pinia);
 const settings = useSettingsStore(pinia);
+// 初回の案内を出すかは、接続より前（同じ読み込みの中で痕跡が書かれる前）に 1 回だけ決める（20260926-settings-onboarding の D4）。
+useOnboardingStore(pinia);
 
 const httpOrigin = ""; // 同一オリジン配信（vite dev は /api・/ws を proxy する。vite.config.ts）
 const wsUrl = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
