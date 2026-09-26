@@ -1,3 +1,5 @@
+import { AGENT_STATUSES, type AgentStatus } from "./agentStatus.js";
+
 /**
  * `wtmctl` の引数解釈（design.md「インターフェース/データ構造・コマンド一覧」）。`main.ts` から分けたのは
  * 単体テストのため（`packages/server/src/cliArgs.ts` と同じ流儀）。誤りはどれも `CliUsageError`
@@ -19,6 +21,10 @@ const USAGE = [
   "wtmctl pane read <paneId> [--follow] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
   "wtmctl snapshot [--url <URL>] [--token <TOKEN>]",
   "wtmctl watch [--json] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent list [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent get <paneId> [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent wait <paneId> [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
 ].join("\n");
 
 export const DEFAULT_URL = "http://127.0.0.1:7780";
@@ -51,21 +57,30 @@ export type Command =
   | { kind: "pane-run"; opts: GlobalOpts; paneId: string; command: string }
   | { kind: "pane-read"; opts: GlobalOpts; paneId: string; follow: boolean; raw: boolean; timeoutMs: number }
   | { kind: "snapshot"; opts: GlobalOpts }
-  | { kind: "watch"; opts: GlobalOpts; json: boolean };
+  | { kind: "watch"; opts: GlobalOpts; json: boolean }
+  | { kind: "agent-list"; opts: GlobalOpts }
+  | { kind: "agent-get"; opts: GlobalOpts; paneId: string }
+  | { kind: "agent-wait"; opts: GlobalOpts; paneId: string; until: AgentStatus[]; timeoutMs: number | undefined }
+  | { kind: "agent-read"; opts: GlobalOpts; paneId: string; lines: number; raw: boolean; timeoutMs: number };
 
 const DEFAULT_READ_TIMEOUT_MS = 5000;
+/** herdr の `agent read` の既定（recent の 80 行）。 */
+const DEFAULT_AGENT_READ_LINES = 80;
 
 interface FlagSpec {
   /** 値を取らない真偽フラグ（`--follow` 等）。 */
   bools?: readonly string[];
   /** 値を1つ取るフラグ（`--label <text>` 等）。 */
   values?: readonly string[];
+  /** 値を1つ取り、繰り返し指定できるフラグ（`--until <status>` 等）。 */
+  multi?: readonly string[];
 }
 
 interface ParsedFlags {
   positionals: string[];
   values: Map<string, string>;
   bools: Set<string>;
+  multi: Map<string, string[]>;
 }
 
 /**
@@ -76,9 +91,11 @@ interface ParsedFlags {
 function parseFlags(rest: readonly string[], spec: FlagSpec): ParsedFlags {
   const bools = new Set(spec.bools ?? []);
   const values = new Set(spec.values ?? []);
+  const multi = new Set(spec.multi ?? []);
   const positionals: string[] = [];
   const outValues = new Map<string, string>();
   const outBools = new Set<string>();
+  const outMulti = new Map<string, string[]>();
 
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!;
@@ -90,15 +107,16 @@ function parseFlags(rest: readonly string[], spec: FlagSpec): ParsedFlags {
       outBools.add(arg);
       continue;
     }
-    if (values.has(arg)) {
+    if (values.has(arg) || multi.has(arg)) {
       const v = rest[++i];
       if (v === undefined || v.startsWith("--")) throw new CliUsageError(`missing value for ${arg}`, `${arg} には値が要ります。`);
-      outValues.set(arg, v);
+      if (multi.has(arg)) outMulti.set(arg, [...(outMulti.get(arg) ?? []), v]);
+      else outValues.set(arg, v);
       continue;
     }
     throw new CliUsageError(`unknown option: ${arg}`, USAGE);
   }
-  return { positionals, values: outValues, bools: outBools };
+  return { positionals, values: outValues, bools: outBools, multi: outMulti };
 }
 
 /** `--url`/`--token` を取り出す（全コマンド共通）。 */
@@ -166,6 +184,8 @@ export function parseArgs(argv: readonly string[], env: NodeJS.ProcessEnv = proc
       return parseTab(word1, rest0, env);
     case "pane":
       return parsePane(word1, rest0, env);
+    case "agent":
+      return parseAgent(word1, rest0, env);
     default:
       throw new CliUsageError(`unknown command: ${word0}`, USAGE);
   }
@@ -262,4 +282,67 @@ function parsePane(sub: string | undefined, rest: readonly string[], env: NodeJS
     };
   }
   throw new CliUsageError(`unknown subcommand: wtmctl pane ${sub ?? ""}`.trimEnd(), USAGE);
+}
+
+/** Node のタイマーの上限（2^31-1ms）。超えると 1ms に丸められて即座に時間切れになる。 */
+const MAX_TIMER_MS = 2_147_483_647;
+
+function parseTimerMs(raw: string): number {
+  const n = parsePositiveInt(raw, "--timeout");
+  if (n > MAX_TIMER_MS) {
+    throw new CliUsageError(`invalid value for --timeout: ${raw}`, `--timeout は ${MAX_TIMER_MS} 以下にしてください（省略すると無期限）。`);
+  }
+  return n;
+}
+
+function parseAgentStatus(raw: string): AgentStatus {
+  const found = AGENT_STATUSES.find((s) => s === raw);
+  if (found === undefined) {
+    throw new CliUsageError(`invalid value for --until: ${raw}`, `--until には ${AGENT_STATUSES.join("|")} のどれかを指定してください。`);
+  }
+  return found;
+}
+
+function parseAgent(sub: string | undefined, rest: readonly string[], env: NodeJS.ProcessEnv): Command {
+  const URL_TOKEN: FlagSpec = { values: ["--url", "--token"] };
+  if (sub === "list") {
+    const { positionals, values } = parseFlags(rest, URL_TOKEN);
+    rejectExtra(positionals, 0, USAGE);
+    return { kind: "agent-list", opts: globalOptsFrom(values, env) };
+  }
+  if (sub === "get") {
+    const { positionals, values } = parseFlags(rest, URL_TOKEN);
+    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    rejectExtra(positionals, 1, USAGE);
+    return { kind: "agent-get", opts: globalOptsFrom(values, env), paneId };
+  }
+  if (sub === "wait") {
+    const { positionals, values, multi } = parseFlags(rest, { values: [...URL_TOKEN.values!, "--timeout"], multi: ["--until"] });
+    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    rejectExtra(positionals, 1, USAGE);
+    const timeoutRaw = values.get("--timeout");
+    return {
+      kind: "agent-wait",
+      opts: globalOptsFrom(values, env),
+      paneId,
+      until: (multi.get("--until") ?? []).map(parseAgentStatus),
+      timeoutMs: timeoutRaw === undefined ? undefined : parseTimerMs(timeoutRaw),
+    };
+  }
+  if (sub === "read") {
+    const { positionals, values, bools } = parseFlags(rest, { values: [...URL_TOKEN.values!, "--lines", "--timeout"], bools: ["--raw"] });
+    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    rejectExtra(positionals, 1, USAGE);
+    const linesRaw = values.get("--lines");
+    const timeoutRaw = values.get("--timeout");
+    return {
+      kind: "agent-read",
+      opts: globalOptsFrom(values, env),
+      paneId,
+      lines: linesRaw === undefined ? DEFAULT_AGENT_READ_LINES : parsePositiveInt(linesRaw, "--lines"),
+      raw: bools.has("--raw"),
+      timeoutMs: timeoutRaw === undefined ? DEFAULT_READ_TIMEOUT_MS : parsePositiveInt(timeoutRaw, "--timeout"),
+    };
+  }
+  throw new CliUsageError(`unknown subcommand: wtmctl agent ${sub ?? ""}`.trimEnd(), USAGE);
 }

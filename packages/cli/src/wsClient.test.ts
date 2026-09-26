@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { composeServer, type ComposedServer } from "@wtm/server";
 import { login } from "./httpAuth.js";
-import { AuthError, RpcFailure, connect, type WtmClient } from "./wsClient.js";
+import { EventEmitter } from "node:events";
+import type { ServerEvent } from "@wtm/protocol";
+import type WebSocket from "ws";
+import { AuthError, RpcFailure, WsWtmClient, connect, type WtmClient } from "./wsClient.js";
 
 /**
  * T5 の時点では「実サーバに対する最小の疎通確認」だけを行う（design.md「対象範囲・新規」の T5 の説明）。
@@ -72,5 +75,37 @@ describe("connect/WtmClient — 実サーバへの最小の疎通確認", () => 
     } finally {
       client.close();
     }
+  });
+});
+
+describe("WsWtmClient.hello(onEventAfterHello) — 購読を始める位置", () => {
+  /** 送ったフレームを覚え、受信をテストから同期的に起こせる偽の ws。 */
+  function fakeWs(): { ws: Pick<WebSocket, "on" | "send" | "close">; sent: string[]; receive(msg: unknown): void } {
+    const emitter = new EventEmitter();
+    const sent: string[] = [];
+    return {
+      ws: {
+        on: ((event: string, cb: (...args: unknown[]) => void) => emitter.on(event, cb)) as unknown as WebSocket["on"],
+        send: ((data: string) => sent.push(data)) as unknown as WebSocket["send"],
+        close: () => undefined,
+      },
+      sent,
+      receive: (msg) => emitter.emit("message", Buffer.from(JSON.stringify(msg)), false),
+    };
+  }
+
+  it("応答より前のイベントは渡さず、応答と同じ同期区間で直後に届いたイベントは渡す", async () => {
+    const { ws, sent, receive } = fakeWs();
+    const client = new WsWtmClient(ws);
+    const got: string[] = [];
+    const helloPromise = client.hello((evt: ServerEvent) => got.push(evt.event));
+    const { id } = JSON.parse(sent[0]!) as { id: string };
+
+    receive({ event: "workspace.closed", data: { workspaceId: "old" } });
+    receive({ id, result: { clientId: "c1", snapshot: {} } });
+    receive({ event: "pane.closed", data: { paneId: "p1" } });
+    await helloPromise;
+
+    expect(got).toEqual(["pane.closed"]);
   });
 });

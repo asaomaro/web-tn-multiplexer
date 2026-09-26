@@ -228,3 +228,61 @@ describe("parseArgs — 未知のオプション・値の欠落・未知のコ�
     expect(() => parseArgs(["watch", "--json", "extra"], noEnv)).toThrow(CliUsageError);
   });
 });
+
+describe("parseArgs — agent", () => {
+  const opts = { url: DEFAULT_URL, token: undefined };
+  it("list", () => {
+    expect(parseArgs(["agent", "list"], noEnv)).toEqual({ kind: "agent-list", opts });
+  });
+  it("get <paneId>", () => {
+    expect(parseArgs(["agent", "get", "p1"], noEnv)).toEqual({ kind: "agent-get", opts, paneId: "p1" });
+  });
+  it("wait: --until 省略・--timeout 省略なら until は空・timeoutMs は undefined（無期限）", () => {
+    expect(parseArgs(["agent", "wait", "p1"], noEnv)).toEqual({ kind: "agent-wait", opts, paneId: "p1", until: [], timeoutMs: undefined });
+  });
+  it("wait: --until を繰り返すと順に集める・--timeout は正の整数", () => {
+    expect(parseArgs(["agent", "wait", "p1", "--until", "idle", "--timeout", "1500", "--until", "done"], noEnv)).toEqual({
+      kind: "agent-wait",
+      opts,
+      paneId: "p1",
+      until: ["idle", "done"],
+      timeoutMs: 1500,
+    });
+  });
+  it("wait: --timeout は Node のタイマーの上限 2147483647 まで受ける", () => {
+    expect(parseArgs(["agent", "wait", "p1", "--timeout", "2147483647"], noEnv)).toMatchObject({ timeoutMs: 2147483647 });
+  });
+  it("read: 既定は 80 行・raw 無し・timeout 5000", () => {
+    expect(parseArgs(["agent", "read", "p1"], noEnv)).toEqual({ kind: "agent-read", opts, paneId: "p1", lines: 80, raw: false, timeoutMs: 5000 });
+  });
+  it("read: --lines/--raw/--timeout", () => {
+    expect(parseArgs(["agent", "read", "p1", "--lines", "5", "--raw", "--timeout", "900"], noEnv)).toEqual({
+      kind: "agent-read",
+      opts,
+      paneId: "p1",
+      lines: 5,
+      raw: true,
+      timeoutMs: 900,
+    });
+  });
+  it.each([
+    [["agent", "wait", "p1", "--until", "finished"]],
+    [["agent", "wait", "p1", "--until"]],
+    [["agent", "wait", "p1", "--timeout", "0"]],
+    [["agent", "wait", "p1", "--timeout", "1.5"]],
+    [["agent", "wait", "p1", "--timeout", "2147483648"]],
+    [["agent", "wait"]],
+    [["agent", "wait", "p1", "p2"]],
+    [["agent", "read", "p1", "--lines", "0"]],
+    [["agent", "read", "p1", "--lines", "x"]],
+    [["agent", "read", "p1", "--follow"]],
+    [["agent", "read"]],
+    [["agent", "get"]],
+    [["agent", "get", "p1", "p2"]],
+    [["agent", "list", "p1"]],
+    [["agent", "start"]],
+    [["agent"]],
+  ])("使い方の誤り: %j", (argv) => {
+    expect(() => parseArgs(argv, noEnv)).toThrow(CliUsageError);
+  });
+});

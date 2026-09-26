@@ -97,6 +97,13 @@ async function main(): Promise<void> {
     if (!snapshot.panes.some((p) => p.id === pane.id)) throw new Error("snapshot did not include the created pane");
     console.log("smoke(cli): wtmctl snapshot ok");
 
+    // エージェントを起動していないので空の一覧になる（`agent` コマンド群の配線とセッション再利用の確認）。
+    const agents = await runCli(["agent", "list", "--url", url], env);
+    if (agents.exitCode !== 0) throw new Error(`agent list failed (exit ${agents.exitCode}): ${agents.stderr}`);
+    const listed = JSON.parse(agents.stdout) as { agents: unknown[] };
+    if (!Array.isArray(listed.agents) || listed.agents.length !== 0) throw new Error(`agent list should be an empty agents array: ${agents.stdout}`);
+    console.log("smoke(cli): wtmctl agent list ok (no agents)");
+
     console.log("smoke(cli): PASS");
     process.exitCode = 0;
   } finally {
