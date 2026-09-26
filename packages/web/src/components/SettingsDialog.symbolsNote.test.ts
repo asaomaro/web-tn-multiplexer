@@ -5,6 +5,9 @@ import { NotificationControllerKey } from "../injection.js";
 import type { NotificationController } from "../notify/NotificationController.js";
 import SettingsDialog from "./SettingsDialog.vue";
 
+// 設定のダイアログを丸ごと描く。負荷の下で最大 3.3 秒かかった。上限はこのファイルにだけ効く（20260926-load-flaky-tests の D5）。
+vi.setConfig({ testTimeout: 10_000 });
+
 // 表（`store/stateIndicator.ts`）を差し替える。注記が表から組み立てられていれば、差し替えた字形と名前が出る。
 // 直書きに戻すと、ここで元の字形（× ◐ ✓ ○ ·）が出て落ちる——表を 1 か所で変えたときに注記だけが古いまま残る壊れ方。
 vi.mock("../store/stateIndicator.js", async (importOriginal) => {

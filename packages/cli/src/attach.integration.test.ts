@@ -1,10 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerEvent } from "@wtm/protocol";
-import { composeServer, type ComposedServer } from "@wtm/server";
+import { composeServerOnFreePort, type ComposedServer } from "@wtm/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { runPaneAttach, type AttachTerminal } from "./commands/attach.js";
@@ -16,17 +14,6 @@ import { connect, type WtmClient } from "./wsClient.js";
  * `wtmctl pane attach` を実サーバ・実 PTY の上で、偽の手元の端末から確かめる（20260926-pane-direct-connect）。
  * 実物の端末（raw モード）での確認は smoke（`smoke.ts`）が node-pty の上で行う。
  */
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-    probe.on("error", rejectPromise);
-  });
-}
 
 interface TestTerminal extends AttachTerminal {
   text(): string;
@@ -95,13 +82,11 @@ describe("wtmctl pane attach integration（実サーバ・実 PTY・偽の手元
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "wtmctl-attach-it-"));
-    server = await composeServer({
+    server = await composeServerOnFreePort({
       host: "127.0.0.1",
-      port: String(await getFreePort()),
       stateDir: join(dir, "state"),
       origin: [],
     });
-    await server.listen();
     if (!server.freshToken) throw new Error("expected a freshly generated token");
     url = `http://${server.options.host}:${server.options.port}`;
     store = new FsSessionStore(join(dir, "session.json"));

@@ -10,6 +10,7 @@ import type { TerminalHost } from "../terminal/TerminalHost.js";
 import type { PersistScheduler } from "../session/PersistScheduler.js";
 import { SessionModel } from "../session/SessionModel.js";
 import { SessionService } from "../session/SessionService.js";
+import { defaultWorkspaceLabelDeps } from "../session/workspaceLabel.js";
 import { makeTempDir } from "../persist/atomicFile.js";
 import { ChildProcessGitRunner, type GitRunner } from "../infra/GitRunner.js";
 import { DefaultGitInfoPoller } from "./GitInfoPoller.js";
@@ -222,7 +223,9 @@ describe("DefaultGitInfoPoller", () => {
 });
 
 // 20260926-workspace-label-follow-cwd：git の情報と自動の名前を、最初の tab の最初の pane のいまの場所から一緒に決め直す（design D1〜D4）。
-describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従", () => {
+// 実物の git を起動する（beforeEach で 2 つのリポジトリを作り、it の中でも問い合わせる）。負荷の下で最大 6.3 秒かかって、中の待ち（5 秒）と同じ
+// 既定の上限（5 秒）で落ちた。上限を 15 秒、中の待ちをその半分にする（20260926-load-flaky-tests の D5）。
+describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従", { timeout: 15_000 }, () => {
   let repoA: string;
   let repoB: string;
   let plain: string;
@@ -259,6 +262,10 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
       spawnGraceMs: 1,
       defaultCwd: repoA,
       logger: new MemoryLogger(),
+      // 名前を決める予算（既定 200ms）を負荷の下で超えると、設計どおりフォルダ名に代わり、次の見直し（この describe では 60 秒後）まで
+      // 決め直さない。ここで確かめるのは追従で、予算を超えたときの振る舞いではない（それは workspaceLabel・SessionService のテスト）。
+      // 予算を中の待ち（7.5 秒）の半分より短い 3 秒にする（20260926-load-flaky-tests の D9）。
+      workspaceLabelDeps: { ...defaultWorkspaceLabelDeps, timeoutMs: 3_000 },
     });
     runs = [];
     inFlight = 0;
@@ -306,7 +313,7 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
       if (e.event === "workspace.updated") updates.push(e.data.workspace);
     });
     service.updatePaneRuntime(pane.id, { cwd: join(repoB, "sub") });
-    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 5000 });
+    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 7500 });
     expect(updates.map((w) => [w.label, w.git?.branch]), "名前と git は同じ 1 回で").toEqual([[basename(repoB), "other"]]);
     expect(ws(workspace.id).cwd, "開いた場所は変えない（AC9）").toBe(repoA);
   });
@@ -316,7 +323,7 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
     poller.start();
     await poller.pollNow();
     service.updatePaneRuntime(pane.id, { cwd: plain });
-    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(plain), git: null }), { timeout: 5000 });
+    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(plain), git: null }), { timeout: 7500 });
   });
 
   it("付けた名前は変えず、git だけがいまの場所のものになる（AC3）", async () => {
@@ -324,7 +331,7 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
     poller.start();
     await poller.pollNow();
     service.updatePaneRuntime(pane.id, { cwd: repoB });
-    await vi.waitFor(() => expect(ws(workspace.id).git).toMatchObject({ branch: "other" }), { timeout: 5000 });
+    await vi.waitFor(() => expect(ws(workspace.id).git).toMatchObject({ branch: "other" }), { timeout: 7500 });
     expect(ws(workspace.id)).toMatchObject({ label: "mine", autoLabel: false });
   });
 
@@ -358,7 +365,7 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
       return { workspace, pane, right: right.pane };
     }
     const followedB = (id: string) =>
-      vi.waitFor(() => expect(ws(id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 5000 });
+      vi.waitFor(() => expect(ws(id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 7500 });
 
     it("pane.closed：最初の pane を閉じる", async () => {
       const { workspace, pane } = await withSecondPaneInB();
@@ -400,10 +407,10 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
     poller.start(); // 1 周目は repoA の git で止まる
     await vi.waitFor(() => expect(runs).toContain(repoA));
     service.updatePaneRuntime(pane.id, { cwd: repoB });
-    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 5000 });
+    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 7500 });
     release();
     // 止まっていた repoA の見直しが git を 4 本とも走らせ終える（＝古い結果を入れようとする）まで待つ。
-    await vi.waitFor(() => expect(runs.filter((c) => c === repoA).length).toBeGreaterThanOrEqual(4), { timeout: 5000 });
+    await vi.waitFor(() => expect(runs.filter((c) => c === repoA).length).toBeGreaterThanOrEqual(4), { timeout: 7500 });
     await new Promise((r) => setTimeout(r, 50));
     expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } });
   });

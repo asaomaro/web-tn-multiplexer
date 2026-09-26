@@ -1,10 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentInfo } from "@wtm/protocol";
-import { composeServer, type ComposedServer } from "@wtm/server";
+import { composeServerOnFreePort, type ComposedServer } from "@wtm/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAgentGet, runAgentList, runAgentRead, runAgentWait } from "./commands/agent.js";
 import { runPaneRun, runPaneSplit } from "./commands/pane.js";
@@ -37,17 +35,6 @@ vi.mock("./wsClient.js", async (importOriginal) => {
 
 function nextHello(): Promise<void> {
   return new Promise((resolve) => helloWaiters.push(resolve));
-}
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-    probe.on("error", rejectPromise);
-  });
 }
 
 function captureStdout(): { text(): string; restore(): void } {
@@ -91,13 +78,11 @@ describe("wtmctl agent integration（実サーバ・実 PTY）", () => {
 
   beforeAll(async () => {
     stateDir = await mkdtemp(join(tmpdir(), "wtmctl-agent-it-state-"));
-    server = await composeServer({
+    server = await composeServerOnFreePort({
       host: "127.0.0.1",
-      port: String(await getFreePort()),
       stateDir,
       origin: [],
     });
-    await server.listen();
     if (!server.freshToken) throw new Error("expected a freshly generated token");
     url = `http://${server.options.host}:${server.options.port}`;
     sessionDir = await mkdtemp(join(tmpdir(), "wtmctl-agent-it-session-"));

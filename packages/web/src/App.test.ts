@@ -20,6 +20,9 @@ import { RendererPool, type WebglAddonLike } from "./term/RendererPool.js";
 import { TerminalRegistry } from "./term/TerminalRegistry.js";
 import { ViewSync } from "./term/ViewSync.js";
 
+// App を丸ごと（xterm.js も）描く。負荷の下で最大 6.3 秒かかって既定の 5 秒で落ちた。上限はこのファイルにだけ効く（20260926-load-flaky-tests の D5）。
+vi.setConfig({ testTimeout: 15_000 });
+
 /**
  * App.vue の切り替え（T26）。main.ts の配線を模して、実物の KeyRouter・TerminalRegistry・ActionDispatcher を
  * 組み立てる（ActionDispatcher.test.ts の `makeDispatcher` と同じ手法）。

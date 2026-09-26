@@ -3,28 +3,22 @@ import { chmod, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { encodeInputFrame } from "@wtm/protocol";
 import type { PaneAgentStatusChangedEvent } from "@wtm/protocol";
 import { makeTempDir } from "./persist/atomicFile.js";
 import { composeServer } from "./composeServer.js";
+import { composeServerOnFreePort, getFreePort } from "./composeServerOnFreePort.js";
 import { ConfigError } from "./config.js";
 import { STATE_DIR_LOCK_FILE, StateDirLock } from "./persist/StateDirLock.js";
 import { DefaultAuthService } from "./auth/AuthService.js";
 import { FsAuthFile } from "./persist/AuthFile.js";
 import { ChildProcessGitRunner } from "./infra/GitRunner.js";
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-    probe.on("error", rejectPromise);
-  });
-}
+// どの it も実サーバを組み立て、多くは実 PTY・scrypt・git を使う。負荷の下で、上限を持たない it が最大 5.3 秒かかって既定の 5 秒で
+// 落ちた。上限を持たない it の既定を 15 秒にする（このファイルにだけ効く。20260926-load-flaky-tests の D5）。
+vi.setConfig({ testTimeout: 15_000 });
 
 describe("composeServer (integration)", () => {
   const cleanups: (() => Promise<void>)[] = [];
@@ -46,9 +40,8 @@ describe("composeServer (integration)", () => {
       cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
       cleanups.push(() => rm(tmpRoot, { recursive: true, force: true }));
       const saved = { TMPDIR: process.env["TMPDIR"], EDITOR: process.env["EDITOR"] };
-      const server = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
+      const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
       try {
-        await server.listen();
         const source = server.session.snapshot().panes[0]!;
         process.env["TMPDIR"] = tmpRoot; // 一時ディレクトリの置き場（os.tmpdir() は呼ぶたびに読む）
         process.env["EDITOR"] = "sleep 30 #"; // 閉じるまで終わらないエディタ
@@ -69,9 +62,8 @@ describe("composeServer (integration)", () => {
     const base = await makeTempDir("wtm-compose-");
     cleanups.push(() => rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
     // 既定の session に目印の workspace を保存し、動いている wtm のロック（このプロセスが持つ）も残しておく
-    const def = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: base, origin: [] });
+    const def = await composeServerOnFreePort({ host: "127.0.0.1", stateDir: base, origin: [] });
     cleanups.unshift(() => def.close());
-    await def.listen();
     await def.session.createWorkspace(process.cwd(), "marker-default");
     await def.persist.flush();
     await new Promise((res) => setTimeout(res, 300));
@@ -81,9 +73,8 @@ describe("composeServer (integration)", () => {
     };
     const before = { session: await snap("session.json"), auth: await snap("auth.json"), lock: await snap(STATE_DIR_LOCK_FILE) };
 
-    const work = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: base, session: "work", origin: [] });
+    const work = await composeServerOnFreePort({ host: "127.0.0.1", stateDir: base, session: "work", origin: [] });
     cleanups.unshift(() => work.close());
-    await work.listen();
     await work.persist.flush();
     const workDir = join(base, "sessions", "work");
     expect(work.options.stateDir).toBe(workDir);
@@ -100,13 +91,12 @@ describe("composeServer (integration)", () => {
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as ConfigError).message).toContain(workDir);
 
-    const other = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: base, session: "other", origin: [] });
+    const other = await composeServerOnFreePort({ host: "127.0.0.1", stateDir: base, session: "other", origin: [] });
     cleanups.unshift(() => other.close());
-    await other.listen();
     expect(existsSync(join(base, "sessions", "other", STATE_DIR_LOCK_FILE))).toBe(true);
     expect(work.httpServer.server.listening).toBe(true);
     expect(other.httpServer.server.listening).toBe(true);
-  }, 20000);
+  }, 35_000); // 3 つの実サーバ。負荷の下で最大 15.7 秒（20260926-load-flaky-tests の D5）
 
   it("規則外の --session は composeServer が ConfigError で断り、状態ディレクトリに何も作らない（20260926-named-session AC2）", async () => {
     const base = await makeTempDir("wtm-compose-");
@@ -125,14 +115,19 @@ describe("composeServer (integration)", () => {
 
   it("generates a token on first run and listens on the requested port", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
-    cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-
-    // token は待ち受けに成功してから作る（D102）。listen() の前は常に undefined。
-    expect(server.freshToken).toBeUndefined();
-    await server.listen();
+    const server = await composeServerOnFreePort(
+      { host: "127.0.0.1", stateDir, origin: [] },
+      {
+        start: async (s) => {
+          // token は待ち受けに成功してから作る（D102）。listen() の前は常に undefined。
+          expect(s.freshToken).toBeUndefined();
+          await s.listen();
+        },
+      },
+    );
+    cleanups.unshift(() => server.close());
+    const port = server.options.port;
     expect(server.freshToken).toBeTruthy();
 
     const res = await fetch(`http://127.0.0.1:${port}/api/session`);
@@ -167,9 +162,8 @@ describe("composeServer (integration)", () => {
     await failed.close();
     await new Promise<void>((res) => blocker.close(() => res()));
 
-    const next = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    const next = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
     cleanups.unshift(() => next.close()); // rm より先に閉じる
-    await next.listen();
     expect(next.freshToken).toBeTruthy();
   });
 
@@ -178,8 +172,7 @@ describe("composeServer (integration)", () => {
     // その間の保存の予約（persist.touch）や close() の flush で、動いている側の session.json を上書きしえた。
     const stateDir = await makeTempDir("wtm-compose-");
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    const first = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
-    await first.listen();
+    const first = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
     await first.session.createWorkspace(process.cwd(), "saved");
     await first.close(); // flush で session.json に 2 つの workspace を保存する
 
@@ -211,9 +204,8 @@ describe("composeServer (integration)", () => {
     // 2 つ目が全シェルを二重に起動し、session.json・auth.json を互いに上書きし合っていた。
     const stateDir = await makeTempDir("wtm-compose-");
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    const first = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
+    const first = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
     cleanups.unshift(() => first.close()); // rm より先に閉じる
-    await first.listen();
     await first.session.createWorkspace(process.cwd(), "saved-by-first");
     await first.persist.flush();
     await new Promise((res) => setTimeout(res, 300)); // 1 つ目の起動直後の書き込みが落ち着くのを待つ
@@ -249,9 +241,8 @@ describe("composeServer (integration)", () => {
     // 1 つ目を閉じればロックを放し、同じ state-dir で起動し直せる。
     await first.close();
     expect(existsSync(lockPath)).toBe(false);
-    const third = await composeServer({ host: "127.0.0.1", port: String(port2), stateDir, origin: [] });
+    const third = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
     cleanups.unshift(() => third.close());
-    await third.listen();
     expect(third.session.snapshot().workspaces.some((w) => w.label === "saved-by-first")).toBe(true);
   }, 15000);
 
@@ -262,18 +253,25 @@ describe("composeServer (integration)", () => {
     const stateDir = await makeTempDir("wtm-compose-");
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
     const { token: oldToken } = await new DefaultAuthService(new FsAuthFile(stateDir)).ensureToken();
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    let newToken = "";
+    const server = await composeServerOnFreePort(
+      { host: "127.0.0.1", stateDir, origin: [] },
+      {
+        // 組み立ての後・listen() の前に走らせる（取り直したら、組み立て直した後にもう一度）。
+        start: async (s) => {
+          // `wtm token reset` と同じ手順（ロックを取り、auth.json を読んで作り直し、放す）。serve はまだロックを取っていない。
+          const resetLock = new StateDirLock(stateDir);
+          await resetLock.acquire();
+          const resetter = new DefaultAuthService(new FsAuthFile(stateDir));
+          await resetter.initialize();
+          newToken = await resetter.resetToken();
+          await resetLock.release();
+          await s.listen();
+        },
+      },
+    );
     cleanups.unshift(() => server.close());
-    // `wtm token reset` と同じ手順（ロックを取り、auth.json を読んで作り直し、放す）。serve はまだロックを取っていない。
-    const resetLock = new StateDirLock(stateDir);
-    await resetLock.acquire();
-    const resetter = new DefaultAuthService(new FsAuthFile(stateDir));
-    await resetter.initialize();
-    const newToken = await resetter.resetToken();
-    await resetLock.release();
-
-    await server.listen();
+    const port = server.options.port;
     expect(server.freshToken).toBeUndefined(); // token は作り直し済み（新しく作らない）
     const origin = `http://127.0.0.1:${port}`;
     const login = (token: string | undefined): Promise<number> =>
@@ -314,9 +312,22 @@ describe("composeServer (integration)", () => {
         if (originalShell === undefined) delete process.env["SHELL"];
         else process.env["SHELL"] = originalShell;
       });
-      const server = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [] });
+      let listenError: unknown;
+      const server = await composeServerOnFreePort(
+        { host: "127.0.0.1", stateDir, origin: [] },
+        {
+          start: async (s) => {
+            listenError = await s.listen().then(
+              () => undefined,
+              (err: unknown) => err,
+            );
+            if ((listenError as { code?: unknown } | undefined)?.code === "EADDRINUSE") throw listenError; // 取り直させる
+          },
+        },
+      );
       cleanups.unshift(() => server.close()); // rm より先に閉じる
-      await expect(server.listen()).rejects.toThrow(/failed to start a shell/);
+      expect(listenError).toBeInstanceOf(Error);
+      expect((listenError as Error).message).toMatch(/failed to start a shell/);
       expect(server.freshToken).toBeTruthy(); // auth.json に保存済みの token を、呼び出し側（main）が表示できる
       expect(existsSync(join(stateDir, "auth.json"))).toBe(true);
     },
@@ -333,13 +344,10 @@ describe("composeServer (integration)", () => {
 
   it("起動の途中（復元が終わるまで）は /ws を 503 で断り、listen() の後は受け付ける（D102）", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
-    cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    const origin = `http://127.0.0.1:${port}`;
-    const upgradeStatus = (cookie?: string): Promise<number> =>
+    const upgradeStatus = (port: number, cookie?: string): Promise<number> =>
       new Promise((resolve, reject) => {
+        const origin = `http://127.0.0.1:${port}`;
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin, host: `127.0.0.1:${port}`, ...(cookie ? { cookie } : {}) } });
         ws.once("open", () => {
           ws.close();
@@ -352,11 +360,22 @@ describe("composeServer (integration)", () => {
         ws.once("error", reject);
       });
 
-    // bind が済み復元の途中の状態を模す：listen() を始め、bind した直後（token の作成・復元の await 中）に upgrade を試す。
-    const listening = server.listen();
-    await new Promise<void>((res) => server.httpServer.server.once("listening", () => res()));
-    expect(await upgradeStatus()).toBe(503);
-    await listening;
+    const server = await composeServerOnFreePort(
+      { host: "127.0.0.1", stateDir, origin: [] },
+      {
+        // bind が済み復元の途中の状態を模す：listen() を始め、bind した直後（token の作成・復元の await 中）に upgrade を試す。
+        // bind に失敗したら（EADDRINUSE）"listening" は来ないので、listen() の失敗と競わせて取り直させる。
+        start: async (s, port) => {
+          const listening = s.listen();
+          await Promise.race([new Promise<void>((res) => s.httpServer.server.once("listening", () => res())), listening]);
+          expect(await upgradeStatus(port)).toBe(503);
+          await listening;
+        },
+      },
+    );
+    cleanups.unshift(() => server.close());
+    const port = server.options.port;
+    const origin = `http://127.0.0.1:${port}`;
 
     const loginRes = await fetch(`${origin}/api/login`, {
       method: "POST",
@@ -364,16 +383,14 @@ describe("composeServer (integration)", () => {
       body: JSON.stringify({ token: server.freshToken }),
     });
     const cookie = loginRes.headers.get("set-cookie")!.split(";")[0]!;
-    expect(await upgradeStatus(cookie)).toBe(101);
+    expect(await upgradeStatus(port, cookie)).toBe(101);
   }, 10000);
 
   it("creates one workspace on first startup when there is no saved session (AC1/AC8 の起点)", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
     cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    await server.listen();
     expect(server.session.snapshot().workspaces.length).toBe(1);
   });
 
@@ -411,11 +428,9 @@ describe("composeServer (integration)", () => {
   // 20260921-workspace-auto-label：保存に名前が自動かの印が載る（`toSessionFileData` は非公開なので、保存した session.json を読む）。
   it("保存した session.json の workspace に、名前が自動か付けたものかの印（autoLabel）が載る", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] }); // 起動時の最初の workspace は名前を渡さない（自動の名前）
     cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    await server.listen(); // 起動時の最初の workspace は名前を渡さない（自動の名前）
     const { workspace: named } = await server.session.createWorkspace(process.cwd(), "persisted");
     await server.persist.flush();
     const saved = JSON.parse(await readFile(join(stateDir, "session.json"), "utf8")) as {
@@ -432,11 +447,9 @@ describe("composeServer (integration)", () => {
     // 待つだけのシェル——一式を並べて走らせる負荷の下で、既定のシェルが猶予の間に終わって tab ごと閉じたことがある（test-result の失敗の証跡）。
     const shell = join(stateDir, "wait.sh");
     await writeFile(shell, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [], shell });
+    const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [], shell });
     cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    await server.listen();
     const { workspace, tab: first } = await server.session.createWorkspace(process.cwd(), "tabs");
     const { tab: second } = await server.session.createTab(workspace.id, undefined);
     server.session.moveTab(second.id, "previous");
@@ -447,31 +460,26 @@ describe("composeServer (integration)", () => {
 
   it("persists and restores the session across two composeServer instances (AC18)", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
-    const port1 = await getFreePort();
-    const first = await composeServer({ host: "127.0.0.1", port: String(port1), stateDir, origin: [] });
-    await first.listen();
+    const first = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
     const { workspace } = await first.session.createWorkspace(process.cwd(), "persisted");
     await first.persist.flush();
     await first.close();
 
-    const port2 = await getFreePort();
-    const second = await composeServer({ host: "127.0.0.1", port: String(port2), stateDir, origin: [] });
+    const second = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
     cleanups.push(() => second.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    await second.listen();
 
     const restored = second.session.snapshot().workspaces.find((w) => w.id === workspace.id);
     expect(restored).toBeDefined();
     expect(restored?.label).toBe("persisted");
-  }, 10000);
+  }, 15_000); // 2 つの実サーバ。負荷の下で最大 5.1 秒（20260926-load-flaky-tests の D5）
 
   it("full round trip: login, hello, create, subscribe, echo (same flow as smoke.ts)", async () => {
     const stateDir = await makeTempDir("wtm-compose-e2e-");
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
+    const port = server.options.port;
     cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    await server.listen();
 
     const origin = `http://127.0.0.1:${port}`;
     const loginRes = await fetch(`${origin}/api/login`, {
@@ -510,13 +518,12 @@ describe("composeServer (integration)", () => {
     await runGit(["config", "user.name", "t"]);
     await runGit(["commit", "-q", "--allow-empty", "-m", "init"]);
 
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [], worktreeDir });
+    const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [], worktreeDir });
+    const port = server.options.port;
     cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
     cleanups.push(() => rm(worktreeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
     cleanups.push(() => rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    await server.listen();
 
     const origin = `http://127.0.0.1:${port}`;
     const loginRes = await fetch(`${origin}/api/login`, {
@@ -561,12 +568,11 @@ describe("composeServer (integration)", () => {
     await runGit(["config", "user.name", "t"]);
     await runGit(["commit", "-q", "--allow-empty", "-m", "init"]);
 
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+    const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] }); // gitPoller.start() もここで走る（既定の初期 workspace は別の場所を指すので無関係）
+    const port = server.options.port;
     cleanups.push(() => server.close());
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
     cleanups.push(() => rm(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    await server.listen(); // gitPoller.start() もここで走る（既定の初期 workspace は別の場所を指すので無関係）
 
     const origin = `http://127.0.0.1:${port}`;
     const loginRes = await fetch(`${origin}/api/login`, {
@@ -617,9 +623,8 @@ describe("composeServer (integration)", () => {
     // 返り値にすら保持されていなかった）。ここでは「繋いだまま close() を呼んで、有限時間で終わる」ことを直接確かめる。
     const stateDir = await makeTempDir("wtm-compose-shutdown-");
     cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-    const port = await getFreePort();
-    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
-    await server.listen();
+    const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
+    const port = server.options.port;
 
     const origin = `http://127.0.0.1:${port}`;
     const loginRes = await fetch(`${origin}/api/login`, {
@@ -660,11 +665,10 @@ describe("composeServer (integration)", () => {
       });
       cleanups.push(() => rm(binDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
-      const port = await getFreePort();
-      const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
+      const server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
+      const port = server.options.port;
       cleanups.push(() => server.close());
       cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
-      await server.listen();
 
       const origin = `http://127.0.0.1:${port}`;
       const loginRes = await fetch(`${origin}/api/login`, {
@@ -694,11 +698,11 @@ describe("composeServer (integration)", () => {
         ws,
         "pane.agent_status_changed",
         (data) => data.paneId === created.pane.id && data.agent?.kind === "claude",
-        8000,
+        15_000, // it の上限の半分（負荷の下で it 全体が最大 12.5 秒かかり、この待ち 8 秒で落ちた。20260926-load-flaky-tests の D5）
       );
       expect(event.agent?.kind).toBe("claude");
     },
-    15000,
+    30_000,
   );
 });
 

@@ -13,6 +13,9 @@ import { useSettingsStore } from "../store/settings.js";
 import { readPrefs, useViewStore } from "../store/view.js";
 import SettingsDialog from "./SettingsDialog.vue";
 
+// 設定のダイアログを丸ごと描く。負荷の下で最大 5.7 秒かかって既定の 5 秒で落ちた。上限はこのファイルにだけ効く（20260926-load-flaky-tests の D5）。
+vi.setConfig({ testTimeout: 15_000 });
+
 let pinia: Pinia;
 
 beforeEach(() => {

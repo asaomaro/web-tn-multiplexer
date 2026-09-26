@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir, platform } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 /**
  * cookie のローカルキャッシュ（design.md「`SessionStore`」節・decisions.md D5）。**保存するのは session
@@ -45,6 +45,23 @@ function isSessionFile(v: unknown): v is SessionFile {
   );
 }
 
+/**
+ * 同じファイルへの「読む→変える→書く」を、このプロセスの中では 1 つずつ行う（ファイルのパスごとの鎖）。
+ * 並べると、2 つの接続先を同時に保存したとき両方が同じ内容を読んでから書き、片方が消えていた（20260926-load-flaky-tests D2）。
+ */
+const updateChains = new Map<string, Promise<void>>();
+
+function serializeUpdate(filePath: string, update: () => Promise<void>): Promise<void> {
+  const key = resolve(filePath);
+  const run = (updateChains.get(key) ?? Promise.resolve()).then(update);
+  const tail = run.catch(() => undefined);
+  updateChains.set(key, tail);
+  void tail.then(() => {
+    if (updateChains.get(key) === tail) updateChains.delete(key);
+  });
+  return run;
+}
+
 export class FsSessionStore implements SessionStore {
   constructor(private readonly filePath: string = defaultSessionFilePath()) {}
 
@@ -66,9 +83,22 @@ export class FsSessionStore implements SessionStore {
     }
   }
 
+  /**
+   * 一時ファイルに書いてから置き換える。切り詰めてから書くと、その途中を読んだ別の操作（別の `wtmctl` のプロセスも）が空とみなし、
+   * 保存し直してほかの接続先の cookie を消していた（20260926-load-flaky-tests の D2。server の `writeFileAtomic` と同じ形）。
+   */
   private async save(data: SessionFile): Promise<void> {
-    await mkdir(dirname(this.filePath), { recursive: true, mode: 0o700 });
-    await writeFile(this.filePath, JSON.stringify(data, null, 2), { mode: 0o600 });
+    const dir = dirname(this.filePath);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const tmpDir = await mkdtemp(join(dir, ".tmp-"));
+    const tmpPath = join(tmpDir, "session.json");
+    try {
+      await writeFile(tmpPath, JSON.stringify(data, null, 2), { mode: 0o600 });
+      if (platform() !== "win32") await chmod(tmpPath, 0o600);
+      await rename(tmpPath, this.filePath);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   async get(url: string): Promise<string | undefined> {
@@ -76,16 +106,20 @@ export class FsSessionStore implements SessionStore {
     return data.sessions[originOf(url)]?.cookie;
   }
 
-  async set(url: string, cookie: string): Promise<void> {
-    const data = await this.load();
-    data.sessions[originOf(url)] = { cookie, createdAt: new Date().toISOString() };
-    await this.save(data);
+  set(url: string, cookie: string): Promise<void> {
+    return serializeUpdate(this.filePath, async () => {
+      const data = await this.load();
+      data.sessions[originOf(url)] = { cookie, createdAt: new Date().toISOString() };
+      await this.save(data);
+    });
   }
 
-  async clear(url: string): Promise<void> {
-    const data = await this.load();
-    if (!(originOf(url) in data.sessions)) return;
-    delete data.sessions[originOf(url)];
-    await this.save(data);
+  clear(url: string): Promise<void> {
+    return serializeUpdate(this.filePath, async () => {
+      const data = await this.load();
+      if (!(originOf(url) in data.sessions)) return;
+      delete data.sessions[originOf(url)];
+      await this.save(data);
+    });
   }
 }
