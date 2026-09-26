@@ -51,6 +51,9 @@ pnpm --filter @wtm/e2e test
   `wtm session list [--json]`、token の作り直しは `wtm token reset --session <名前>`、消すのは（止めてから）
   `wtm session delete <名前>`。名前は 1〜64 文字の ASCII の英数字と `.` `_` `-`（詳しくは `docs/tls-setup.md`
   「名前付き session」）。止めるコマンドは無い（Ctrl+C か `wtm session list` の pid に `kill`）。
+- **画面履歴**（`wtm serve --pane-history`。既定は無効。20260926-screen-history-replay）：付けて動かしたサーバを止めて起動し直すと、
+  pane に前回の画面と「前回のセッションの画面」の区切りの行が出る。付けずに起動すると `session-history.json` を消す（詳しくは
+  `docs/tls-setup.md`「画面履歴の保存と再生」）。
 - **`wtm token reset` は `wtm serve` を止めてから**（動いている間は断る。終了コード 2）。
 - **`wtm serve` を起動した端末を閉じると wtm も終わる**（SIGHUP。`nohup` でも同じ）。検証の途中で端末を閉じるなら
   tmux の中で動かす。
@@ -365,6 +368,12 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       ドロップ、または Esc で取り消すと何も起きないこと（AC9・AC-I2）。複数のブラウザ（別タブ）で
       同じ tab を開いておくと、一方の分割・分割解除がもう一方にも反映されること（AC10）。
       既存のキーバインドでの分割・pane を閉じる操作は変わらず使えること（AC11・AC-I3）。
+- [ ] 画面履歴の保存と再生（20260926-screen-history-replay。AC1・AC2・AC4・AC6 の手動確認。自動のテストは実 PTY の結合テストで同じ往復を見ている）：
+      `wtm serve --pane-history` で起動し、ブラウザで pane に `printf '\033[31mred-line\033[0m\n'; seq 1 200` を実行してから Ctrl+C で止める。
+      `ls -l <状態ディレクトリ>/session-history.json` が `-rw-------`。同じく `--pane-history` を付けて起動し直してブラウザを開き直すと、
+      その pane に赤い `red-line` と `1`〜`200`（上へスクロールして見える）、その下に薄い色の `--- 前回のセッションの画面（… に保存）---`、
+      その下に新しいプロンプトが出る。pane で `vim` を開いたまま止めて起動し直すと、vim の画面ではなく vim を開く前の履歴が出る。
+      続けて `--pane-history` を付けずに起動すると、`session-history.json` が消え、pane は空の新しいシェルになる。
 - [ ] スクロールバックを `$EDITOR` で開く（20260926-edit-scrollback。AC1〜AC4・AC6・AC8。AC5・AC7 は単体テストで確かめる）：
       `EDITOR=vim wtm serve …` で起動し、pane で `seq 1 3000` を実行してから `Ctrl+B e` を押す。期待：同じ tab に拡大表示の pane が
       開き、vim に 1〜3000 の行（スクロールバックに押し出された行を含む。末尾は `seq` の後のプロンプト）が色の制御列なしで出る。

@@ -35,6 +35,9 @@ class FakeMirror implements Mirror {
   plainText(): string {
     return "";
   }
+  historyAnsi(): string {
+    return "";
+  }
   title(): string {
     return this.titleValue;
   }

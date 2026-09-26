@@ -20,6 +20,8 @@ import type {
 } from "@wtm/protocol";
 import { INVALID_AGENT_NAME_MESSAGE, isValidAgentName, RpcError } from "@wtm/protocol";
 import type { SessionFileData, SessionFilePane, SessionFileTab, SessionFileWorkspace } from "../persist/SessionFile.js";
+import type { PaneHistoryEntry } from "../persist/PaneHistoryFile.js";
+import { historyReplayText } from "../terminal/historyAnsi.js";
 import type { TerminalManager } from "../terminal/TerminalManager.js";
 import { removeScrollbackDir, scrollbackEditorArgv, writeScrollbackFile } from "../terminal/scrollbackEditor.js";
 import type { EventBus } from "../bus/EventBus.js";
@@ -1018,6 +1020,7 @@ export class SessionService {
     paneId: PaneId,
     cwd: string,
     command?: { shell: string; args: string[] },
+    seed?: string,
   ): Promise<{ ok: boolean; alreadyExited: boolean }> {
     const host = this.terminals.create(paneId, {
       cwd,
@@ -1026,6 +1029,9 @@ export class SessionService {
       ...(command ? { shell: command.shell, args: command.args } : this.shell ? { shell: this.shell } : {}),
       env: this.envForPane(paneId),
     });
+    // 画面履歴（20260926-screen-history-replay）：`create` と同じ同期区間でミラーへ書く——PTY の出力は非同期のイベントで届くので、
+    // 新しいシェルの出力より前に並ぶ（research F6）。復元の間は `/ws` を受け付けないので、購読者は接続時の直列化でこれを受け取る。
+    if (seed) host.mirror.write(seed);
     const result = await raceSpawn(host, this.spawnGraceMs);
     if (!result.ok) {
       this.terminals.dispose(paneId);
@@ -1050,8 +1056,11 @@ export class SessionService {
     if (this.model.isEmpty()) await this.createWorkspace(this.defaultCwd, undefined); // 自動の名前（同上）
   }
 
-  /** `session.json` から復元する。失敗した pane は閉じずに `status: 'failed'` にする。 */
-  async restore(data: SessionFileData): Promise<void> {
+  /**
+   * `session.json` から復元する。失敗した pane は閉じずに `status: 'failed'` にする。`opts.paneHistory` があれば（`--pane-history`。
+   * 20260926-screen-history-replay）、その pane の保存した画面を新しいシェルより前に流し、区切りの行を足す（会話を再開する pane を除く）。
+   */
+  async restore(data: SessionFileData, opts: { paneHistory?: ReadonlyMap<string, PaneHistoryEntry> | undefined } = {}): Promise<void> {
     this.model.setNextIdCounters(data.nextId);
     for (const groupData of data.groups) this.model.restoreGroup(groupData); // 20260923-workspace-grouping
     // 名前を先に決めてから入れる（20260921-workspace-auto-label の design D6・D10）。自動の名前はその場所から決め直し（保存した後に git の状態が
@@ -1083,7 +1092,7 @@ export class SessionService {
     for (const wsData of data.workspaces) {
       for (const tabData of wsData.tabs) {
         for (const paneData of tabData.panes) {
-          await this.restorePaneProcess(paneData.id, paneData.cwd, paneData.agentSession);
+          await this.restorePaneProcess(paneData.id, paneData.cwd, paneData.agentSession, opts.paneHistory?.get(paneData.id));
         }
       }
     }
@@ -1123,8 +1132,11 @@ export class SessionService {
     paneId: PaneId,
     cwd: string,
     agentSession?: { kind: string; sessionId: string } | undefined,
+    history?: PaneHistoryEntry | undefined,
   ): Promise<void> {
-    const spawn = await this.spawnForPane(paneId, cwd);
+    // 会話を再開する pane には保存した画面を流さない（再開が自分の画面を描く。herdr の `pane_restore_startup` と同じ。AC9）。
+    const seed = history && this.resumeCommandForRestore(agentSession) === null ? historyReplayText(history.ansi, history.savedAt) : undefined;
+    const spawn = await this.spawnForPane(paneId, cwd, undefined, seed);
     if (!spawn.ok) {
       this.model.markPaneFailed(paneId, "シェルの起動に失敗しました");
       return;
@@ -1145,11 +1157,16 @@ export class SessionService {
    * 重複排除はしない（design D11）。
    */
   private maybeResumeAgentSession(paneId: PaneId, agentSession: { kind: string; sessionId: string } | undefined): void {
-    if (!agentSession) return;
-    if (!this.getAutoResumeEnabled()) return;
-    const command = resumeCommandFor(agentSession.kind, agentSession.sessionId);
-    if (!command) return;
+    const command = this.resumeCommandForRestore(agentSession);
+    if (command === null) return;
     this.terminals.get(paneId)?.write(`${command}\r`);
+  }
+
+  /** 復元でこの pane の会話を再開するなら、その再開のコマンド。しないなら null（保存した会話参照・自動再開の設定・対応するコマンドが揃うときだけ）。 */
+  private resumeCommandForRestore(agentSession: { kind: string; sessionId: string } | undefined): string | null {
+    if (!agentSession) return null;
+    if (!this.getAutoResumeEnabled()) return null;
+    return resumeCommandFor(agentSession.kind, agentSession.sessionId) || null;
   }
 
   // --- helpers ------------------------------------------------------------

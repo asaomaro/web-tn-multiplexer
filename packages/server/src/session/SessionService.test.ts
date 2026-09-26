@@ -16,13 +16,21 @@ import * as Layout from "./LayoutTree.js";
 import type { NewCwdDeps } from "./newCwd.js";
 import type { WorkspaceLabelDeps } from "./workspaceLabel.js";
 import type { SessionFileData } from "../persist/SessionFile.js";
+import { historyReplayText } from "../terminal/historyAnsi.js";
 
 /** 即座に失敗させたい pane の id を登録しておける偽の TerminalManager（T17「テスト方針」）。 */
 class FakeTerminalHost implements TerminalHost {
   readonly pid = 4242;
   /** 20260926-edit-scrollback：ミラーの `plainText()` が返す中身。 */
   scrollbackText = "";
-  readonly mirror = { plainText: () => this.scrollbackText } as unknown as TerminalHost["mirror"];
+  /** 20260926-screen-history-replay：ミラーへの書き込み（画面履歴の流し込み）を記録する。 */
+  mirrorWrites: string[] = [];
+  readonly mirror = {
+    plainText: () => this.scrollbackText,
+    write: (chunk: string) => {
+      this.mirrorWrites.push(chunk);
+    },
+  } as unknown as TerminalHost["mirror"];
   readonly fanout = {} as TerminalHost["fanout"];
   private readonly exitListeners = new Set<(code: number) => void>();
   disposed = false;
@@ -1672,6 +1680,75 @@ describe("SessionService — workspace の自動の名前", () => {
       // 起動に失敗した pane は `spawnForPane` が `terminals.dispose()` する（破棄されてマップから消える）ので、
       // resume コマンドを書き込む先自体が無い（=投入していないことの証拠）。
       expect(terminals.hosts.has("p1")).toBe(false);
+    });
+
+    // 20260926-screen-history-replay：design「復元」。
+    describe("画面履歴の流し込み（--pane-history）", () => {
+      const SAVED_AT = "2026-09-26T01:02:00.000Z";
+      function restoreData(panes: ReturnType<typeof paneData>[]): SessionFileData {
+        return {
+          schema: 1,
+          savedAt: "2026-09-26T00:00:00Z",
+          nextId: { w: 10, t: 10, p: 10, s: 1, a: 1, g: 1 },
+          groups: [],
+          workspaces: [oneWorkspace("w1", "/r", panes)],
+          focus: null,
+        };
+      }
+
+      it("保存した画面と区切りの行を、端末を作った直後（猶予を待つ前・他の書き込みの前）にミラーへ流す（AC2）", async () => {
+        const { terminals, service } = setup();
+        const seenAtCreate: number[] = [];
+        terminals.onCreate = (id) => seenAtCreate.push((terminals.hosts.get(id) as FakeTerminalHost).mirrorWrites.length);
+        await service.restore(restoreData([paneData("p1", "/r")]), { paneHistory: new Map([["p1", { ansi: "\x1b[31mold output", savedAt: SAVED_AT }]]) });
+        const host = terminals.hosts.get("p1") as FakeTerminalHost;
+        expect(seenAtCreate).toEqual([1]); // create の直後のマイクロタスクの時点で、もう書いてある
+        expect(host.mirrorWrites).toEqual([historyReplayText("\x1b[31mold output", SAVED_AT)]);
+        expect(host.writes).toEqual([]); // シェル（PTY）へは何も書かない
+      });
+
+      it("保存した画面が無い pane には何も流さない（区切りも出さない。AC12）", async () => {
+        const { terminals, service } = setup();
+        await service.restore(restoreData([paneData("p1", "/r"), paneData("p2", "/r")]), {
+          paneHistory: new Map([["p1", { ansi: "old", savedAt: SAVED_AT }]]),
+        });
+        expect((terminals.hosts.get("p1") as FakeTerminalHost).mirrorWrites).toHaveLength(1);
+        expect((terminals.hosts.get("p2") as FakeTerminalHost).mirrorWrites).toEqual([]);
+      });
+
+      it("画面履歴を渡さなければ（無効のとき）今までどおり何も流さない", async () => {
+        const { terminals, service } = setup();
+        await service.restore(restoreData([paneData("p1", "/r")]));
+        expect((terminals.hosts.get("p1") as FakeTerminalHost).mirrorWrites).toEqual([]);
+      });
+
+      it("会話を再開する pane には流さず、再開のコマンドだけを書く（AC9）", async () => {
+        const { terminals, service } = setup();
+        await service.restore(restoreData([paneData("p1", "/r", { kind: "claude", sessionId: "abc-123", reportedAt: 1 })]), {
+          paneHistory: new Map([["p1", { ansi: "old", savedAt: SAVED_AT }]]),
+        });
+        const host = terminals.hosts.get("p1") as FakeTerminalHost;
+        expect(host.mirrorWrites).toEqual([]);
+        expect(host.writes).toEqual(["claude --resume abc-123\r"]);
+      });
+
+      it("自動再開が無効なら、会話参照があっても流す（AC9）", async () => {
+        const { terminals, service } = setup(() => false);
+        await service.restore(restoreData([paneData("p1", "/r", { kind: "claude", sessionId: "abc-123", reportedAt: 1 })]), {
+          paneHistory: new Map([["p1", { ansi: "old", savedAt: SAVED_AT }]]),
+        });
+        const host = terminals.hosts.get("p1") as FakeTerminalHost;
+        expect(host.mirrorWrites).toEqual([historyReplayText("old", SAVED_AT)]);
+        expect(host.writes).toEqual([]);
+      });
+
+      it("再開のコマンドが無い会話参照（未知の kind）なら流す", async () => {
+        const { terminals, service } = setup();
+        await service.restore(restoreData([paneData("p1", "/r", { kind: "unknown-agent", sessionId: "x", reportedAt: 1 })]), {
+          paneHistory: new Map([["p1", { ansi: "old", savedAt: SAVED_AT }]]),
+        });
+        expect((terminals.hosts.get("p1") as FakeTerminalHost).mirrorWrites).toHaveLength(1);
+      });
     });
   });
 

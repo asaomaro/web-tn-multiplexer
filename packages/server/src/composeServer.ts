@@ -9,13 +9,15 @@ import { NodePtyBackend } from "./pty/NodePtyBackend.js";
 import { LinuxProcessInspector } from "./platform/LinuxProcessInspector.js";
 import { WindowsProcessInspector } from "./platform/WindowsProcessInspector.js";
 import type { ProcessInspector } from "./platform/ProcessInspector.js";
-import { DefaultTerminalManager } from "./terminal/TerminalManager.js";
+import { DefaultTerminalManager, type TerminalManager } from "./terminal/TerminalManager.js";
 import { SessionModel } from "./session/SessionModel.js";
 import { SessionService } from "./session/SessionService.js";
 import { makeNewCwdDeps } from "./session/newCwd.js";
 import { DefaultPersistScheduler } from "./session/PersistScheduler.js";
 import { FsSessionFile, type SessionFileData } from "./persist/SessionFile.js";
 import { FsAuthFile } from "./persist/AuthFile.js";
+import { FsPaneHistoryFile, type PaneHistoryEntry } from "./persist/PaneHistoryFile.js";
+import { PaneHistoryRecorder } from "./session/PaneHistoryRecorder.js";
 import { StateDirInUseError, StateDirLock } from "./persist/StateDirLock.js";
 import { DefaultAuthService } from "./auth/AuthService.js";
 import { DefaultOriginPolicy } from "./auth/OriginPolicy.js";
@@ -46,6 +48,8 @@ export interface ComposedServer {
   session: SessionService;
   gitPoller: DefaultGitInfoPoller;
   persist: DefaultPersistScheduler;
+  /** pane の端末（結合テストで pane へ書き、ミラーを読むため。20260926-screen-history-replay）。 */
+  terminals: TerminalManager;
   /** 起動時の判定ルール読み込みの結果（smoke・結合テスト用。design「起動確認」・02-agent-detection T10）。 */
   manifestStore: ManifestStore;
   logger: Logger;
@@ -91,7 +95,11 @@ function agentHookScriptFor(): string {
 }
 
 /** 起動オプションから、部品をすべて組み立てる（composition root）。`main.ts` と `smoke.ts` の両方から使う。 */
-export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServer> {
+export async function composeServer(
+  rawArgs: RawServeArgs,
+  /** テスト用の差し替え（結合テストが定期保存を短い間隔で観測する。20260926-screen-history-replay）。 */
+  internal: { paneHistorySaveIntervalMs?: number } = {},
+): Promise<ComposedServer> {
   const options = resolveServeOptions(rawArgs);
   const logger = new FileLogger(join(options.stateDir, "server.log"));
 
@@ -171,6 +179,13 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
     logger,
   });
 
+  // 画面履歴（`--pane-history`。20260926-screen-history-replay）。ファイルは有効・無効のどちらでも扱う（無効なら起動時に消す）。
+  // 保存の係は有効のときだけ作る（design「起動」「停止」）。
+  const paneHistoryFile = new FsPaneHistoryFile(options.stateDir);
+  const paneHistory = options.paneHistory
+    ? new PaneHistoryRecorder({ file: paneHistoryFile, terminals, paneIds: () => session.snapshot().panes.map((p) => p.id), logger })
+    : undefined;
+
   const gitRunner = new ChildProcessGitRunner();
   const gitPoller = new DefaultGitInfoPoller(session, gitRunner, undefined, bus); // 最初の pane の場所の変化にすぐ気づく（20260926-workspace-label-follow-cwd）
   // worktree の一覧と作成（20260920-git-worktree-actions）。`GitInfoPoller` と同じ runner を使い回す。
@@ -200,11 +215,38 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   /** 公式フック連携の report を受け取るローカル socket（`listen()` で起動、`close()` で閉じる）。 */
   let agentReportSocket: AgentReportSocket | undefined;
 
+  /** 無効なら消して undefined。有効なら読み、使えなければ（無い・大きすぎる・壊れている・読めない）ログに残して undefined（AC4・AC7）。 */
+  async function loadPaneHistory(): Promise<ReadonlyMap<string, PaneHistoryEntry> | undefined> {
+    if (!options.paneHistory) {
+      await clearPaneHistory("pane history disabled");
+      return undefined;
+    }
+    try {
+      const result = await paneHistoryFile.load();
+      if (result.kind === "ok") return result.panes;
+      if (result.kind === "too_large") logger.warn("session-history.json is too large; restoring without pane history", { bytes: result.bytes });
+      if (result.kind === "corrupt") logger.warn("session-history.json was corrupt; restoring without pane history", { reason: result.reason });
+    } catch (err) {
+      logger.warn("cannot read session-history.json; restoring without pane history", { error: err instanceof Error ? err.message : String(err) });
+    }
+    return undefined;
+  }
+
+  /** `session-history.json` を消す。消せなくても起動は続ける（decisions D6）。 */
+  async function clearPaneHistory(why: string): Promise<void> {
+    try {
+      if (await paneHistoryFile.clear()) logger.info("removed session-history.json", { reason: why });
+    } catch (err) {
+      logger.warn("cannot remove session-history.json", { reason: why, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   return {
     httpServer,
     session,
     gitPoller,
     persist,
+    terminals,
     manifestStore,
     logger,
     options,
@@ -251,12 +293,16 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
         // 3. 起動時の復元（design「起動と再起動後の復元」）。
         const loaded = await sessionFile.load();
         if (loaded.kind === "ok") {
-          await session.restore(loaded.data);
+          await session.restore(loaded.data, { paneHistory: await loadPaneHistory() });
         } else {
           if (loaded.kind === "corrupt") logger.warn("session.json was corrupt; starting fresh", { backupPath: loaded.backupPath });
+          // 新しく始める起動では pane の id を採番し直すので、古い画面履歴を新しい pane に取り違えないよう消す（AC5）。
+          // 無効のとき（下の `loadPaneHistory` と同じ）も消す。
+          await clearPaneHistory(options.paneHistory ? "session.json was not restored" : "pane history disabled");
           await session.ensureNotEmpty();
         }
         sessionLoaded = true;
+        paneHistory?.start(internal.paneHistorySaveIntervalMs);
         // 4. poller。
         gitPoller.start();
         agentMonitor.start();
@@ -267,6 +313,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
         // 失敗した起動はロックを放す（`main` は close() を呼ばずに終わる）。放す前に、復元を済ませていない状態の保存の
         // 予約を取り消す（ロックを放した後に session.json を書かない）。
         if (!sessionLoaded) persist.cancel();
+        paneHistory?.stop();
         await agentReportSocket?.close();
         await lock.release();
         throw err;
@@ -282,10 +329,14 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
         // agent/AgentMonitor.ts 参照）。
         await agentMonitor.stop();
         gitPoller.stop();
+        // 画面履歴の定期保存は最初に止める（この後の flush が投げても、ロックを放した後にタイマーが残って書かない。T9 の独立点検）。
+        paneHistory?.stop();
         // 復元を済ませる前（待ち受けに失敗した・復元の途中で失敗した起動）の状態で session.json を上書きしない（D102）。
         // 復元の途中の保存の予約（シェルが猶予中に終わった pane を閉じた等）も取り消す。
         if (sessionLoaded) await persist.flush();
         else persist.cancel();
+        // 画面履歴は端末を捨てる前に取り直して書く（design「停止」）。失敗しても投げない（AC13）。
+        if (sessionLoaded) await paneHistory?.save({ force: true });
         for (const pane of session.snapshot().panes) terminals.dispose(pane.id);
         // 繋がったままの WebSocket を明示的に閉じる（レビュー指摘。無いと httpServer.server.close() が
         // 永久にコールバックを呼ばない）。

@@ -1,6 +1,7 @@
 import { DEFAULT_THEME, TERMINAL_PALETTES } from "@wtm/protocol";
 import { describe, expect, it } from "vitest";
 import { XtermMirror, parseOsc7 } from "./Mirror.js";
+import { sanitizeHistoryAnsi } from "./historyAnsi.js";
 
 function writeAndWait(mirror: XtermMirror, data: string): Promise<void> {
   return new Promise((resolve) => mirror.write(data, resolve));
@@ -366,6 +367,90 @@ describe("XtermMirror — inputModes / flush（20260926-agent-prompt-send-keys�
     expect(mirror.inputModes().bracketedPaste).toBe(false);
     await mirror.flush();
     expect(mirror.inputModes().bracketedPaste).toBe(true);
+    mirror.dispose();
+  });
+});
+
+describe("XtermMirror.historyAnsi（画面履歴として保存する内容。20260926-screen-history-replay）", () => {
+  it("通常バッファの最後の空でない行までを色つきで返し、モードとカーソルの位置合わせは含めない（AC1）", async () => {
+    const mirror = new XtermMirror(20, 5, 1000);
+    await writeAndWait(
+      mirror,
+      `\x1b[31mred\x1b[0m line\r\n${"x".repeat(45)}\r\n\r\nlast\r\n$ \x1b[?2004h\x1b[?1h`,
+    );
+    const ansi = mirror.historyAnsi();
+    expect(ansi).toContain("\x1b[31mred");
+    expect(ansi).not.toContain("\x1b[?"); // モード（bracketed paste・カーソルキー）を含めない
+    // eslint-disable-next-line no-control-regex -- 絶対位置の指定（CUP）の形を確かめる
+    expect(ansi).not.toMatch(/\x1b\[\d+;\d+H/); // 絶対位置の指定を含めない
+    expect(sanitizeHistoryAnsi(ansi)).toBe(ansi); // 安全化で何も失わない（decisions D4）
+
+    // 幅の違う端末へ流しても、行の区切りと内容は同じ（折り返しの位置だけが変わる。research F3）。
+    const replay = new XtermMirror(30, 6, 1000);
+    await writeAndWait(replay, ansi);
+    expect(replay.plainText()).toBe(mirror.plainText());
+    mirror.dispose();
+    replay.dispose();
+  });
+
+  it("代替画面（vim・less 等）の中でも通常バッファの側を返す（AC1）", async () => {
+    const mirror = new XtermMirror(40, 5, 1000);
+    // 通常バッファの最後の行（"$ last"）を代替画面の中身より下の行に置く——読む先が代替画面なら最後の行を取りこぼす。
+    await writeAndWait(mirror, "normal-history\r\n2\r\n3\r\n$ last\x1b[?1049h\x1b[Halt-screen-app");
+    const ansi = mirror.historyAnsi();
+    expect(ansi).toBe("normal-history\r\n2\r\n3\r\n$ last");
+    expect(ansi).not.toContain("alt-screen-app");
+    expect(ansi).not.toContain("\x1b[?1049h");
+    mirror.dispose();
+  });
+
+  it("最後の空でない行までを返し、カーソルを戻す移動も末尾の空行も含めない（区切りの行を上書きしない）", async () => {
+    // カーソルを画面の途中へ戻した状態（プロンプトの再描画等）。位置合わせを含めると、後ろに足す区切りの行が上の行を上書きする。
+    const moved = new XtermMirror(20, 5, 1000);
+    await writeAndWait(moved, "one\r\ntwo\r\nthree\x1b[2A\r");
+    expect(moved.historyAnsi()).toBe("one\r\ntwo\r\nthree");
+    moved.dispose();
+
+    // スクロールバックがあり、末尾に空行が続く状態。
+    const trailing = new XtermMirror(20, 3, 1000);
+    await writeAndWait(trailing, "1\r\n2\r\n3\r\n4\r\n5\r\n\r\n\r\n");
+    expect(trailing.historyAnsi()).toBe("1\r\n2\r\n3\r\n4\r\n5");
+    trailing.dispose();
+  });
+
+  it("先頭の 1 行だけが空でなければ、その 1 行を返す", async () => {
+    const mirror = new XtermMirror(40, 5, 1000);
+    await writeAndWait(mirror, "hello");
+    expect(mirror.historyAnsi()).toBe("hello");
+    mirror.dispose();
+  });
+
+  it("空でない行が無ければ空", async () => {
+    const mirror = new XtermMirror(40, 5, 1000);
+    await writeAndWait(mirror, "\r\n\r\n");
+    expect(mirror.historyAnsi()).toBe("");
+    mirror.dispose();
+  });
+
+  it("安全化した内容を流しても、問い合わせに応答せず、端末のモードもタイトルも変わらない（AC8）", async () => {
+    const hostile =
+      "shown\x1b[c\x1b[6n\x1b]11;?\x07\x1b[?996n\x1b[?2004h\x1b[?1h\x1b]0;evil\x07\x9b6n\x1bP$qm\x1b\\\r\n";
+    // 対照：安全化しなければ応答が出る（この確かめ方が意味を持つこと）。
+    const raw = new XtermMirror(40, 5, 1000);
+    const rawResponses: string[] = [];
+    raw.onResponse((d) => rawResponses.push(d));
+    await writeAndWait(raw, hostile);
+    expect(rawResponses.length).toBeGreaterThan(0);
+    raw.dispose();
+
+    const mirror = new XtermMirror(40, 5, 1000);
+    const responses: string[] = [];
+    mirror.onResponse((d) => responses.push(d));
+    await writeAndWait(mirror, sanitizeHistoryAnsi(hostile));
+    expect(responses).toEqual([]);
+    expect(mirror.inputModes()).toEqual({ bracketedPaste: false, applicationCursorKeys: false });
+    expect(mirror.title()).toBe("");
+    expect(mirror.plainText()).toContain("shown");
     mirror.dispose();
   });
 });

@@ -27,6 +27,11 @@ export interface ServeOptions {
   shell: string | undefined;
   /** 20260924-worktree-dir-config。既定値の解決はしない（`shell` と同じ。既定は `defaultWorktreeRoot()` 側に委ねる）。 */
   worktreeDir: string | undefined;
+  /**
+   * `--pane-history`（20260926-screen-history-replay）。pane の画面とスクロールバックを `session-history.json` に保存し、起動し直したときに
+   * 流し直す。既定は無効（pane の出力には秘密が含まれうる。herdr の `[experimental] pane_history` と同じ既定）。
+   */
+  paneHistory: boolean;
 }
 
 export interface RawServeArgs {
@@ -40,6 +45,7 @@ export interface RawServeArgs {
   scrollback?: string;
   shell?: string;
   worktreeDir?: string;
+  paneHistory?: boolean;
 }
 
 /** Linux/macOS は XDG の state ディレクトリ、Windows は `%LOCALAPPDATA%`（design「起動オプション」）。 */
@@ -156,6 +162,7 @@ export function resolveServeOptions(args: RawServeArgs, env: NodeJS.ProcessEnv =
     scrollbackLines: parseScrollback(args.scrollback),
     shell: args.shell,
     worktreeDir: args.worktreeDir,
+    paneHistory: args.paneHistory === true,
   };
 }
 

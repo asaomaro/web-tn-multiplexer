@@ -42,6 +42,12 @@ export interface Mirror {
    * 各行の右端の空白と末尾の空行を落とす。代替画面（vim・less 等）の中でも通常バッファを読む（履歴はそこにしか無い）。
    */
   plainText(): string;
+  /**
+   * 画面履歴として保存する内容（20260926-screen-history-replay）。通常バッファの先頭から最後の空でない行までを、色・属性つきの ANSI で返す
+   * （空でない行が無ければ ""）。代替画面（vim・less 等）の中でも通常バッファを読む。端末のモードと最後のカーソルの位置合わせは含めない
+   * ——古いプロセスは戻らないので、流し直す先（新しいシェル）の端末のモードを変えない（design「`Mirror.historyAnsi()`」）。
+   */
+  historyAnsi(): string;
   title(): string;
   progress(): string | null;
   cwdHint(): string | null;
@@ -206,6 +212,20 @@ export class XtermMirror implements Mirror {
     }
     while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
     return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+  }
+
+  historyAnsi(): string {
+    const buf = this.term.buffer.normal;
+    let last = -1;
+    for (let y = buf.length - 1; y >= 0; y--) {
+      if ((buf.getLine(y)?.translateToString(true) ?? "") !== "") {
+        last = y;
+        break;
+      }
+    }
+    if (last < 0) return "";
+    // `range` を渡すと通常バッファの指定行だけを、最後のカーソルの位置合わせ無しで出す（research F2）。
+    return this.serializeAddon.serialize({ range: { start: 0, end: last }, excludeAltBuffer: true, excludeModes: true });
   }
 
   title(): string {

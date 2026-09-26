@@ -23,6 +23,25 @@ describe("startupLines（起動時の表示。D101・D102・D103）", () => {
     ]);
   });
 
+  it("--pane-history なら listening（と session）の次の行に、画面履歴を保存することと保存先を出す（20260926-screen-history-replay の AC11）", () => {
+    const lines = startupLines({
+      ...base,
+      host: "127.0.0.1",
+      scheme: "http",
+      port: 7780,
+      freshToken: undefined,
+      session: { name: "work", stateDir: "/s/sessions/work" },
+      paneHistoryPath: "/s/sessions/work/session-history.json",
+    });
+    expect(lines.slice(0, 3)).toEqual([
+      "wtm: listening on 127.0.0.1 port 7780 (http)",
+      "wtm: session work（状態ディレクトリ: /s/sessions/work）",
+      "wtm: 画面履歴を保存します（--pane-history）: /s/sessions/work/session-history.json。pane の出力（秘密を含みうる）がディスクに残ります",
+    ]);
+    // 無ければ出さない。
+    expect(startupLines({ ...base, host: "127.0.0.1", scheme: "http", port: 7780, freshToken: undefined }).join("\n")).not.toContain("画面履歴");
+  });
+
   it("名前付き session なら listening の次の行に session 名と状態ディレクトリを出す（20260926-named-session）", () => {
     const lines = startupLines({
       ...base,

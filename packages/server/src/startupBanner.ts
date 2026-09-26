@@ -13,6 +13,8 @@ export interface StartupInfo {
   freshToken: string | undefined;
   /** 名前付き session で起動したときだけ（20260926-named-session）。 */
   session?: NamedSessionInfo | undefined;
+  /** `--pane-history` で起動したときだけ、画面履歴の保存先（20260926-screen-history-replay）。 */
+  paneHistoryPath?: string | undefined;
 }
 
 /**
@@ -25,6 +27,9 @@ export interface StartupInfo {
 export function startupLines(info: StartupInfo): string[] {
   const lines = [`wtm: listening on ${formatUrlHost(info.host)} port ${info.port} (${info.scheme})`];
   if (info.session !== undefined) lines.push(`wtm: session ${info.session.name}（状態ディレクトリ: ${info.session.stateDir}）`);
+  if (info.paneHistoryPath !== undefined) {
+    lines.push(`wtm: 画面履歴を保存します（--pane-history）: ${info.paneHistoryPath}。pane の出力（秘密を含みうる）がディスクに残ります`);
+  }
   const urls = accessUrls(info.scheme, info.host, info.port, info.lanAddresses, info.extraOrigins);
   if (urls.length === 0) {
     lines.push("wtm: 開ける URL を表示できません（ゾーン付きの IPv6 アドレス等は URL にできません）。ブラウザで開く URL を --origin で渡すと、ここに表示します");

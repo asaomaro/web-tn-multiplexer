@@ -6,14 +6,15 @@ import { type CommandIo, runSessionDelete, runSessionList, runTokenReset } from 
 import { parseArgs } from "./cliArgs.js";
 import { OsNetworkInfo } from "./infra/OsNetworkInfo.js";
 import { lastChanceTokenLines, startupLines } from "./startupBanner.js";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { PANE_HISTORY_FILE_NAME } from "./persist/PaneHistoryFile.js";
 import { formatUrlHost } from "./util/net.js";
 
 function printHelp(): void {
   console.log(
     [
       "wtm serve [--host H] [--port P] [--cert FILE] [--key FILE] [--origin ORIGIN]...",
-      "          [--state-dir DIR] [--session NAME] [--scrollback N] [--shell PATH] [--worktree-dir DIR]",
+      "          [--state-dir DIR] [--session NAME] [--scrollback N] [--shell PATH] [--worktree-dir DIR] [--pane-history]",
       "wtm token reset [--state-dir DIR] [--session NAME]",
       "wtm session list [--state-dir DIR] [--json]",
       "wtm session delete NAME [--state-dir DIR] [--json]",
@@ -100,6 +101,7 @@ async function runServe(args: RawServeArgs): Promise<void> {
       lanAddresses: new OsNetworkInfo().lanAddresses(),
       freshToken: server.freshToken,
       session: sessionInfo,
+      paneHistoryPath: server.options.paneHistory ? join(server.options.stateDir, PANE_HISTORY_FILE_NAME) : undefined,
     });
     for (const line of lines) console.log(line);
     tokenShown = true; // `startupLines` は作った token を必ず含む（URL が 1 つも無くても）

@@ -747,3 +747,170 @@ function waitForEvent(
     ws.on("message", onMessage);
   });
 }
+
+// 20260926-screen-history-replay：`--pane-history`（design「起動」「停止」）。実 PTY と実シェルを使う。
+describe.skipIf(process.platform === "win32")("composeServer — 画面履歴（--pane-history）", () => {
+  const cleanups: (() => Promise<void>)[] = [];
+  afterEach(async () => {
+    for (const fn of cleanups.splice(0)) await fn();
+  });
+
+  const HISTORY = "session-history.json";
+  const MARKER = "前回のセッションの画面";
+
+  async function until(what: string, cond: () => boolean | Promise<boolean>, timeoutMs = 15_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!(await cond())) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  async function start(stateDir: string, paneHistory: boolean, internal: { paneHistorySaveIntervalMs?: number } = {}) {
+    const server = await composeServer(
+      { host: "127.0.0.1", port: String(await getFreePort()), stateDir, origin: [], ...(paneHistory ? { paneHistory } : {}) },
+      internal,
+    );
+    await server.listen();
+    return server;
+  }
+
+  function screenOf(server: Awaited<ReturnType<typeof composeServer>>, paneId: string): string {
+    return server.terminals.get(paneId)?.mirror.plainText() ?? "";
+  }
+
+  async function tempStateDir(): Promise<string> {
+    const dir = await makeTempDir("wtm-history-it-");
+    cleanups.push(() => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    return dir;
+  }
+
+  it("停止時に保存し（0600・色つき）、起動し直すと前回の画面・区切りの行・新しいシェルの出力がこの順に並ぶ（AC1・AC2・AC6・AC12）", async () => {
+    const stateDir = await tempStateDir();
+    const first = await start(stateDir, true);
+    const paneId = first.session.snapshot().panes[0]!.id;
+    let otherId: string;
+    try {
+      // 打ったコマンドの行には `HIST_%s` しか出ないので、`HIST_MARK` は出力の側にだけ現れる。
+      first.terminals.get(paneId)!.write("printf '\\033[31mHIST_%s\\033[0m\\n' MARK\r");
+      await until("the output in the first server", () => screenOf(first, paneId).includes("HIST_MARK"));
+      // もう 1 つの pane（後で画面履歴から項目を除き、「保存した画面が無い pane」として復元させる。AC12）。
+      otherId = (await first.session.createWorkspace(process.cwd(), "other")).pane.id;
+      first.terminals.get(otherId)!.write("echo OTHER_$((1+1))\r");
+      await until("the output in the other pane", () => screenOf(first, otherId).includes("OTHER_2"));
+    } finally {
+      await first.close();
+    }
+
+    const path = join(stateDir, HISTORY);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    const saved = JSON.parse(await readFile(path, "utf8")) as { schema: number; panes: { paneId: string; ansi: string }[] };
+    const entry = saved.panes.find((p) => p.paneId === paneId);
+    expect(entry?.ansi).toContain("\x1b[31mHIST_MARK"); // 色つきで保存している
+    expect(saved.panes.map((p) => p.paneId)).toContain(otherId!);
+    saved.panes = saved.panes.filter((p) => p.paneId !== otherId!);
+    await writeFile(path, JSON.stringify(saved));
+
+    const second = await start(stateDir, true);
+    cleanups.unshift(() => second.close());
+    const host = second.terminals.get(paneId)!;
+    host.write("echo NEW_$((20+22))\r");
+    await until("the new shell's output", () => screenOf(second, paneId).includes("NEW_42"));
+    const screen = screenOf(second, paneId);
+    const hist = screen.indexOf("HIST_MARK");
+    const marker = screen.indexOf(MARKER);
+    const fresh = screen.lastIndexOf("NEW_42");
+    expect(hist).toBeGreaterThanOrEqual(0);
+    expect(marker).toBeGreaterThan(hist);
+    expect(fresh).toBeGreaterThan(marker);
+    expect(screen.indexOf(MARKER, marker + 1)).toBe(-1); // 区切りは 1 回だけ
+
+    // 保存した画面が無い pane は、区切りの行も出さずに空の新しいシェル（AC12）。
+    expect(second.session.snapshot().panes.map((p) => p.id)).toContain(otherId!);
+    expect(screenOf(second, otherId!)).not.toContain(MARKER);
+    expect(screenOf(second, otherId!)).not.toContain("OTHER_2");
+  }, 60_000);
+
+  it("停止を待たずに定期的に保存し、停止の後は書かない（AC3。間隔は差し替えて短くする）", async () => {
+    const stateDir = await tempStateDir();
+    const server = await start(stateDir, true, { paneHistorySaveIntervalMs: 100 });
+    const paneId = server.session.snapshot().panes[0]!.id;
+    const path = join(stateDir, HISTORY);
+    let closed = false;
+    try {
+      server.terminals.get(paneId)!.write("echo PERIODIC_$((6*7))\r");
+      await until("the periodic save", async () => existsSync(path) && (await readFile(path, "utf8")).includes("PERIODIC_42"));
+      await server.close();
+      closed = true;
+      await rm(path);
+      await new Promise((resolve) => setTimeout(resolve, 400)); // 間隔の 4 倍
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      if (!closed) await server.close();
+    }
+  }, 60_000);
+
+  it("--pane-history 無しでは作らず、起動時に既存のものを消し、流さない（AC4）", async () => {
+    const stateDir = await tempStateDir();
+    const first = await start(stateDir, false);
+    const paneId = first.session.snapshot().panes[0]!.id;
+    await first.close();
+    expect(existsSync(join(stateDir, HISTORY))).toBe(false);
+
+    // 以前に有効で保存した分が残っている状態。
+    await writeFile(join(stateDir, HISTORY), JSON.stringify({ schema: 1, savedAt: "x", panes: [{ paneId, savedAt: "x", ansi: "STALE_SECRET" }] }));
+    const second = await start(stateDir, false);
+    try {
+      expect(existsSync(join(stateDir, HISTORY))).toBe(false);
+      expect(screenOf(second, paneId)).not.toContain("STALE_SECRET");
+    } finally {
+      await second.close();
+    }
+    expect(existsSync(join(stateDir, HISTORY))).toBe(false);
+  }, 60_000);
+
+  it.each([
+    ["無い", null],
+    ["壊れている", "{broken"],
+  ])("session.json が%sときは、画面履歴を新しい pane に流さずに消す（AC5）", async (_name, sessionJson) => {
+    const stateDir = await tempStateDir();
+    if (sessionJson !== null) await writeFile(join(stateDir, "session.json"), sessionJson);
+    // 新しく始める起動の最初の pane と同じ id（p1）の古い画面。
+    await writeFile(join(stateDir, HISTORY), JSON.stringify({ schema: 1, savedAt: "x", panes: [{ paneId: "p1", savedAt: "x", ansi: "STALE_SCREEN" }] }));
+    const server = await start(stateDir, true);
+    cleanups.unshift(() => server.close());
+    const paneId = server.session.snapshot().panes[0]!.id;
+    expect(paneId).toBe("p1");
+    expect(existsSync(join(stateDir, HISTORY))).toBe(false);
+    expect(screenOf(server, paneId)).not.toContain("STALE_SCREEN");
+  }, 60_000);
+
+  it.each([
+    ["壊れている", "{broken", "was corrupt"],
+    ["形が合わない", JSON.stringify({ schema: 1, savedAt: "x", panes: "nope" }), "was corrupt"],
+  ])("session-history.json が%sときも起動し、画面履歴なしで復元してログに残す（AC7）", async (_name, content, logText) => {
+    const stateDir = await tempStateDir();
+    const first = await start(stateDir, true);
+    const paneId = first.session.snapshot().panes[0]!.id;
+    await first.close();
+    await writeFile(join(stateDir, HISTORY), content);
+
+    const second = await start(stateDir, true);
+    cleanups.unshift(() => second.close());
+    expect(second.session.snapshot().panes.map((p) => p.id)).toContain(paneId);
+    expect(screenOf(second, paneId)).not.toContain(MARKER);
+    expect(await readFile(join(stateDir, "server.log"), "utf8")).toContain(logText);
+    expect((await readdir(stateDir)).filter((n) => n.startsWith("session-history") && n !== HISTORY)).toEqual([]); // 退避コピーを作らない
+  }, 60_000);
+
+  it("画面履歴を書けなくても停止は続き、session.json は保存され、失敗はログに残る（AC13）", async () => {
+    const stateDir = await tempStateDir();
+    const server = await start(stateDir, true);
+    await server.session.createWorkspace(process.cwd(), "second-ws");
+    await mkdir(join(stateDir, HISTORY)); // 同じ名前のディレクトリがあるので rename で置き換えられない
+    await server.close();
+    const session = JSON.parse(await readFile(join(stateDir, "session.json"), "utf8")) as { workspaces: { label: string }[] };
+    expect(session.workspaces.map((w) => w.label)).toContain("second-ws");
+    expect(await readFile(join(stateDir, "server.log"), "utf8")).toContain("pane history save failed");
+  }, 60_000);
+});
