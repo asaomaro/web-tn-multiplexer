@@ -9,6 +9,11 @@ import { XtermMirror, type InputModes, type Mirror } from "./Mirror.js";
  * `build` はミラーの flush 後のモードで呼ばれ、返した部分を `delayMs` ずつ間を置いて順に書く。
  */
 export interface ModalInput {
+  /**
+   * flush の後・`build` の前に待つ確かめ直し（任意。20260926-agent-start の review ラウンド 1）。この間に届いた入力は後回しになるので、
+   * ここで確かめた状態は他の入力に崩されないまま書き込みに進む。reject すれば何も書かずに `writeModal` を reject する。
+   */
+  prepare?(): Promise<void>;
   build(modes: InputModes): string[];
   delayMs: number;
 }
@@ -129,6 +134,10 @@ export class DefaultTerminalHost implements TerminalHost {
     try {
       await this.mirror.flush();
       if (this.activeModal !== job) return; // 待っている間に終了した（closeInput が reject 済み）
+      if (job.input.prepare) {
+        await job.input.prepare();
+        if (this.activeModal !== job) return;
+      }
       const parts = job.input.build(this.mirror.inputModes());
       for (let i = 0; i < parts.length; i++) {
         if (i > 0) {

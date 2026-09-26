@@ -33,11 +33,11 @@ type AgentPromptCmd = Extract<Command, { kind: "agent-prompt" }>;
 type AgentSendKeysCmd = Extract<Command, { kind: "agent-send-keys" }>;
 type AgentRenameCmd = Extract<Command, { kind: "agent-rename" }>;
 
-function workspacesByTab(snapshot: SessionSnapshot): Map<string, string> {
+export function workspacesByTab(snapshot: SessionSnapshot): Map<string, string> {
   return new Map(snapshot.tabs.map((t) => [t.id, t.workspaceId]));
 }
 
-function viewOf(target: AgentPane, workspaces: Map<string, string>): AgentView {
+export function viewOf(target: AgentPane, workspaces: Map<string, string>): AgentView {
   return toAgentView(
     {
       paneId: target.paneId,
@@ -68,7 +68,7 @@ function notRunning(): RpcFailure {
 }
 
 /** hello の応答の直後から届いたイベントを溜めておき、待ちを始めたら溜めた分から順に渡す。 */
-class EventFeed {
+export class EventFeed {
   private readonly buffered: ServerEvent[] = [];
   private sink: ((evt: ServerEvent) => void) | null = null;
 

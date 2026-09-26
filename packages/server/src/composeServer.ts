@@ -38,6 +38,7 @@ import { HttpServer } from "./http/HttpServer.js";
 import { WsServerWs } from "./ws/WsServerWs.js";
 import { WsGateway } from "./ws/WsGateway.js";
 import { AgentMonitor } from "./agent/AgentMonitor.js";
+import { AgentStarter } from "./agent/AgentStarter.js";
 import { DefaultManifestStore, type ManifestStore } from "./agent/ManifestStore.js";
 import { FsManifestSource } from "./infra/FsManifestSource.js";
 
@@ -188,7 +189,8 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   palettes.attach({ getPane: (id) => session.getPane(id), getTab: (id) => session.getTab(id), clients });
   const sizeAuthority = new DefaultSizeAuthority(clients, session, bus); // bus: pane.attach_changed（20260926-pane-direct-connect）
   const surface = new ControlSurface(logger);
-  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees, agentIntegrations, gitPoller });
+  const agentStarter = new AgentStarter({ session, terminals, processInspector }); // 20260926-agent-start
+  registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees, agentIntegrations, gitPoller, agentStarter });
   const wsServer = new WsServerWs(httpServer.server, originRejections, auth.authorizeUpgrade, logger);
   // `/ws` は `listen()` の最後（復元と poller の開始の後）まで受け付けない（D102）。
   wsServer.setReady(false);

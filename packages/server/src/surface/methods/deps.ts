@@ -5,6 +5,7 @@ import type { ClientRegistry } from "../../clients/ClientRegistry.js";
 import type { SizeAuthority } from "../../clients/SizeAuthority.js";
 import type { TerminalManager } from "../../terminal/TerminalManager.js";
 import type { AgentIntegrationService } from "../../agent/AgentIntegrationService.js";
+import type { AgentStarter } from "../../agent/AgentStarter.js";
 
 /** 方式のハンドラが使う部品一式（architecture.md「surface/methods/*.ts」の依存）。 */
 export interface MethodDeps {
@@ -18,4 +19,6 @@ export interface MethodDeps {
   agentIntegrations: AgentIntegrationService;
   /** workspace.create 直後の即時ポーリング用（20260925-workspace-git-immediate）。 */
   gitPoller: GitInfoPoller;
+  /** `agent.start`（20260926-agent-start）。無ければ `agent.start` を登録しない（decisions.md D7）。 */
+  agentStarter?: AgentStarter;
 }

@@ -29,6 +29,14 @@ export type ErrorCode =
   // エージェントの名前（20260926-agent-start-rename）。herdr と同じ code。
   | "invalid_agent_name"
   | "agent_name_taken"
+  // エージェントの起動（20260926-agent-start）。unsupported_agent_shell 以外は herdr と同じ code。
+  | "unsupported_agent_kind"
+  | "invalid_agent_argument"
+  | "invalid_agent_timeout"
+  | "agent_pane_not_found"
+  | "agent_pane_busy"
+  | "unsupported_agent_shell"
+  | "agent_start_input_failed"
   // pane への直結（20260926-pane-direct-connect）。名前は herdr の理由文（already has an attached client）に対応させる。
   | "pane_attached"
   | "not_attached";

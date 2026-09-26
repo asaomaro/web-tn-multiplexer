@@ -1,4 +1,10 @@
-import { AgentPromptParams, AgentRenameParams, AgentSendKeysParams, RpcError } from "@wtm/protocol";
+import {
+  AgentPromptParams,
+  AgentRenameParams,
+  AgentSendKeysParams,
+  AgentStartParams,
+  RpcError,
+} from "@wtm/protocol";
 import type { AgentInfo } from "@wtm/protocol";
 import {
   AGENT_PROMPT_SUBMIT_DELAY_MS,
@@ -124,4 +130,16 @@ export function registerAgentMethods(surface: ControlSurface, deps: MethodDeps):
       agent: deps.session.renameAgent(params.paneId, params.instanceId, params.name),
     }),
   });
+
+  // 空いているシェル pane でエージェントを起動する（20260926-agent-start）。打ち込んだ時点で返す。
+  const starter = deps.agentStarter;
+  if (starter) {
+    surface.register("agent.start", {
+      schema: AgentStartParams,
+      // 起動したエージェントが操作したクライアントの大きさで始まるよう、打ち込む前に記録する。agent.prompt と同じく、
+      // 検査を通った要求だけを記録する（拒否した busy の再試行等は記録しない。review ラウンド 1）。
+      handler: (ctx, params) =>
+        starter.start(params, () => deps.sizeAuthority.noteInteraction(ctx.clientId, params.paneId)),
+    });
+  }
 }
