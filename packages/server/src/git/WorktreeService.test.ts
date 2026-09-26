@@ -16,7 +16,7 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
 }
 
 /**
- * `getWorkspace`（一覧・作成用）に加え、20260924-worktree-remove から `snapshot`（cwd→workspace
+ * `identityCwdOf`・`getWorkspace`（一覧・作成用。いまの場所と開いた場所——20260926-workspace-label-follow-cwd）に加え、20260924-worktree-remove から `snapshot`（cwd→workspace
  * の逆引き）・`closeWorkspace`（実際には閉じず、呼ばれた id を記録するだけ）も持つ代役
  * （git の振る舞いに集中するため）。`openWorkspaces` は「今開いている workspace」として
  * `snapshot().workspaces` に載せる。
@@ -24,6 +24,7 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
 function sessionWith(cwd: string | null, openWorkspaces: Workspace[] = []): SessionService & { closedWorkspaceIds: string[] } {
   const closedWorkspaceIds: string[] = [];
   return {
+    identityCwdOf: (): string | undefined => (cwd === null ? undefined : cwd),
     getWorkspace: (): Workspace | undefined => (cwd === null ? undefined : ({ cwd } as Workspace)),
     snapshot: () => ({ workspaces: openWorkspaces }),
     closeWorkspace: async (id: string) => {
@@ -56,6 +57,30 @@ describe("DefaultWorktreeService（本物の git を使う。既存の GitInfoPo
     expect(out.suggestedBranch).toBe("worktree/brave-river-0000"); // seed=0
     expect(out.worktreeRoot).toBe(root);
     expect(out.entries.map((e) => e.branch)).toEqual(["main"]);
+  });
+
+  // 20260926-workspace-label-follow-cwd（review ラウンド 1）：開いた場所ではなく、最初の pane のいまの場所（サイドバーの git の情報と同じ）で git を走らせる。
+  it("list・create は workspace のいまの場所（identityCwdOf）のリポジトリで行う（開いた場所ではない）", async () => {
+    const plain = await makeTempDir("wtm-worktree-plain-");
+    const session = {
+      getWorkspace: (): Workspace => ({ cwd: plain }) as Workspace, // 開いた場所は git の外
+      identityCwdOf: (): string => repo, // 最初の pane はリポジトリへ移った
+      snapshot: () => ({ workspaces: [] }),
+    } as unknown as SessionService;
+    const svc = new DefaultWorktreeService(session, git, new MemoryLogger(), root, () => 0);
+    expect((await svc.list("w1")).entries.map((e) => e.branch)).toEqual(["main"]);
+    await expect(svc.create("w1", "feature/y")).resolves.toMatchObject({ path: expect.stringContaining("feature-y") });
+  });
+
+  // 最初の pane がいる worktree をその workspace のメニューから消した直後、web は一覧を開き直す——消えた場所では git を起こせない（T6 の点検）。
+  it("いまの場所が消えていれば、開いた場所のリポジトリで行う", async () => {
+    const session = {
+      getWorkspace: (): Workspace => ({ cwd: repo }) as Workspace,
+      identityCwdOf: (): string => join(root, "gone"),
+      snapshot: () => ({ workspaces: [] }),
+    } as unknown as SessionService;
+    const svc = new DefaultWorktreeService(session, git, new MemoryLogger(), root, () => 0);
+    expect((await svc.list("w1")).entries.map((e) => e.branch)).toEqual(["main"]);
   });
 
   it("create：新しいブランチで worktree ができ、一覧に増える", async () => {

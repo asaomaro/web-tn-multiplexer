@@ -60,11 +60,15 @@ pnpm --filter @wtm/e2e test
   起動した場所）で開いてトーストで知らせる。「引き継ぐ」で元の pane の場所が分からない・消えていたときは知らせない（利用者の誤りでは
   ないので）。worktree を開く操作は、方針に関わらず worktree の場所で開く。「いまの場所」の分かり方は OS で違う（Linux は前面の
   プロセスの cwd を読む。macOS と Windows ネイティブはシェルが OSC 7 で知らせた場所だけ——「既知の制約」）。
-- **名前を付けていない workspace は、開いた場所から自動で名前が付く**（herdr と同じ規則。20260921-workspace-auto-label）：
+- **名前を付けていない workspace は、いまの場所から自動で名前が付く**（herdr と同じ規則。20260921-workspace-auto-label）：
   git のリポジトリの中ならその根のフォルダ名（worktree ならその worktree の根）、git の外ならその場所のフォルダ名、ホームなら `~`
   （リポジトリの判定が先——ホームが git のリポジトリ（dotfiles 等）なら `~` ではなくホームのフォルダ名になる）。git のコマンドは使わない
-  （`.git` をたどる）。名前は開いた場所で決まり、`cd` しても変わらない（サーバを起動し直すと、開いた場所から
-  決め直す）。`Ctrl+B W`（workspace の名前を変更）で名前を付けるとその名前のまま残り、**名前を空にして確定すると自動の名前に戻る**。
+  （`.git` をたどる）。**名前とサイドバーの git の情報（ブランチ・ahead/behind）は、最初の tab の最初の pane（左上の pane）の
+  いまの場所に追従する**（20260926-workspace-label-follow-cwd。herdr と同じ）：その pane で別のリポジトリへ `cd` すると、数秒のうちに名前と
+  ブランチの両方がそのリポジトリのものになる。ほかの pane・ほかの tab で `cd` しても変わらない。その pane を閉じる・入れ替える・先頭の tab を
+  閉じる・並べ替えると、新しい左上の pane の場所になる。右クリックメニューの worktree の操作（一覧・作成・削除）も同じ場所のリポジトリで行う。サーバを起動し直すと、止める前にいた場所から決め直す。「いまの場所」の分かり方は
+  新しく開く場所と同じ（Linux は前面のプロセスの cwd。macOS と Windows ネイティブはシェルが OSC 7 で知らせた場所だけ——知らせなければ
+  開いた場所のまま）。`Ctrl+B W`（workspace の名前を変更）で名前を付けるとその名前のまま残り、**名前を空にして確定すると自動の名前に戻る**。
   自動の名前のまま変えずに確定しても、名前は固定されない。worktree を開く・作ると、ブランチ名が付く（付けた名前として残る）。
   以前の版で保存した状態から起動すると、名前が「1」の workspace は自動の名前になる（自分で「1」と付けていた workspace も自動になる）。
 - **テーマはブラウザごとに選べる**（herdr のテーマ。20260921-theme-settings）：設定（`prefix+s`・サイドバーの［メニュー］→「設定」・
@@ -233,16 +237,26 @@ pnpm --filter @wtm/e2e test` が通ることを基準とする（`packages/e2e` 
       ブラウザが先に受けること（AC14 の「効果が無いことが分かる」側）。
 - [ ] workspace の自動の名前（20260921-workspace-auto-label）：設定の「端末」の「新しく開く場所」が「引き継ぐ」（既定）で、ホームが git の
       リポジトリでないこと（`~` を見る手順のため）を前提に、
-      pane で `mkdir -p /tmp/wtm-repo/sub && git -C /tmp/wtm-repo init -q && cd /tmp/wtm-repo/sub` を実行してから `Ctrl+B N`
+      `Ctrl+B v` で分割した右の pane で `mkdir -p /tmp/wtm-repo/sub && git -C /tmp/wtm-repo init -q && cd /tmp/wtm-repo/sub` を実行してから `Ctrl+B N`
       （新しい workspace）。期待：サイドバーの新しい行が `wtm-repo`（`sub` ではなくリポジトリの根の名前。「1」は一度も出ない）。
       同じサーバを別のブラウザ（別のタブでよい）で開いていれば、そちらにも再読み込みなしで `wtm-repo` の行が出る。
       `Ctrl+B W` で名前を `mine` にして Enter → 両方のブラウザで `mine`。もう一度 `Ctrl+B W`（入力欄の下に「空にして確定すると、
       自動の名前…に戻ります」と出る）で名前を消して Enter → 両方で `wtm-repo` に戻る。もう一度 `Ctrl+B W` を開くと「いまは自動の
       名前です。」と出る（何も変えずに Enter しても、自動のまま——固定されない）。
-      `cd /tmp && mkdir -p wtm-plain && cd wtm-plain` → `Ctrl+B N` で `wtm-plain`、`cd ~` → `Ctrl+B N` で `~`。サイドバーの `wtm-plain` の
+      `Ctrl+B v` で分割し、右の pane で `cd /tmp && mkdir -p wtm-plain && cd wtm-plain` → `Ctrl+B N` で `wtm-plain`。もう一度 `Ctrl+B v` で分割し、
+      右の pane で `cd ~` → `Ctrl+B N` で `~`（どちらも分割した pane で `cd` する——左上の pane で `cd` すると、その workspace の名前も移った先に
+      追従する。20260926-workspace-label-follow-cwd）。サイドバーの `wtm-plain` の
       行を右クリックして「名前の変更」で `keep` と付ける（`Ctrl+B W` は表示中の workspace——いまは `~`——が対象）。最後に `wtm serve` を
       止めて `rm -rf /tmp/wtm-repo/.git` してから起動し直す。期待：自動の名前だった `wtm-repo` の workspace は `sub`（git の外になったので
       フォルダ名）になり、`keep` はその名前のまま戻る。
+- [ ] workspace の名前と git の情報の追従（20260926-workspace-label-follow-cwd）：`mkdir -p /tmp/wtm-a /tmp/wtm-b/sub && git -C /tmp/wtm-a init -q -b main
+      && git -c user.name=wtm -c user.email=wtm@example.invalid -C /tmp/wtm-a commit -q --allow-empty -m a && git -C /tmp/wtm-b init -q -b other
+      && git -c user.name=wtm -c user.email=wtm@example.invalid -C /tmp/wtm-b commit -q --allow-empty -m b`
+      を用意し、名前を付けていない workspace の左上の pane で `cd /tmp/wtm-a`。期待：数秒のうちにサイドバーの行が `wtm-a`・ブランチ `main`。
+      `cd /tmp/wtm-b/sub` → `wtm-b`・`other`（同じサーバを開いたほかのブラウザでも再読み込みなしで同じ）。`cd /tmp` → `tmp` になりブランチの行が消える。
+      `Ctrl+B v` で分割し、右の pane で `cd /tmp/wtm-a` しても名前とブランチは変わらない。左の pane を閉じると、数秒のうちに `wtm-a`・`main` になる。
+      `Ctrl+B W` で `mine` と付けてから、残った pane で `cd /tmp/wtm-b` → 名前は `mine` のまま、ブランチだけ `other`。`Ctrl+B W` で名前を消して Enter → `wtm-b`
+      （開いた場所の名前ではない）。最後に `wtm serve` を止めて起動し直す → `wtm-b`・`other` で戻る。
 - [ ] claude・codex 以外のエージェント（AC6。実物で確かめたのは Claude Code と Codex だけ）：`wtm serve` の起動時のログの行
       `{"ts":"…","level":"info","msg":"agent manifests loaded","ok":22,"total":22}` で、判定のルールが 22 種すべて読めている
       ことを確かめる。手元で使っているエージェントがあれば 2〜3 種（例：`gemini`（Gemini CLI）・`opencode`（OpenCode）・
@@ -862,13 +876,14 @@ pnpm --filter @wtm/e2e exec playwright test performance agent-detection --headed
   その pane のメニューを開けない（PC のブラウザから同じ pane のメニューを開いて「右クリックを herdr に戻す」を選ぶか、アプリを
   終える）。
 
-- **macOS と Windows ネイティブでは、新しく開く場所の「引き継ぐ」が `cd` に追従しない（シェルが OSC 7 で知らせない限り）**
+- **macOS と Windows ネイティブでは、新しく開く場所の「引き継ぐ」と、workspace の名前・git の情報が `cd` に追従しない（シェルが OSC 7 で知らせない限り）**
   （20260921-new-terminal-cwd の design D2・D4）。前面のプロセスの cwd を読めるのは Linux（WSL2 を含む）だけで、ほかの OS では
   シェルが OSC 7 で知らせた場所を使い、知らせなければ**元の pane を開いた場所**で開く（以前より元の pane に近い）。Windows の既定の
   `powershell.exe` は OSC 7 を出さない。macOS の zsh が出すかは `wtm serve` の起動のしかたによる（pane は `wtm serve` の環境変数を
   引き継ぐので、ターミナル.app から起動すると `TERM_PROGRAM` が渡り、`/etc/zshrc_Apple_Terminal` が出す。未検証）。`cd` した先で
   開きたければ、プロンプトで OSC 7 を出すようにするか、設定の「新しく開く場所」を「指定した場所」にする。確かめ方は「Windows ネイティブ
-  （WSL2 の母艦の Windows で直接）」の cwd の項目。
+  （WSL2 の母艦の Windows で直接）」の cwd の項目。workspace の名前と git の情報（20260926-workspace-label-follow-cwd）も同じ「いまの場所」を使うので、
+  知らせなければ左上の pane を開いた場所のまま。
 - **git の根を探すのが遅い・止まったファイルシステム（止まった NFS 等）があると、ほかの場所でも自動の名前がフォルダ名になることがある**
   （20260921-workspace-auto-label の decisions D4）。名前を決めるために git の根を探す stat が 200ms で返らなければ、その場所はそれ以上問い合わせず
   フォルダ名にし、ログに `workspace label lookup timed out` が出る。**その stat が返るまでの間は、どの場所でも**（ローカルの正常なリポジトリでも）、

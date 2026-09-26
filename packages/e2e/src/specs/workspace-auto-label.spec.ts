@@ -100,10 +100,15 @@ test("既定の workspace と、リポジトリのサブディレクトリで開
   await expect(spaceLabels(b.page)).toHaveText([defaultName]);
 
   // AC1：サブディレクトリへ移ってから新しい workspace（既定の「引き継ぐ」でその場所に開く）→ リポジトリの根の名前。
+  // **分割した pane で移る**——既定の workspace の左上の pane で `cd` すると、その workspace の名前も移った先に追従する
+  // （20260926-workspace-label-follow-cwd）。ここでは作った workspace の名前だけを見たいので、左上の pane は起動した場所に残す。
   const p1 = a.shown()[0]!;
   await focusTerminal(a.page);
+  await prefixKey(a.page, "v");
+  await expect.poll(() => a.shown().length, { message: "分割した pane が描かれる", timeout: 10_000 }).toBe(2);
+  const p2 = a.shown().find((id) => id !== p1)!;
   await typeLine(a.page, `cd '${sub}' && printf 'cd-%s\\n' done`);
-  await expect.poll(() => seen(a, p1), { message: "cd-done がブラウザに届く", timeout: 10_000 }).toContain("cd-done");
+  await expect.poll(() => seen(a, p2), { message: "cd-done がブラウザに届く", timeout: 10_000 }).toContain("cd-done");
   await prefixKey(a.page, "N");
   const name = basename(repo);
   await expect(spaceLabels(a.page)).toHaveText([defaultName, name]);
@@ -114,18 +119,19 @@ test("既定の workspace と、リポジトリのサブディレクトリで開
     expect.objectContaining({ label: name, autoLabel: true }),
   ]);
 
-  // AC8：goto の一覧にも同じ名前が出て、名前で絞り込める。
+  // AC8：goto の一覧にも同じ名前が出て、絞り込むと当たらない workspace が消える。
   await prefixKey(a.page, "g");
   const picker = a.page.locator(".goto-picker");
   await expect(picker).toBeVisible();
   // workspace の行（開閉の印 `.goto-picker-caret` が付く）の名前。pane の行も題名にパスを含むので、workspace の行だけを見る。
   const workspaceRows = picker.locator(".goto-picker-row:has(.goto-picker-caret) .goto-picker-label");
   await expect(workspaceRows).toHaveText([defaultName, name]);
-  // 絞り込みは pane の呼び名と cwd も見て、一致した pane を含む workspace も親として残す。元の pane（p1）は `cd` でリポジトリへ移ったが、
-  // サーバの記録（cwd・題名）が追従するのはエージェントの監視の見直し（0.5〜1 秒ごと）の後——**全部の行**が既定の workspace の行だけに
-  // なるまで待つ（p1 の行が当たらなくなって初めて、既定の workspace が名前だけで当たっていると分かる）。
+  // 絞り込みは大小を問わない部分一致で pane の cwd も見て、一致した pane を含む workspace も親として残す。左上の pane（p1）は起動した場所
+  // （既定の名前を含む）に残るので、既定の workspace はその pane でも当たる——ここでは、名前も pane の場所も当たらない新しい workspace の
+  // 行が消えることだけを見る（workspace の行だけ）。**名前だけで当たること**はこの本では確かめない（どちらの workspace の名前も
+  // その pane の場所に含まれ、場所の一致と見分けられない——20260926-workspace-label-follow-cwd の review.md のタスク点検ログ）。
   await picker.locator("input").fill(defaultName);
-  await expect(picker.locator(".goto-picker-row .goto-picker-label")).toHaveText([defaultName]);
+  await expect(workspaceRows).toHaveText([defaultName]);
   await a.page.keyboard.press("Escape"); // 1 回目は検索欄から離れるだけ（GotoPicker の作法。絞り込みは保たれる）
   await a.page.keyboard.press("Escape");
   await expect(picker).toBeHidden();

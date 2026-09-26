@@ -1,4 +1,6 @@
-import type { GitInfo, Workspace, WorkspaceId } from "@wtm/protocol";
+import type { GitInfo, ServerEvent, Workspace, WorkspaceId } from "@wtm/protocol";
+import type { EventBus } from "../bus/EventBus.js";
+import type { Disposable } from "../util/Disposable.js";
 import type { SessionService } from "../session/SessionService.js";
 import type { GitRunner } from "../infra/GitRunner.js";
 import { resolveCommonDir } from "./worktree.js";
@@ -6,7 +8,16 @@ import { resolveCommonDir } from "./worktree.js";
 const DEFAULT_INTERVAL_MS = 5000;
 const GIT_TIMEOUT_MS = 3000;
 
-/** workspace の cwd ごとに git 情報を取り、変化したら反映する（architecture.md「GitInfoPoller」）。 */
+/**
+ * 最初の pane が代わる・その場所が変わるイベント（20260926-workspace-label-follow-cwd の design D4）。これを受けたら、見直した場所と
+ * いまの場所を比べ、違う workspace だけすぐ見直す。
+ */
+const FOLLOW_EVENTS: ReadonlySet<ServerEvent["event"]> = new Set(["pane.updated", "pane.closed", "layout.updated", "tab.closed", "workspace.updated"]);
+
+/**
+ * workspace のいまの場所（最初の tab の最初の pane の場所）ごとに git 情報と自動の名前を取り、変化したら反映する（architecture.md「GitInfoPoller」。
+ * 20260926-workspace-label-follow-cwd で開いた場所から、いまの場所へ）。
+ */
 export interface GitInfoPoller {
   start(): void;
   stop(): void;
@@ -22,15 +33,22 @@ export interface GitInfoPoller {
 
 export class DefaultGitInfoPoller implements GitInfoPoller {
   private timer: NodeJS.Timeout | null = null;
+  private subscription: Disposable | null = null;
+  /** workspace ごとに前回見直した場所（design D4）。 */
+  private readonly polledCwd = new Map<WorkspaceId, string>();
 
   constructor(
     private readonly session: SessionService,
     private readonly git: GitRunner,
     private readonly intervalMs = DEFAULT_INTERVAL_MS,
+    private readonly bus?: EventBus,
   ) {}
 
   start(): void {
     if (this.timer) return;
+    this.subscription = this.bus?.subscribe((e) => {
+      if (FOLLOW_EVENTS.has(e.event)) this.followMoves();
+    }) ?? null;
     this.timer = setInterval(() => {
       this.pollNow().catch(() => undefined);
     }, this.intervalMs);
@@ -39,6 +57,8 @@ export class DefaultGitInfoPoller implements GitInfoPoller {
   }
 
   stop(): void {
+    this.subscription?.dispose();
+    this.subscription = null;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -47,6 +67,8 @@ export class DefaultGitInfoPoller implements GitInfoPoller {
 
   async pollNow(): Promise<void> {
     const workspaces = this.session.snapshot().workspaces;
+    const alive = new Set(workspaces.map((ws) => ws.id));
+    for (const id of this.polledCwd.keys()) if (!alive.has(id)) this.polledCwd.delete(id); // バスを渡さないときの後始末
     await Promise.all(workspaces.map((ws) => this.pollWorkspace(ws)));
   }
 
@@ -56,9 +78,21 @@ export class DefaultGitInfoPoller implements GitInfoPoller {
     await this.pollWorkspace(ws);
   }
 
+  /** 見直した場所といまの場所が違う workspace だけ、すぐ見直す（同期でメモリだけを見る。design D4）。 */
+  private followMoves(): void {
+    for (const [id, polled] of this.polledCwd) {
+      const cwd = this.session.identityCwdOf(id);
+      if (cwd === undefined) this.polledCwd.delete(id);
+      else if (cwd !== polled) void this.pollWorkspaceNow(id).catch(() => undefined);
+    }
+  }
+
+  /** いまの場所で git と自動の名前を一緒に決め、同じ場所の結果としてまとめて入れる（design D2）。 */
   private async pollWorkspace(ws: Workspace): Promise<void> {
-    const git = await this.probe(ws.cwd);
-    this.session.updateWorkspaceGit(ws.id, git);
+    const cwd = this.session.identityCwdOf(ws.id) ?? ws.cwd;
+    this.polledCwd.set(ws.id, cwd); // 待つ前に——同じ変化で見直しを重ねない
+    const [git, label] = await Promise.all([this.probe(cwd), this.session.followedLabel(ws.id, cwd).catch(() => null)]);
+    this.session.applyWorkspaceIdentity(ws.id, cwd, git, label);
   }
 
   private async probe(cwd: string): Promise<GitInfo | null> {

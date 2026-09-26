@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { type WorktreeCreateResult, type WorktreeListResult, RpcError, defaultCheckoutPath } from "@wtm/protocol";
 import type { GitRunner } from "../infra/GitRunner.js";
+import { isUsableDir as defaultIsUsableDir } from "../session/newCwd.js";
 import type { SessionService } from "../session/SessionService.js";
 import type { Logger } from "../log/Logger.js";
 import { generatedBranchSlug, parseWorktreeListPorcelain, repoNameFromGitCommonDir, resolveCommonDir } from "./worktree.js";
@@ -78,6 +79,7 @@ export class DefaultWorktreeService implements WorktreeService {
     private readonly log: Logger,
     private readonly root: string = defaultWorktreeRoot(),
     private readonly now: () => number = Date.now,
+    private readonly isUsableDir: (path: string) => Promise<boolean> = defaultIsUsableDir,
   ) {}
 
   /**
@@ -94,11 +96,16 @@ export class DefaultWorktreeService implements WorktreeService {
     }
   }
 
-  /** workspace の cwd を引く。`SessionService` の外なので `NotFoundError` には乗れず、自分で投げる。 */
-  private cwdOf(workspaceId: string): string {
+  /**
+   * workspace のいまの場所（最初の pane の場所）を引く——サイドバーの git の情報とメニューの出し分け（`ws.git`）と同じ場所
+   * （20260926-workspace-label-follow-cwd の review ラウンド 1。herdr も worktree の操作は追従した git の情報から取る）。
+   * いまの場所が使えない（最初の pane がいる worktree を消した直後等）なら開いた場所。`SessionService` の外なので `NotFoundError` には乗れず、自分で投げる。
+   */
+  private async cwdOf(workspaceId: string): Promise<string> {
+    const cwd = this.session.identityCwdOf(workspaceId);
     const ws = this.session.getWorkspace(workspaceId);
-    if (!ws) throw new RpcError("not_found", `workspace ${workspaceId} not found`);
-    return ws.cwd;
+    if (cwd === undefined || !ws) throw new RpcError("not_found", `workspace ${workspaceId} not found`);
+    return cwd === ws.cwd || (await this.isUsableDir(cwd)) ? cwd : ws.cwd;
   }
 
   /**
@@ -113,7 +120,7 @@ export class DefaultWorktreeService implements WorktreeService {
   }
 
   async list(workspaceId: string): Promise<WorktreeListResult> {
-    const cwd = this.cwdOf(workspaceId);
+    const cwd = await this.cwdOf(workspaceId);
     const repoName = await this.repoNameOf(cwd);
 
     const listed = await this.run(cwd, ["worktree", "list", "--porcelain"]);
@@ -128,7 +135,7 @@ export class DefaultWorktreeService implements WorktreeService {
   }
 
   async create(workspaceId: string, branch: string): Promise<WorktreeCreateResult> {
-    const cwd = this.cwdOf(workspaceId);
+    const cwd = await this.cwdOf(workspaceId);
     const repoName = await this.repoNameOf(cwd); // 名前だけ要るので一覧は取らない（git かどうかもここで分かる）
     const path = defaultCheckoutPath(this.root, repoName, branch);
 
@@ -153,7 +160,7 @@ export class DefaultWorktreeService implements WorktreeService {
    * 逆にすると、dirty で失敗した場合に動いているシェルを先に失う（design「設計方針」）。
    */
   async remove(workspaceId: string, path: string, force: boolean): Promise<void> {
-    const cwd = this.cwdOf(workspaceId);
+    const cwd = await this.cwdOf(workspaceId);
     // `--force` を**2回**渡す（`-f -f`）——ロック済みの対象は1回では解決しない（実機確認。
     // design「依拠する既存の事実」。20260925-worktree-remove-locked）。ロックされていない
     // 通常の dirty worktree の削除にも副作用は無いことを実機確認済み。
