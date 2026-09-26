@@ -1261,3 +1261,26 @@ describe("SettingsDialog — 節「キー」への端末の種類（モバイル
     expect(desktop.wrapper.find(".keys-mobile-note").exists()).toBe(false);
   });
 });
+
+// 20260926-settings-onboarding の AC6：はじめの案内を設定画面から開き直す。
+describe("SettingsDialog — はじめの案内を開く", () => {
+  it("［はじめの案内を開く］で案内に切り替わり、設定画面は閉じる", async () => {
+    const { wrapper, view } = await openDialog();
+    const btn = wrapper.get("[data-open-onboarding]");
+    expect(btn.element.tagName).toBe("BUTTON");
+    await btn.trigger("click");
+    expect(view.openDialog).toBe("onboarding");
+    expect((wrapper.get("dialog").element as HTMLDialogElement).open).toBe(false);
+  });
+
+  it("打ちかけの「指定した場所」は、案内へ切り替える前に保存する（閉じる経路と同じ）", async () => {
+    useSettingsStore(pinia).setNewCwdPolicy("path");
+    useSettingsStore(pinia).setNewCwdPath("~/saved");
+    const { wrapper } = await openDialog();
+    const field = wrapper.get<HTMLInputElement>('input[type="text"][aria-label="指定した場所のパス"]');
+    field.element.value = "~/typed";
+    await field.trigger("input");
+    await wrapper.get("[data-open-onboarding]").trigger("click");
+    expect(useSettingsStore(pinia).newCwdPath).toBe("~/typed");
+  });
+});

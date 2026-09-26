@@ -44,7 +44,9 @@ export type WorkspaceSort = "opened" | "name";
  * 表示位置（`STORAGE_KEY`）と違い、**タブの寿命を越えて残す好み**なので `localStorage` に置く。
  * 同じ流儀の先例：`store/seen.ts`（`wtm.seen.v1`）・`components/Toast.vue`（`wtm.hint.prefixHelp.v1`）。
  */
-const PREFS_KEY = "wtm.prefs.v1";
+export const PREFS_KEY = "wtm.prefs.v1";
+/** キー一覧の案内（`components/Toast.vue`）を出した印。初回の案内（`store/onboarding.ts`）が既存の利用者の痕跡としても読む。 */
+export const PREFIX_HELP_HINT_KEY = "wtm.hint.prefixHelp.v1";
 
 /**
  * `wtm.prefs.v1` の読み書きは**この 2 つに集約する**（20260920-agent-notifications の AC6）。
@@ -208,7 +210,9 @@ export type DialogContext =
   // `worktreeOpen` と同じ「一覧から選ぶ」形。`groups` は開く時点のグループ一覧（GroupPickerDialog）。
   | { kind: "addToGroup"; workspaceId: string; groups: WorkspaceGroup[] }
   // 設定（通知・表示・端末。20260921-herdr-settings-gaps）。値はそれぞれのストアが持つので文脈は空。
-  | { kind: "settings" };
+  | { kind: "settings" }
+  // はじめの案内（20260926-settings-onboarding）。選択は下書きでダイアログが持つので文脈は空。
+  | { kind: "onboarding" };
 
 /**
  * このクライアントの表示・モード・接続状態（architecture.md「store/view」）。

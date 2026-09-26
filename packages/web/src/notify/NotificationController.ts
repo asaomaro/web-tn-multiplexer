@@ -366,6 +366,14 @@ export class NotificationController {
     store.hintToastId = null;
   }
 
+  /**
+   * 案内に答えた扱いにする（20260926-settings-onboarding の AC9）。はじめの案内を確定したとき——通知の選択は済んでいるので、
+   * 同じことを問う案内をあとから出さない。出ていれば消す。
+   */
+  markHintAnswered(): void {
+    this.#consumeHint();
+  }
+
   /** 設定ダイアログが許可の状態を出すために引く（AC8・AC12）。 */
   desktopPermission(): DesktopPermission {
     return this.#opts.desktop.permission();

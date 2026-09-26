@@ -2,11 +2,12 @@ import type { AgentInfo, DisplayState, Pane } from "@wtm/protocol";
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
-const STORAGE_KEY = "wtm.seen.v1";
+/** 初回の案内（`store/onboarding.ts`）が既存の利用者の痕跡としても読む。 */
+export const SEEN_STORAGE_KEY = "wtm.seen.v1";
 
 function loadFromStorage(): Record<string, number> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(SEEN_STORAGE_KEY);
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as Record<string, number>) : {};
@@ -17,7 +18,7 @@ function loadFromStorage(): Record<string, number> {
 
 function saveToStorage(data: Record<string, number>): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify(data));
   } catch {
     // 保存できなくても致命的ではない（次回の起動で既読が再初期化されるだけ）。
   }

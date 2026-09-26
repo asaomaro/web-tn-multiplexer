@@ -8,6 +8,7 @@ import GroupPickerDialog from "./components/GroupPickerDialog.vue";
 import HelpDialog from "./components/HelpDialog.vue";
 import LoginView from "./components/LoginView.vue";
 import NameDialog from "./components/NameDialog.vue";
+import OnboardingDialog from "./components/OnboardingDialog.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 import PaneLayout from "./components/PaneLayout.vue";
 import PrefixIndicator from "./components/PrefixIndicator.vue";
@@ -86,6 +87,7 @@ const paneGapPx = computed(() => `${PANE_FRAME_THICKNESS_PX[settings.paneFrameTh
     <ConfirmDialog />
     <SettingsDialog />
     <HelpDialog />
+    <OnboardingDialog />
     <GotoPicker />
     <PrefixIndicator />
     <Toast />

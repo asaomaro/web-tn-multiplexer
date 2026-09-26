@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { watch } from "vue";
 import { useSettingsStore } from "../store/settings.js";
-import { useViewStore } from "../store/view.js";
+import { PREFIX_HELP_HINT_KEY, useViewStore } from "../store/view.js";
 
 /**
  * トースト表示（T25）。`view.toasts` を並べ、クリックまたは一定時間で消す（design「短く表示する」）。
@@ -11,7 +11,6 @@ import { useViewStore } from "../store/view.js";
  * **キーは現在の割り当て（`settings.keymap.hintFor("help")`）から作る**（20260921-keybinding-customization の AC11）。キー一覧を開く割り当てが無ければ**出さず、表示済みにもしない**
  * （案内するキーが無いのに使い切らない。設定の節「キー」で割り当てたあと、次に別の pane へフォーカスが移ったとき〔または再読み込みのあと〕に出る）。
  */
-const HINT_STORAGE_KEY = "wtm.hint.prefixHelp.v1";
 const AUTO_DISMISS_MS = 4000;
 
 const view = useViewStore();
@@ -19,14 +18,14 @@ const settings = useSettingsStore();
 
 function hasShownHint(): boolean {
   try {
-    return localStorage.getItem(HINT_STORAGE_KEY) === "1";
+    return localStorage.getItem(PREFIX_HELP_HINT_KEY) === "1";
   } catch {
     return true; // 読めない環境では、二度と邪魔しない側に倒す
   }
 }
 function markHintShown(): void {
   try {
-    localStorage.setItem(HINT_STORAGE_KEY, "1");
+    localStorage.setItem(PREFIX_HELP_HINT_KEY, "1");
   } catch {
     // 保存できなくても致命的ではない（次回また出るだけ）
   }

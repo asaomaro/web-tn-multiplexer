@@ -326,3 +326,32 @@ describe("App — 再接続の後の表示と購読の張り直し（D107）", (
     expect(conn.requests.map(([m]) => m)).toEqual(["client.view", "pane.subscribe"]);
   });
 });
+
+// 20260926-settings-onboarding：はじめの案内を本体に置く（痕跡の無いブラウザで接続が open になると開く）。
+describe("App — はじめの案内", () => {
+  // happy-dom の navigator.webdriver は true（自動操作の扱い＝起動時の案内を出さない。D11）。it ごとに差し替え、失敗しても後続へ漏らさない。
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("本体に置かれ、痕跡の無いブラウザで接続が open になると開く", async () => {
+    vi.spyOn(navigator, "webdriver", "get").mockReturnValue(false);
+    const wrapper = mount(App, { ...makeProvide(makeConnection()), attachTo: document.body });
+    expect(wrapper.find(".onboarding-dialog").exists()).toBe(true);
+    const view = useViewStore(pinia);
+    view.onConnectionState("open");
+    for (let i = 0; i < 4; i++) await wrapper.vm.$nextTick();
+    expect(view.openDialog).toBe("onboarding");
+    wrapper.unmount();
+  });
+
+  it("自動操作されているブラウザ（navigator.webdriver）では開かない（起動確認・E2E を遮らない。D11）", async () => {
+    vi.spyOn(navigator, "webdriver", "get").mockReturnValue(true);
+    const wrapper = mount(App, { ...makeProvide(makeConnection()), attachTo: document.body });
+    const view = useViewStore(pinia);
+    view.onConnectionState("open");
+    for (let i = 0; i < 4; i++) await wrapper.vm.$nextTick();
+    expect(view.openDialog).toBeNull();
+    wrapper.unmount();
+  });
+});

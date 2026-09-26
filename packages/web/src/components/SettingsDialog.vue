@@ -490,6 +490,12 @@ function confirmResetAllOverrides(): void {
   endResetAllOverridesConfirm();
 }
 
+/** はじめの案内を開き直す（20260926-settings-onboarding の AC6）。閉じる経路と同じく、打ちかけのパスを先に確定する（タスク点検 T5 の指摘）。 */
+function openOnboarding(): void {
+  commitNewCwdPath();
+  view.openDialogWithContext({ kind: "onboarding" });
+}
+
 function cancel(): void {
   commitNewCwdPath(); // 「指定した場所」以外では入力欄が使えず、下書きは保存値のまま（開くたびに戻す）なので何もしない
   view.closeDialog();
@@ -906,6 +912,10 @@ function onNativeCancel(ev: Event): void {
       <p v-if="agentIntegrationMessage" class="settings-note" role="status" aria-live="polite">{{ agentIntegrationMessage }}</p>
     </section>
     <KeySettings v-model:capturing="keysCapturing" :kind="kind" />
+    <!-- はじめの案内を開き直す（20260926-settings-onboarding の AC6）。設定画面は自分の watch で閉じる（kind が変わるので）。 -->
+    <p class="settings-reopen-onboarding">
+      <button type="button" class="settings-reopen-button" data-open-onboarding @click="openOnboarding">はじめの案内を開く</button>
+    </p>
     <p class="settings-hint">
       この設定はこのブラウザにだけ残ります（テーマは、このブラウザが操作している pane の色の問い合わせの答えにも使います）。Esc か「閉じる」で閉じます。
     </p>
@@ -1007,6 +1017,19 @@ function onNativeCancel(ev: Event): void {
   margin: 0.3em 0 0;
   font-size: 0.85em;
   opacity: 0.8;
+}
+.settings-reopen-onboarding {
+  margin: 1em 0 0;
+}
+.settings-reopen-button {
+  min-height: 2rem;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--wtm-menu-border, #44475a);
+  border-radius: 4px;
+  padding: 0.2em 0.8em;
+  cursor: pointer;
 }
 .settings-section + .settings-section {
   margin-top: 1em;
