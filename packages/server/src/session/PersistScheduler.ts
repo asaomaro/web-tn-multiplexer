@@ -5,7 +5,8 @@ export interface PersistScheduler {
   flush(): Promise<void>;
   /**
    * 予約を取り消す（保存しない）。復元を済ませる前に起動に失敗したとき、作りかけの状態を `session.json` へ書かないために
-   * 使う（D102）。進行中の保存は止めない。
+   * 使う（D102）。進行中の保存は止めない。進行中の保存の後に予定した追加の保存も取り消し、それを待つ `flush()` は
+   * 保存せずに解決する。
    */
   cancel(): void;
 }
@@ -13,8 +14,11 @@ export interface PersistScheduler {
 export class DefaultPersistScheduler implements PersistScheduler {
   private timer: NodeJS.Timeout | null = null;
   /** 進行中の保存（レビュー指摘：以前は `this.timer = null` を `save()` の前に行っていたため、
-   *  その隙間で `flush()` が呼ばれると2回同時に `save()` が走りうった。1つの保存に相乗りさせる）。 */
+   *  その隙間で `flush()` が呼ばれると2回同時に `save()` が走りえた）。 */
   private inFlight: Promise<void> | null = null;
+  /** 進行中の保存が終わった後に行う追加の保存。進行中の保存はその開始時点の状態を書くので、相乗りするとその後の変更が
+   *  落ちる（20260926-persist-flush-drops-changes）。保存中の要求はすべてこれ1つにまとめる。 */
+  private queued: Promise<void> | null = null;
 
   constructor(
     private readonly save: () => Promise<void>,
@@ -32,9 +36,23 @@ export class DefaultPersistScheduler implements PersistScheduler {
     this.timer.unref?.();
   }
 
-  /** 進行中の保存があればそれに相乗りし、無ければ新しく始める。 */
+  /** 何も走っていなければすぐ保存し、保存中なら追加の保存（無ければ決める）に相乗りする。 */
   private runSave(): Promise<void> {
-    if (this.inFlight) return this.inFlight;
+    // 進行中の保存が終わってから追加の保存が始まるまでの隙間でも、別の保存を始めない。
+    if (this.queued) return this.queued;
+    if (!this.inFlight) return this.startSave();
+    const q: Promise<void> = this.inFlight
+      .catch(() => undefined)
+      .then(() => {
+        if (this.queued !== q) return; // cancel() で取り消された
+        this.queued = null;
+        return this.startSave();
+      });
+    this.queued = q;
+    return q;
+  }
+
+  private startSave(): Promise<void> {
     const p = this.save().finally(() => {
       if (this.inFlight === p) this.inFlight = null;
     });
@@ -47,9 +65,11 @@ export class DefaultPersistScheduler implements PersistScheduler {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.queued = null; // まだ始まっていない追加の保存も予約と同じく取り消す
   }
 
   async flush(): Promise<void> {
+    // cancel() は呼ばない（追加の保存まで取り消すと、相乗りした flush が保存されずに解決する）。
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
