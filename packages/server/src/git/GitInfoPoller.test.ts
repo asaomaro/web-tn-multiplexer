@@ -226,6 +226,7 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
   let bus: EventBus;
   let service: SessionService;
   let runs: string[];
+  let inFlight: number;
   let gate: { cwd: string; wait: Promise<void> } | null;
   let poller: DefaultGitInfoPoller;
 
@@ -257,13 +258,19 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
       logger: new MemoryLogger(),
     });
     runs = [];
+    inFlight = 0;
     gate = null;
     const real = new ChildProcessGitRunner();
     const git: GitRunner = {
       run: async (cwd, args, timeoutMs) => {
         runs.push(cwd);
-        if (gate && cwd === gate.cwd) await gate.wait;
-        return real.run(cwd, args, timeoutMs);
+        inFlight++;
+        try {
+          if (gate && cwd === gate.cwd) await gate.wait;
+          return await real.run(cwd, args, timeoutMs);
+        } finally {
+          inFlight--;
+        }
       },
     };
     poller = new DefaultGitInfoPoller(service, git, 60_000, bus); // 周期は待たない——追従はバスで起きることを見る
@@ -275,6 +282,16 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
   });
 
   const ws = (id: string) => service.getWorkspace(id)!;
+
+  // start() は初回の見直しを待たずに投げるので、負荷が高いと pollNow() の後もその git が走り続ける。
+  // 「問い合わせない」を数える前に、実行中の git が無く件数も増えない状態を待つ。
+  async function gitQuiet(): Promise<void> {
+    let last = -1;
+    while (inFlight > 0 || runs.length !== last) {
+      last = runs.length;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
 
   it("最初の pane が別のリポジトリへ移ると、名前と git が 1 つの workspace.updated でそのリポジトリのものになる（AC1・AC10）", async () => {
     const { workspace, pane } = await service.createWorkspace(repoA, undefined);
@@ -314,6 +331,7 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
     const { pane: second } = await service.createTab(workspace.id, undefined);
     poller.start();
     await poller.pollNow();
+    await gitQuiet();
     const before = runs.length;
     service.updatePaneRuntime(right.pane.id, { cwd: repoB });
     service.updatePaneRuntime(second.id, { cwd: repoB });
@@ -413,6 +431,7 @@ describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従
     poller.start();
     await poller.pollNow();
     poller.stop();
+    await gitQuiet();
     const before = runs.length;
     service.updatePaneRuntime(pane.id, { cwd: repoB });
     await new Promise((r) => setTimeout(r, 50));
