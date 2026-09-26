@@ -1,9 +1,11 @@
 import type { LayoutNode } from "@wtm/protocol";
 import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPinia } from "pinia";
+import { createPinia, type Pinia } from "pinia";
 import { ActionDispatcherKey, ConnectionKey, ViewSyncKey } from "../injection.js";
 import type { ConnectionPort } from "../net/ports.js";
+import { useSettingsStore } from "../store/settings.js";
+import { useViewStore } from "../store/view.js";
 import PaneLayout from "./PaneLayout.vue";
 
 function makeConnection(): ConnectionPort {
@@ -419,5 +421,113 @@ describe("PaneLayout — pane の枠（paneFrames。D110）", () => {
     const { wrapper } = mountLayout(SPLIT_LAYOUT);
     expect(wrapper.find(".pane-frame-edge").exists()).toBe(false);
     expect(wrapper.find(".pane-frame-enabled").exists()).toBe(false);
+  });
+});
+
+/**
+ * 20260926-pane-frame-auto-mode：枠の描画モード・隙間。`PaneLayout` が分割の有無と辺ごとの隣を `PaneFrame` へ渡し、
+ * `PaneFrame` が辺ごとの余白（inline style）・強調を描き分ける（design「振る舞いの詳細」）。
+ */
+describe("PaneLayout — 枠の描画モードと隙間（AC1〜AC5・AC7・AC9）", () => {
+  const GAP = "var(--wtm-pane-gap, 4px)";
+  // p1 | (p2 / p3)：右分割の b が下分割（入れ子）。
+  const NESTED: LayoutNode = {
+    type: "split",
+    id: "s1",
+    dir: "right",
+    ratio: 0.5,
+    a: { type: "pane", paneId: "p1" },
+    b: { type: "split", id: "s2", dir: "down", ratio: 0.5, a: { type: "pane", paneId: "p2" }, b: { type: "pane", paneId: "p3" } },
+  };
+  const SINGLE: LayoutNode = { type: "pane", paneId: "p1" };
+
+  let pinia: Pinia;
+  // 1 つのテストで描き直すときは前のものを外す（`leafOf` は文書全体から探すため）。
+  let last: { unmount(): void } | null = null;
+  function mountWith(layout: LayoutNode, opts: { zoomedPaneId?: string | null; paneFrames?: boolean; borders?: "always" | "auto" | "off"; gaps?: boolean } = {}) {
+    last?.unmount();
+    localStorage.clear();
+    pinia = createPinia();
+    const settings = useSettingsStore(pinia);
+    if (opts.borders) settings.setPaneBorders(opts.borders);
+    if (opts.gaps !== undefined) settings.setPaneGaps(opts.gaps);
+    const viewSync = { commit: vi.fn(), attachCommitter: () => () => undefined };
+    const wrapper = mount(PaneLayout, {
+      attachTo: document.body,
+      props: { workspaceId: "w1", tabId: "t1", layout, zoomedPaneId: opts.zoomedPaneId ?? null, paneFrames: opts.paneFrames ?? true },
+      global: {
+        plugins: [pinia],
+        provide: { [ConnectionKey as symbol]: makeConnection(), [ViewSyncKey as symbol]: viewSync, [ActionDispatcherKey as symbol]: { openContextMenu: vi.fn() } },
+      },
+      slots: { pane: '<template #pane="{ paneId }"><div class="fake-pane" :data-pane-id="paneId"></div></template>' },
+    });
+    last = wrapper;
+    return wrapper;
+  }
+  /** [上, 右, 下, 左] の余白。 */
+  function paddingOf(paneId: string): string[] {
+    const st = (leafOf(paneId).closest(".pane-frame") as HTMLElement).style;
+    return [st.paddingTop, st.paddingRight, st.paddingBottom, st.paddingLeft];
+  }
+  const ALL = [GAP, GAP, GAP, GAP];
+  const NONE = ["0px", "0px", "0px", "0px"];
+
+  it("既定（常に・隙間入）：単一 pane も入れ子の分割も、各 pane の 4 辺に余白・選ばれた pane に強調（今と同じ。AC1）", () => {
+    mountWith(SINGLE);
+    useViewStore(pinia).focusPane("p1");
+    expect(paddingOf("p1")).toEqual(ALL);
+    const w = mountWith(NESTED);
+    for (const p of ["p1", "p2", "p3"]) expect(paddingOf(p), p).toEqual(ALL);
+    useViewStore(pinia).focusPane("p2");
+    return w.vm.$nextTick().then(() => {
+      expect(leafOf("p2").closest(".pane-frame")!.querySelector(".pane-frame-edge-current")).not.toBeNull();
+      expect(document.querySelector(".pane-frame-edge-flush")).toBeNull();
+    });
+  });
+
+  it("分割時だけ：単一 pane の tab は余白・強調なし、分割（zoom 中を含む）は常にと同じ（AC2）", async () => {
+    const single = mountWith(SINGLE, { borders: "auto" });
+    useViewStore(pinia).focusPane("p1");
+    await single.vm.$nextTick();
+    expect(paddingOf("p1")).toEqual(NONE);
+    expect(document.querySelector(".pane-frame-edge-current")).toBeNull();
+
+    mountWith(NESTED, { borders: "auto" });
+    for (const p of ["p1", "p2", "p3"]) expect(paddingOf(p), p).toEqual(ALL);
+
+    const zoomed = mountWith(NESTED, { borders: "auto", zoomedPaneId: "p2" });
+    useViewStore(pinia).focusPane("p2");
+    await zoomed.vm.$nextTick();
+    expect(paddingOf("p2")).toEqual(ALL);
+    expect(document.querySelector(".pane-frame-edge-current")).not.toBeNull();
+  });
+
+  it("表示しない×隙間入：外周の辺は 0、隣と接する辺にだけ余白（AC3・AC5・AC9）", () => {
+    mountWith(NESTED, { borders: "off" });
+    expect(paddingOf("p1")).toEqual(["0px", GAP, "0px", "0px"]);
+    expect(paddingOf("p2")).toEqual(["0px", "0px", GAP, GAP]);
+    expect(paddingOf("p3")).toEqual([GAP, "0px", "0px", GAP]);
+    mountWith(SINGLE, { borders: "off" });
+    expect(paddingOf("p1")).toEqual(NONE);
+  });
+
+  it("常に×隙間切：入れ子でも辺ごとに隣を判定し、隣と接する辺だけ 0（AC4・AC9）", () => {
+    mountWith(NESTED, { gaps: false });
+    expect(paddingOf("p1")).toEqual([GAP, "0px", GAP, GAP]);
+    expect(paddingOf("p2")).toEqual([GAP, GAP, "0px", "0px"]);
+    expect(paddingOf("p3")).toEqual(["0px", GAP, GAP, "0px"]);
+  });
+
+  it("表示しない×隙間切はすべて 0。zoom 中の pane は root が描くので、隙間切でも辺はすべて外周（AC3・AC4）", () => {
+    mountWith(NESTED, { borders: "off", gaps: false });
+    for (const p of ["p1", "p2", "p3"]) expect(paddingOf(p), p).toEqual(NONE);
+    mountWith(NESTED, { gaps: false, zoomedPaneId: "p3" });
+    expect(paddingOf("p3")).toEqual(ALL);
+  });
+
+  it("paneFrames を付けない呼び出し（モバイル）は、設定を変えても枠も余白の style も付けない（AC7）", () => {
+    mountWith(NESTED, { paneFrames: false, borders: "off", gaps: false });
+    expect(document.querySelector(".pane-frame-enabled")).toBeNull();
+    expect(document.querySelector(".pane-frame[style]")).toBeNull();
   });
 });

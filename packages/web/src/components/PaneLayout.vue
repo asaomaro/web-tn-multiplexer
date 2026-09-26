@@ -2,6 +2,7 @@
 import type { LayoutNode } from "@wtm/protocol";
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, onUpdated, reactive } from "vue";
 import { ViewSyncKey } from "../injection.js";
+import { childNeighbors, NO_NEIGHBORS, type PaneSides } from "../layout/paneChrome.js";
 import { createTrailingThrottle, RESIZE_COMMIT_INTERVAL_MS } from "../term/resizeThrottle.js";
 import type { MeasuredSize } from "../term/ViewSync.js";
 import PaneFrame from "./PaneFrame.vue";
@@ -51,6 +52,11 @@ import Splitter from "./Splitter.vue";
  * 開く縁。design M7）は葉の外に描く——葉は今までどおり端末を置く要素のままなので、`ViewSync` が葉で測る cols/rows に枠の太さは
  * 入らない（枠を `TerminalPane` の中に置くと、測った大きさより端末の置き場が狭くなり、右端・下端の文字が切れる）。`:key` は
  * 外側の `PaneFrame` に付ける（表示する pane が替わったら枠ごと葉を作り直す。上の D86 と同じ）。葉の ref は D105 のまま。
+ *
+ * **枠の描き分けに要る構造を `PaneFrame` へ渡す**（20260926-pane-frame-auto-mode。`layout/paneChrome.ts`）。tab が分割されて
+ * いるか（`multiPane`。root が自分の `layout` から求めて子へ引き継ぐ）と、どの辺に隣の pane があるか（`neighbors`。分割の
+ * 向きと a/b から子ごとに足す）。zoom 中は画面に隣が出ないので辺はすべて外周とする。設定（ストア）は `PaneFrame` が読む——
+ * ここで読むと Pinia の無い呼び出しが壊れる（decisions D3）。
  */
 const props = defineProps<{
   workspaceId: string;
@@ -77,6 +83,10 @@ const props = defineProps<{
    * モバイルの `MobileShell` は付けない（葉を PTY の大きさの縮小の枠に置くので、縁を足すと端末がはみ出る）。
    */
   paneFrames?: boolean;
+  /** tab が分割されているか（子だけが受ける。root は自分の `layout` から求める）。 */
+  multiPane?: boolean;
+  /** この部分木の外側のどの辺に隣の pane があるか（子だけが受ける。root は隣なし）。 */
+  neighbors?: PaneSides;
 }>();
 
 defineSlots<{ pane(props: { paneId: string }): unknown }>();
@@ -109,6 +119,12 @@ function observeLeaf(el: HTMLElement, attached: boolean): void {
 /** zoom 中はそれ、そうでなければ `layout` が pane 単体のときのその id（分割ノードなら null）。 */
 const singlePaneId = computed<string | null>(() => props.zoomedPaneId ?? (props.layout.type === "pane" ? props.layout.paneId : null));
 const splitLayout = computed(() => (props.layout.type === "split" ? props.layout : null));
+const multiPane = computed(() => (isRoot ? props.layout.type === "split" : !!props.multiPane));
+/** zoom（`zoomedPaneId`）は root だけが受け、root は隣なし——zoom 中の pane の辺はすべて外周になる。 */
+const ownNeighbors = computed(() => props.neighbors ?? NO_NEIGHBORS);
+// computed で持つ（テンプレートで直接呼ぶと描き直しのたびに新しいオブジェクトになり、子を無駄に描き直す）。
+const neighborsA = computed(() => (splitLayout.value ? childNeighbors(ownNeighbors.value, splitLayout.value.dir, "a") : NO_NEIGHBORS));
+const neighborsB = computed(() => (splitLayout.value ? childNeighbors(ownNeighbors.value, splitLayout.value.dir, "b") : NO_NEIGHBORS));
 
 function registerLeaf(paneId: string, el: HTMLElement, attached: boolean): void {
   if (props.registerLeaf) {
@@ -175,20 +191,43 @@ defineExpose({ commitView });
 </script>
 
 <template>
-  <PaneFrame v-if="singlePaneId" :key="singlePaneId" :pane-id="singlePaneId" :enabled="paneFrames">
+  <PaneFrame
+    v-if="singlePaneId"
+    :key="singlePaneId"
+    :pane-id="singlePaneId"
+    :enabled="paneFrames"
+    :multi-pane="multiPane"
+    :neighbors="ownNeighbors"
+  >
     <div class="pane-layout-leaf" :class="{ 'pane-layout-zoomed': !!zoomedPaneId }" :ref="leafRef(singlePaneId)">
       <slot name="pane" :pane-id="singlePaneId" />
     </div>
   </PaneFrame>
   <div v-else-if="splitLayout" class="pane-layout-split" :class="splitLayout.dir">
     <div class="pane-layout-side" :style="{ flexBasis: `${splitLayout.ratio * 100}%` }">
-      <PaneLayout :workspace-id="workspaceId" :tab-id="tabId" :layout="splitLayout.a" :register-leaf="registerLeaf" :pane-frames="paneFrames">
+      <PaneLayout
+        :workspace-id="workspaceId"
+        :tab-id="tabId"
+        :layout="splitLayout.a"
+        :register-leaf="registerLeaf"
+        :pane-frames="paneFrames"
+        :multi-pane="multiPane"
+        :neighbors="neighborsA"
+      >
         <template #pane="slotProps"><slot name="pane" :pane-id="slotProps.paneId" /></template>
       </PaneLayout>
     </div>
     <Splitter :split-id="splitLayout.id" :tab-id="tabId" :ratio="splitLayout.ratio" :dir="splitLayout.dir" />
     <div class="pane-layout-side" :style="{ flexBasis: `${(1 - splitLayout.ratio) * 100}%` }">
-      <PaneLayout :workspace-id="workspaceId" :tab-id="tabId" :layout="splitLayout.b" :register-leaf="registerLeaf" :pane-frames="paneFrames">
+      <PaneLayout
+        :workspace-id="workspaceId"
+        :tab-id="tabId"
+        :layout="splitLayout.b"
+        :register-leaf="registerLeaf"
+        :pane-frames="paneFrames"
+        :multi-pane="multiPane"
+        :neighbors="neighborsB"
+      >
         <template #pane="slotProps"><slot name="pane" :pane-id="slotProps.paneId" /></template>
       </PaneLayout>
     </div>

@@ -1,6 +1,6 @@
 /**
- * タブバーと pane の枠の外観設定（20260922-tabbar-pane-appearance。herdr の `ui.tab_bar_*`・`ui.pane_*` 相当。
- * design「インターフェース / データ構造」）。
+ * タブバーの外観設定（20260922-tabbar-pane-appearance。herdr の `ui.tab_bar_*` 相当。pane の枠の描画モードは
+ * `layout/paneChrome.ts`。design「インターフェース / データ構造」）。
  *
  * herdr の自由度（strftime 書式・任意コマンド）はそのまま持ち込まず、日時はプリセット選択、固定文字列は
  * 1 行のテキスト入力に絞る（Command 種別は対象外。requirements 対象外）。
@@ -9,10 +9,6 @@
 /** tab バーの位置。 */
 export type TabBarPosition = "top" | "bottom";
 const TAB_BAR_POSITIONS: readonly TabBarPosition[] = ["top", "bottom"];
-
-/** pane の枠の描画。auto=分割時だけ、always=常に、off=描かない。 */
-export type PaneBordersMode = "auto" | "always" | "off";
-const PANE_BORDERS_MODES: readonly PaneBordersMode[] = ["auto", "always", "off"];
 
 /** tab バー右端の日時エントリの表示プリセット（herdr の strftime の自由書式は持ち込まない）。 */
 export type DatetimeFormat = "time" | "time-seconds" | "date" | "date-time";
@@ -35,11 +31,6 @@ export const MAX_TAB_BAR_SEPARATOR_CHARS = 8;
 /** 保存された位置を読む。2 値のどちらでもなければ既定の "top"。 */
 export function loadTabBarPosition(raw: unknown): TabBarPosition {
   return TAB_BAR_POSITIONS.includes(raw as TabBarPosition) ? (raw as TabBarPosition) : "top";
-}
-
-/** 保存された枠の描画を読む。3 値のどれでもなければ既定の "auto"。 */
-export function loadPaneBordersMode(raw: unknown): PaneBordersMode {
-  return PANE_BORDERS_MODES.includes(raw as PaneBordersMode) ? (raw as PaneBordersMode) : "auto";
 }
 
 function isDatetimeFormat(v: unknown): v is DatetimeFormat {

@@ -7,7 +7,9 @@ import {
   loadNewCwdPath,
   loadNewCwdPolicy,
   loadPaneAgentNameVisible,
+  loadPaneBorders,
   loadPaneFrameThickness,
+  loadPaneGaps,
   loadPaneOuterBorders,
   loadStatusSymbols,
   PANE_FRAME_THICKNESS_PX,
@@ -192,6 +194,50 @@ describe("useSettingsStore — tab バーの位置・右端エントリ・pane �
     window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
     expect(store.tabBarPosition).toBe("bottom");
     expect(store.paneOuterBorders).toBe(true);
+  });
+});
+
+describe("useSettingsStore — pane の枠の描画モード・隙間（20260926-pane-frame-auto-mode。AC1・AC6）", () => {
+  it("読み込み：3 値・boolean はそのまま、それ以外は既定の「常に」「入」（decisions D2）", () => {
+    for (const v of ["always", "auto", "off"] as const) expect(loadPaneBorders(v)).toBe(v);
+    for (const raw of [undefined, null, "framed", true, 1, {}]) {
+      expect(loadPaneBorders(raw), String(raw)).toBe("always");
+    }
+    expect(loadPaneGaps(false)).toBe(false);
+    expect(loadPaneGaps(true)).toBe(true);
+    for (const raw of [undefined, null, "false", 0, {}]) {
+      expect(loadPaneGaps(raw), String(raw)).toBe(true);
+    }
+  });
+
+  it("何も保存されていなければ「常に」「入」、壊れた値でも同じ", () => {
+    expect(useSettingsStore(pinia).paneBorders).toBe("always");
+    expect(useSettingsStore(pinia).paneGaps).toBe(true);
+    writePrefs({ paneBorders: "framed", paneGaps: "no" });
+    const store = useSettingsStore(createPinia());
+    expect(store.paneBorders).toBe("always");
+    expect(store.paneGaps).toBe(true);
+  });
+
+  it("変えると同じストアに反映され、保存され、新しいストアが読み戻す", () => {
+    const store = useSettingsStore(pinia);
+    store.setPaneBorders("auto");
+    store.setPaneGaps(false);
+    expect(store.paneBorders, "押した時点で反映").toBe("auto");
+    expect(store.paneGaps).toBe(false);
+    expect(readPrefs()["paneBorders"]).toBe("auto");
+    expect(readPrefs()["paneGaps"]).toBe(false);
+    const reloaded = useSettingsStore(createPinia());
+    expect(reloaded.paneBorders).toBe("auto");
+    expect(reloaded.paneGaps).toBe(false);
+  });
+
+  it("別のタブ・ウィンドウでの変更に storage イベントで追従する", () => {
+    const store = useSettingsStore(pinia);
+    writePrefs({ paneBorders: "off", paneGaps: false });
+    window.dispatchEvent(new StorageEvent("storage", { key: "wtm.prefs.v1" }));
+    expect(store.paneBorders).toBe("off");
+    expect(store.paneGaps).toBe(false);
   });
 });
 

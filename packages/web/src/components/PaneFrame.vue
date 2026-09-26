@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { ActionDispatcherKey, TerminalRegistryKey } from "../injection.js";
+import { NO_NEIGHBORS, resolvePaneChrome, type PaneSide, type PaneSides } from "../layout/paneChrome.js";
 import { paneNameOf } from "../store/paneName.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore } from "../store/settings.js";
@@ -32,8 +33,12 @@ import { zoneAt, type Zone } from "../term/paneDragZone.js";
  *
  * `enabled` が false（モバイルの `MobileShell`・単体テスト）なら枠を描かず、ストアにも触れない（`enabled` は作った後に
  * 変えない前提。モバイルは葉を PTY の大きさの縮小の枠に置くので、縁を足すと端末がはみ出る）。
+ *
+ * 余白は辺ごとに決める（20260926-pane-frame-auto-mode。`layout/paneChrome.ts`）。`multiPane`（tab が分割されているか）と
+ * `neighbors`（どの辺に隣の pane があるか）は `PaneLayout` が渡す。枠を描かない（`framed` が偽）ときは外周の余白・選択の強調・
+ * 名前を描かない。tabindex とメニューを開くキーは枠の有無に関わらず同じ。
  */
-const props = defineProps<{ paneId: string; enabled?: boolean }>();
+const props = defineProps<{ paneId: string; enabled?: boolean; multiPane?: boolean; neighbors?: PaneSides }>();
 
 const actions = inject(ActionDispatcherKey, undefined);
 const registry = inject(TerminalRegistryKey, undefined);
@@ -57,17 +62,38 @@ const label = computed(() => (paneName.value ? `pane「${paneName.value}」の�
 const selected = computed(() => view?.focusedPaneId === props.paneId);
 const root = ref<HTMLElement | null>(null);
 
+const chrome = computed(() =>
+  settings ? resolvePaneChrome(settings.paneBorders, settings.paneGaps, !!props.multiPane, props.neighbors ?? NO_NEIGHBORS) : null,
+);
+const framed = computed(() => !!chrome.value?.framed);
+/** 余白の無い辺がある：枠のフォーカスの見え方を端末の上に重ねて出す（decisions D4）。 */
+const flush = computed(() => !!chrome.value && Object.values(chrome.value.padded).some((p) => !p));
+
 /**
  * legend の分の余白を確保するか（20260923-pane-name-dnd-swap）。**名前が無い pane も含め、設定が
  * 有効な間はすべての pane に同じ余白を入れる**——pane ごとに有無が割れると、隣り合う pane の上端が
  * そろわなくなる（同じ tab 内の分割は上端をそろえる前提のレイアウトのため）。
  */
-const reserveNameSpace = computed(() => !!(props.enabled && settings?.paneAgentNameVisible));
+const reserveNameSpace = computed(() => !!(props.enabled && settings?.paneAgentNameVisible && framed.value));
 /**
  * 枠線に埋め込む名前表示を出すか（20260923-pane-name-dnd-swap。herdr の見た目に寄せた。design「4.」）。
  * 名前が無ければ枠も出さない——空の legend は意味が無い（decisions.md D9）。
  */
-const showBorder = computed(() => !!(props.enabled && settings?.paneAgentNameVisible && paneName.value));
+const showBorder = computed(() => !!(reserveNameSpace.value && paneName.value));
+
+const PANE_GAP = "var(--wtm-pane-gap, 4px)";
+/** 辺ごとの余白。値そのもの（px）は `App.vue` が `settings.paneFrameThickness` から配る CSS 変数。 */
+const padStyle = computed(() => {
+  const c = chrome.value;
+  if (!c) return undefined;
+  const side = (s: PaneSide): string => (c.padded[s] ? PANE_GAP : "0px");
+  return {
+    paddingTop: reserveNameSpace.value ? (c.padded.top ? `calc(${PANE_GAP} + 1.2em)` : "1.2em") : side("top"),
+    paddingRight: side("right"),
+    paddingBottom: side("bottom"),
+    paddingLeft: side("left"),
+  };
+});
 /** 今このpaneがドラッグのドロップ候補になっているか（別の PaneFrame インスタンスがドラッグ元）。 */
 const isDropTarget = computed(() => {
   const drag = view?.paneDrag;
@@ -255,12 +281,18 @@ function onKeydown(ev: KeyboardEvent): void {
     :role="enabled ? 'group' : undefined"
     :aria-label="enabled ? paneLabel : undefined"
     :aria-current="enabled && selected ? 'true' : undefined"
+    :style="padStyle"
   >
     <div
       v-if="enabled"
       ref="edge"
       class="pane-frame-edge"
-      :class="{ 'pane-frame-edge-current': selected, 'pane-frame-edge-named': showBorder, 'pane-frame-edge-drop-target': isDropTarget }"
+      :class="{
+        'pane-frame-edge-current': selected && framed,
+        'pane-frame-edge-named': showBorder,
+        'pane-frame-edge-drop-target': isDropTarget,
+        'pane-frame-edge-flush': flush,
+      }"
       role="button"
       :tabindex="selected ? 0 : -1"
       aria-haspopup="menu"
@@ -303,31 +335,25 @@ function onKeydown(ev: KeyboardEvent): void {
   width: 100%;
   height: 100%;
 }
-/* 枠の太さ。分割の境界（`Splitter` の --wtm-pane-gap）と同じにする。ふだんは背景と同じ色で、端末の外の縁に見える。
- * 値そのもの（既定 4px）は `App.vue` が `settings.paneFrameThickness` から配る CSS 変数
- * （20260922-appearance-settings-rest）。変数が届いていない場所（このコンポーネント単体のテスト等）は
- * 今までどおり 4px にフォールバックする。 */
-.pane-frame-enabled {
-  padding: var(--wtm-pane-gap, 4px);
-}
 /*
- * legend（枠に埋め込む名前）のための上の余白（20260923-pane-name-dnd-swap）。tab が1個で
+ * 枠の余白（太さは分割の境界〔`Splitter` の --wtm-pane-gap〕と同じ。ふだんは背景と同じ色で、端末の外の縁に見える）は、
+ * 辺ごとに決まるので script の `padStyle`（inline style）で当てる（20260926-pane-frame-auto-mode）。値そのもの（既定 4px）は
+ * `App.vue` が `settings.paneFrameThickness` から配る CSS 変数で、届いていない場所は 4px にフォールバックする。
+ *
+ * legend（枠に埋め込む名前）のための上の余白（20260923-pane-name-dnd-swap。`padStyle` の paddingTop）。tab が1個で
  * tab バーが自動で隠れている（20260922-appearance-settings-rest）ときは、一番上の pane の外側に
  * 余白が無く、名前が画面の外まではみ出て切れる（screenshot を撮って実際に確認・修正した不具合）。
  * `.pane-frame-name` を `.pane-frame` の外へ一切はみ出させない設計にし、この余白の中に収める。
  * PTY の行数はこの内側の大きさから決まる（`ViewSync` が測る）ので、この余白を足した分だけ実際に
  * 行数が減る——見た目の整合を優先する意図的な副作用（`paneFrameThickness` の変更と同じ扱い）。
  */
-.pane-frame-enabled-named {
-  padding-top: calc(var(--wtm-pane-gap, 4px) + 1.2em);
-}
 .pane-frame-edge {
   position: absolute;
   inset: 0;
   cursor: context-menu;
 }
 /* 強調はホバーではなく選択で起きる（20260920-ui-selection-visuals の AC4・AC5）。
- * `inset: 0` の絶対配置なので border は内側に収まり、`.pane-frame-enabled` の 4px は変わらない
+ * `inset: 0` の絶対配置なので border は内側に収まり、余白（`padStyle`）の大きさは変わらない
  * ——外寸が変わると PTY の行・列が変わってしまう。 */
 .pane-frame-edge-current {
   /* 選ばれている pane の枠はテーマごとに背景から 3:1 に寄せた色（20260921-theme-settings の decisions D15。dracula は今と同じ #44475a）。 */
@@ -396,6 +422,19 @@ function onKeydown(ev: KeyboardEvent): void {
   outline-offset: -1px;
   background: var(--wtm-menu-active-bg, #44475a);
 }
+/* 余白の無い辺がある pane（20260926-pane-frame-auto-mode。decisions D4）：端末に隠れる辺があるので、キーボードで枠に
+ * フォーカスがある間だけ端末の上に内側の線を重ねる。線は疑似要素に描いてクリックを通す——枠そのものに
+ * `pointer-events: none` を付けると、残った余白の押下・右クリックまで枠に届かなくなる（taskcheck T3）。 */
+.pane-frame-edge-flush:focus-visible::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* xterm のスクロールバー（z-index: 11）より上。 */
+  z-index: 12;
+  outline: 2px solid var(--wtm-fg, #f8f8f2);
+  outline-offset: -2px;
+  pointer-events: none;
+}
 /*
  * pane にエージェント名を表示する opt-in の設定（20260922-appearance-settings-rest。design「US4」・AC11）。
  * 20260923-pane-name-dnd-swap で、枠線に埋め込む legend 風の見た目に変更した（herdr の見た目に寄せた）。
@@ -407,7 +446,7 @@ function onKeydown(ev: KeyboardEvent): void {
  */
 .pane-frame-name {
   position: absolute;
-  /* `.pane-frame` の外へはみ出させない（`.pane-frame-enabled-named` が確保した余白の中に収める。
+  /* `.pane-frame` の外へはみ出させない（`padStyle` が名前の分として確保した上の余白の中に収める。
    * tab バーが無く画面の一番上に pane が接しているときでも切れない）。 */
   top: 0.15em;
   left: 0.6em;

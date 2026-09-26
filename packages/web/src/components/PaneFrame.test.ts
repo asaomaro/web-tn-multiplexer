@@ -4,6 +4,7 @@ import { createPinia, type Pinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, ref } from "vue";
 import { ActionDispatcherKey, TerminalRegistryKey } from "../injection.js";
+import { NO_NEIGHBORS, type PaneSides } from "../layout/paneChrome.js";
 import { useSessionStore } from "../store/session.js";
 import { useSettingsStore } from "../store/settings.js";
 import { useViewStore } from "../store/view.js";
@@ -22,12 +23,17 @@ function makePane(id: string, overrides: Partial<Pane> = {}): Pane {
   return { id, tabId: "t1", label: null, cwd: "/", shell: "/bin/bash", cols: 80, rows: 24, status: "running", failure: null, busy: false, title: "", rightClick: "herdr", agent: null, agentSession: null, ...overrides };
 }
 
-function mountFrame(opts: { enabled?: boolean; withPinia?: boolean } = {}) {
+function mountFrame(opts: { enabled?: boolean; withPinia?: boolean; multiPane?: boolean; neighbors?: PaneSides } = {}) {
   const actions = { openContextMenu: vi.fn(), movePaneToEdge: vi.fn(), replacePaneWithDrag: vi.fn(), movePaneToTab: vi.fn(), movePaneToNewTab: vi.fn() };
   const registry = { focus: vi.fn() };
   const wrapper = mount(PaneFrame, {
     attachTo: document.body,
-    props: { paneId: "p1", ...(opts.enabled === false ? {} : { enabled: true }) },
+    props: {
+      paneId: "p1",
+      ...(opts.enabled === false ? {} : { enabled: true }),
+      ...(opts.multiPane === undefined ? {} : { multiPane: opts.multiPane }),
+      ...(opts.neighbors ? { neighbors: opts.neighbors } : {}),
+    },
     global: {
       plugins: opts.withPinia === false ? [] : [pinia],
       provide: { [ActionDispatcherKey as symbol]: actions, [TerminalRegistryKey as symbol]: registry },
@@ -671,5 +677,84 @@ describe("PaneFrame — 名前ラベルをドラッグしての分割・分割�
     wrapper.unmount();
 
     expect(useViewStore(pinia).paneDrag).toBeNull();
+  });
+});
+
+// 20260926-pane-frame-auto-mode：枠の描画モード・隙間（辺ごとの余白。design「振る舞いの詳細」）。
+describe("PaneFrame — 枠の描画モードと隙間（AC1・AC6・AC-I5）", () => {
+  const GAP = "var(--wtm-pane-gap, 4px)";
+  const padding = (w: ReturnType<typeof mountFrame>["wrapper"]) => {
+    const st = (w.element as HTMLElement).style;
+    return [st.paddingTop, st.paddingRight, st.paddingBottom, st.paddingLeft];
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("既定（常に・隙間入）は、props を省いても 4 辺に余白・選択の強調・フォーカスの見え方は今のまま（AC1）", () => {
+    useViewStore(pinia).focusPane("p1");
+    const { wrapper } = mountFrame();
+    expect(padding(wrapper)).toEqual([GAP, GAP, GAP, GAP]);
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.classes()).toContain("pane-frame-edge-current");
+    expect(edge.classes()).not.toContain("pane-frame-edge-flush");
+  });
+
+  it("既定で名前表示を入れると、上の余白は今までと同じ calc(余白 + 1.2em)（AC1）", async () => {
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame({ multiPane: true, neighbors: { ...NO_NEIGHBORS, right: true } });
+    useSettingsStore(pinia).setPaneAgentNameVisible(true);
+    await wrapper.vm.$nextTick();
+    expect(padding(wrapper)).toEqual([`calc(${GAP} + 1.2em)`, GAP, GAP, GAP]);
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(true);
+  });
+
+  it("枠を描かない pane：余白 0・強調なし・名前なし。Tab で止まりキーでメニューが開き、フォーカスの見え方の class が付く（AC-I5）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setPaneBorders("auto");
+    settings.setPaneAgentNameVisible(true);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    useViewStore(pinia).focusPane("p1");
+    const { wrapper, actions } = mountFrame({ multiPane: false });
+    expect(padding(wrapper)).toEqual(["0px", "0px", "0px", "0px"]);
+    const edge = wrapper.get(".pane-frame-edge");
+    expect(edge.classes()).not.toContain("pane-frame-edge-current");
+    expect(edge.classes()).not.toContain("pane-frame-edge-named");
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(false);
+    expect(wrapper.classes()).not.toContain("pane-frame-enabled-named");
+    expect(edge.classes()).toContain("pane-frame-edge-flush");
+    expect(edge.attributes("tabindex")).toBe("0");
+    expect(wrapper.attributes("aria-current")).toBe("true");
+    edge.element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    expect(actions.openContextMenu).toHaveBeenCalledWith({ kind: "pane", paneId: "p1" }, expect.anything());
+  });
+
+  it("枠ありで隙間切・上に隣：名前の余白は 1.2em だけ残し、隣の辺は 0（AC1 の名前と AC4 の組み合わせ）", async () => {
+    const settings = useSettingsStore(pinia);
+    settings.setPaneGaps(false);
+    settings.setPaneAgentNameVisible(true);
+    useSessionStore(pinia).paneUpserted(makePane("p1", { label: "build" }));
+    const { wrapper } = mountFrame({ multiPane: true, neighbors: { ...NO_NEIGHBORS, top: true } });
+    expect(padding(wrapper)).toEqual(["1.2em", GAP, GAP, GAP]);
+    expect(wrapper.find(".pane-frame-name").exists()).toBe(true);
+    expect(wrapper.get(".pane-frame-edge").classes()).toContain("pane-frame-edge-flush");
+  });
+
+  it("設定を変えるとその場で余白が変わる（ページの再読み込み不要。AC6）", async () => {
+    const settings = useSettingsStore(pinia);
+    const { wrapper } = mountFrame({ multiPane: true, neighbors: { ...NO_NEIGHBORS, left: true } });
+    expect(padding(wrapper)).toEqual([GAP, GAP, GAP, GAP]);
+    settings.setPaneBorders("off");
+    await wrapper.vm.$nextTick();
+    expect(padding(wrapper)).toEqual(["0px", "0px", "0px", GAP]);
+    settings.setPaneGaps(false);
+    await wrapper.vm.$nextTick();
+    expect(padding(wrapper)).toEqual(["0px", "0px", "0px", "0px"]);
+  });
+
+  it("enabled でなければ設定に関わらず余白の style を付けない（モバイル。AC7）", () => {
+    const { wrapper } = mountFrame({ enabled: false, withPinia: false });
+    expect(wrapper.attributes("style")).toBeUndefined();
   });
 });

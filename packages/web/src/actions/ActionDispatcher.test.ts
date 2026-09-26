@@ -914,6 +914,8 @@ describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-a
     expect(settings.tabBarRight).toEqual([]);
     expect(settings.tabBarRightSeparator).toBe(" ");
     expect(settings.paneOuterBorders).toBe(false);
+    expect(settings.paneBorders).toBe("always");
+    expect(settings.paneGaps).toBe(true);
     expect(view.sidebarWidth).toBe(240);
     expect(view.sidebarCollapsed).toBe(false);
     expect(view.agentSort).toBe("grouped");
@@ -935,6 +937,8 @@ describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-a
         tabBarRight: [{ kind: "hostname" }],
         tabBarRightSeparator: " / ",
         paneOuterBorders: true,
+        paneBorders: "auto",
+        paneGaps: false,
         sidebarWidth: 300,
         sidebarCollapsed: true,
         agentSort: "priority",
@@ -955,6 +959,8 @@ describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-a
     expect(settings.tabBarRight).toEqual([{ kind: "hostname" }]);
     expect(settings.tabBarRightSeparator).toBe(" / ");
     expect(settings.paneOuterBorders).toBe(true);
+    expect(settings.paneBorders).toBe("auto");
+    expect(settings.paneGaps).toBe(false);
     expect(view.sidebarWidth).toBe(300);
     expect(view.sidebarCollapsed).toBe(true);
     expect(view.agentSort).toBe("priority");
@@ -966,9 +972,14 @@ describe("ActionDispatcher — reloadConfig（設定を読み直す。20260922-a
     const conn = makeConnection();
     const settings = useSettingsStore(pinia);
     const { dispatcher } = makeDispatcher(conn);
-    localStorage.setItem("wtm.prefs.v1", JSON.stringify({ paneFrameThickness: "huge" }));
+    // 既定以外にしてから読み直す（既定のままだと、読み直さなくても既定に見えてしまう。taskcheck T6 の指摘）。
+    settings.paneBorders = "off";
+    settings.paneGaps = false;
+    localStorage.setItem("wtm.prefs.v1", JSON.stringify({ paneFrameThickness: "huge", paneBorders: "framed", paneGaps: "no" }));
     dispatcher.run({ type: "reloadConfig" });
     expect(settings.paneFrameThickness).toBe("default");
+    expect(settings.paneBorders).toBe("always");
+    expect(settings.paneGaps).toBe(true);
   });
 
   it("workspace・tab・pane の構成・フォーカスには一切触れない（AC15）", () => {
