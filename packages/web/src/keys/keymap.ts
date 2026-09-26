@@ -19,16 +19,6 @@ import { emptyKeyPrefs, parsePrefix, type KeyPrefs } from "./keyPrefs.js";
  */
 
 /**
- * 「後続」の案内のキー（`notYet`。今の `NOT_YET` と同じ内容を正規形で持つ）。**どの操作にも使われていないときだけ** prefix の後のキーの表に入る
- * （別の操作に割り当てればそちらが優先。AC2）。カタログの外＝編集できず、`ownerOf` も返さない。
- */
-const NOT_YET_BINDINGS: readonly (readonly [string, Action])[] = [
-  // `shift+r`（reload_config）は 20260922-appearance-settings-rest で `ACTIONS`（bindings.ts）に
-  // 正式登録したので、この案内からは外れた（上のコメントどおり「カタログに載れば自動的に外れる」）。
-  ["e", { type: "notYet", work: "端末機能の拡張" }],
-];
-
-/**
  * prefix の後のキーとして予約された chord → 理由（画面の拒否にも、読み込みで落とした記録にも使う。prefix 自身は別に判定する）。
  * `ctrl+shift+v` は貼り付けのショートカットで、`KeyInputController` が prefix の状態に関わらず**ルーターより先に**取る——割り当てても prefix の後では効かない。
  * `enter`・`space`・`down`（と shift 付きの同キー）・`shift+f10` は pane の枠（`PaneFrame.vue`）のメニューを開くキーとして使う——枠が Tab で選べているときに割り当てても、その keydown は枠に止められて届かない
@@ -67,13 +57,13 @@ export interface ResolvedKeymap {
   readonly prefix: string;
   /** prefix を 2 度押したとき端末へ送る列（既定 `\x02`）。 */
   readonly prefixBytes: string;
-  /** prefix の後のキー → 操作（「後続」の案内を含む）。 */
+  /** prefix の後のキー → 操作。 */
   readonly prefixMap: ReadonlyMap<string, Action>;
   /** 直接のキー → 操作。 */
   readonly directMap: ReadonlyMap<string, Action>;
   /** ある操作の有効な割り当て（表示用。`["prefix+v", "ctrl+alt+d"]`。範囲は `prefix+1..9`）。無ければ空。 */
   bindingsOf(id: ActionId): readonly string[];
-  /** その chord を使っている操作（衝突の判定と案内）。「後続」の案内は操作ではないので null。 */
+  /** その chord を使っている操作（衝突の判定と案内）。使われていなければ null。 */
   ownerOf(via: "prefix" | "direct", chord: string): ActionId | null;
   /** 案内文用の先頭の割り当て（prefix の後は `ctrl+b ?`、直接は `ctrl+alt+d`）。割り当てが無ければ null。 */
   hintFor(id: ActionId): string | null;
@@ -164,10 +154,6 @@ export function resolveKeymap(prefs: KeyPrefs): { keymap: ResolvedKeymap; proble
     if (list !== undefined && (list.length === 0 || (effective.get(def.id)?.length ?? 0) > 0))
       continue;
     for (const raw of def.defaults) register(def, def.id, raw, "default");
-  }
-  // 3. 「後続」の案内は、空いているキーにだけ。（`shift+r`・`e` は prefix の形〔ctrl・alt・F キー〕と重ならないので、prefix との衝突は見ない）
-  for (const [chord, action] of NOT_YET_BINDINGS) {
-    if (!prefixOwners.has(chord)) prefixMap.set(chord, action);
   }
 
   const keymap: ResolvedKeymap = {

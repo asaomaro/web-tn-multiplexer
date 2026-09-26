@@ -29,6 +29,11 @@ export interface Mirror {
   onDrained(cb: () => void): Disposable;
   serialize(scrollbackLines: number): MirrorSnapshot;
   bottomLines(n: number): string[];
+  /**
+   * 通常バッファの全行（スクロールバック＋画面）の平文（20260926-edit-scrollback）。折り返しで分かれた行は 1 行に戻し、
+   * 各行の右端の空白と末尾の空行を落とす。代替画面（vim・less 等）の中でも通常バッファを読む（履歴はそこにしか無い）。
+   */
+  plainText(): string;
   title(): string;
   progress(): string | null;
   cwdHint(): string | null;
@@ -159,6 +164,24 @@ export class XtermMirror implements Mirror {
       if (line) out.push(line.translateToString(true));
     }
     return out;
+  }
+
+  plainText(): string {
+    const buf = this.term.buffer.normal;
+    const lines: string[] = [];
+    let current = "";
+    for (let y = 0; y < buf.length; y++) {
+      const line = buf.getLine(y);
+      if (!line) continue;
+      const continues = buf.getLine(y + 1)?.isWrapped === true;
+      current += line.translateToString(true); // 書いた空白は残り、書いていないセルだけ落ちる
+      if (!continues) {
+        lines.push(current.replace(/ +$/, ""));
+        current = "";
+      }
+    }
+    while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
   }
 
   title(): string {

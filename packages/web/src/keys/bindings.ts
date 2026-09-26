@@ -347,6 +347,14 @@ export const ACTIONS = [
     action: { type: "enterMode", mode: "copy" },
   },
   {
+    id: "edit_scrollback",
+    label: "スクロールバックをエディタで開く",
+    group: "pane",
+    // herdr の edit_scrollback の既定と同じ chord。20260926-edit-scrollback まで「後続」の案内だったキー。
+    defaults: ["prefix+e"],
+    action: { type: "editScrollback" },
+  },
+  {
     id: "toggle_sidebar",
     label: "サイドバーの折りたたみ",
     group: "pane",

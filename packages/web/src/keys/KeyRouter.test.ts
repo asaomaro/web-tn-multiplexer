@@ -125,14 +125,10 @@ describe("KeyRouter — prefix モード", () => {
     expect(router.mode).toBe("navigate");
   });
 
-  // `s` は 20260920-agent-notifications で「通知の設定」になり、20260921-herdr-settings-gaps で「設定」に広がった
-  // （`shift+r` が未対応のまま残る）。
-  it("後続のキー（例 e）は notYet の action を返し、terminal へ戻る", () => {
-    // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てに昇格した
-    // ので、「後続」の案内として残っているキーは e（端末機能の拡張）で確かめる。
+  it("prefix+e はスクロールバックをエディタで開く action を返し、terminal へ戻る（20260926-edit-scrollback）", () => {
     const router = new KeyRouter(DEFAULT_KEYMAP, realClock());
     router.handle(ctrlB());
-    expect(router.handle(key({ key: "e" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "notYet", work: "端末機能の拡張" } });
+    expect(router.handle(key({ key: "e" }))).toEqual<KeyDecision>({ kind: "action", action: { type: "editScrollback" } });
     expect(router.mode).toBe("terminal");
   });
 

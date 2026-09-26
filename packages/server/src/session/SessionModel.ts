@@ -61,8 +61,8 @@ export interface RemovalResult {
   closedWorkspaceId: WorkspaceId | null;
   /**
    * 削除された pane に focus していたクライアントが選ぶべき後継 pane（20260925-pane-replace-
-   * focus-hint）。`replacePane` だけが埋める（生存した pane が常に後継）。他の操作
-   * （`closePane`/`closeTab`/`closeWorkspace`）は設定しない——`undefined` のままで、
+   * focus-hint）。`replacePane`（生存した pane が常に後継）と、`closePane` に後継の希望を渡して
+   * それが残っていたとき（20260926-edit-scrollback）だけが埋める。他の操作は設定しない——キーごと無く、
    * クライアント側は既存の DFS-first-leaf の規則にフォールバックする。
    */
   successorPaneId?: PaneId;
@@ -321,7 +321,8 @@ export class SessionModel {
     return this.nextId("p");
   }
 
-  closePane(paneId: PaneId): RemovalResult {
+  /** `preferredSuccessor`: 閉じた後の tab に残っていれば、焦点の後継と `successorPaneId` にする（20260926-edit-scrollback）。 */
+  closePane(paneId: PaneId, preferredSuccessor?: PaneId): RemovalResult {
     const pane = this.requirePane(paneId);
     const tab = this.requireTab(pane.tabId);
     const newLayout = Layout.remove(tab.layout, paneId);
@@ -331,7 +332,9 @@ export class SessionModel {
       return this.closeTabInternal(tab.id);
     }
     this.panes.delete(paneId);
-    const nextFocused = tab.focusedPaneId === paneId ? Layout.leaves(newLayout)[0] ?? paneId : tab.focusedPaneId;
+    const leaves = Layout.leaves(newLayout);
+    const successor = preferredSuccessor !== undefined && leaves.includes(preferredSuccessor) ? preferredSuccessor : undefined;
+    const nextFocused = tab.focusedPaneId === paneId ? successor ?? leaves[0] ?? paneId : tab.focusedPaneId;
     this.tabs.set(tab.id, {
       ...tab,
       layout: newLayout,
@@ -339,7 +342,9 @@ export class SessionModel {
       zoomedPaneId: null, // pane を閉じたら zoom を解除する（herdr の `Tab::detach_pane` と同じ。D100）
     });
     if (nextFocused !== tab.focusedPaneId) this.setFocus(tab.workspaceId, tab.id, nextFocused);
-    return { removedPaneIds: [paneId], removedTabIds: [], closedWorkspaceId: null };
+    const result: RemovalResult = { removedPaneIds: [paneId], removedTabIds: [], closedWorkspaceId: null };
+    if (successor !== undefined) result.successorPaneId = successor;
+    return result;
   }
 
   closeTab(id: TabId): RemovalResult {

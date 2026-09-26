@@ -241,7 +241,14 @@ parent: 20260918-web-terminal-multiplexer
       （出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
 - [ ] セッション永続化の拡張: 更新時の引き継ぎ（live handoff）〔D8〕 (needs: 20260918-web-terminal-multiplexer)
       （出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
-- [ ] 端末機能の拡張: 端末内の画像表示、スクロールバックを $EDITOR で開く〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
+- [x] 端末機能の拡張: スクロールバックを $EDITOR で開く〔D8〕（herdr の `edit_scrollback`。2026-09-26、画像表示と 2 つに割った一部）（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
+  → 着地: 20260926-edit-scrollback（feature/edit-scrollback）。`prefix+e`（操作名 `edit_scrollback`。「後続」の案内だった `NOT_YET_BINDINGS` を撤去）で、フォーカス中の pane の
+  スクロールバック全体を平文で一時ファイルに書き、サーバの `EDITOR`（未設定・空なら `vi`）を起動した pane を同じ tab に拡大表示で開く。閉じると焦点・拡大表示が戻り一時ファイルが消える。
+  新しい要求 `pane.edit_scrollback`（`packages/protocol/src/messages.ts`）・`SessionService.editScrollback`（`packages/server/src/session/SessionService.ts`）・
+  一時ファイルとエディタの起動（`packages/server/src/terminal/scrollbackEditor.ts`。専用の 0700 のディレクトリに 0600 の新規ファイル、パスは `sh -c` の `$1` で渡す）・
+  `Mirror.plainText()`（折り返しを戻す）。herdr との違いは `docs/herdr-parity.md` H11。
+  実測: 全体テスト 3129 本 green × 2 回・smoke pass（2 本）・負の確認は test-result.md。review 通算 must 0・should 1・nit 2（いずれも解消）。
+- [ ] 端末機能の拡張: 端末内の画像表示（Kitty graphics。herdr H13）〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-26、スクロールバックを $EDITOR で開く分〔20260926-edit-scrollback〕と割った残り）
 - [ ] 配布と運用: 自己更新・更新チャネル、ログ、シェル補完〔D8〕 (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [ ] 規則・契約の一元化: レイアウトの隣と深さ優先の順・`/api/login` の状態コードの意味・ログインの制限の回数を `@wtm/protocol` に置き、server と web の二重持ちをなくす (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/review.md 統合 review ラウンド1 の nit）
 - [ ] AgentMonitor の判定の失敗のログを間引く（`LogThrottle`。Windows で前面プロセスの取得が詰まり続けると server.log が伸び続ける） (needs: 20260918-web-terminal-multiplexer)（出典: .aidev/works/20260918-web-terminal-multiplexer/review.md 統合 review ラウンド1 の nit）

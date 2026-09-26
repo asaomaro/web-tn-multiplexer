@@ -866,7 +866,7 @@ describe("ActionDispatcher — 名前の変更", () => {
   });
 });
 
-describe("ActionDispatcher — help/goto/toggleSidebar/detach/notYet", () => {
+describe("ActionDispatcher — help/goto/toggleSidebar/detach", () => {
   it("help/goto はダイアログを開く", () => {
     const conn = makeConnection();
     const view = useViewStore(pinia);
@@ -890,11 +890,78 @@ describe("ActionDispatcher — help/goto/toggleSidebar/detach/notYet", () => {
     expect(conn.requests).toEqual([["client.detach", {}]]);
   });
 
-  it("notYet: 後続案内のトーストを出す", () => {
+});
+
+describe("ActionDispatcher — スクロールバックをエディタで開く（20260926-edit-scrollback）", () => {
+  it("焦点の pane を対象に pane.edit_scrollback を送り、応答のエディタの pane へ焦点を移す（AC1）", async () => {
     const conn = makeConnection();
+    conn.resolveWith["pane.edit_scrollback"] = { pane: { id: "p2" } };
+    useSessionStore(pinia).paneUpserted(makePane("p2", "t1")); // 実際は pane.created が応答より先に届く
     const view = useViewStore(pinia);
-    makeDispatcher(conn).dispatcher.run({ type: "notYet", work: "外観と設定" });
-    expect(view.toasts.map((t) => t.message)).toContain("未対応（後続: 外観と設定）");
+    view.focusPane("p1");
+    makeDispatcher(conn).dispatcher.run({ type: "editScrollback" });
+    await flush();
+    expect(conn.requests).toEqual([["pane.edit_scrollback", { paneId: "p1" }]]);
+    expect(view.focusedPaneId).toBe("p2");
+    expect(view.toasts).toEqual([]);
+  });
+
+  it("応答を待つ間に打った文字は、エディタの pane へ届く（D99。拡大表示されているのはその pane 自身）", async () => {
+    const conn = makeConnection();
+    let resolveEdit: (v: unknown) => void = () => undefined;
+    conn.request = function <M extends MethodName>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
+      this.requests.push([method, params]);
+      return new Promise((r) => (resolveEdit = r as (v: unknown) => void));
+    };
+    const gate = new InputGate(conn);
+    const view = useViewStore(pinia);
+    const session = useSessionStore(pinia);
+    view.focusPane("p1");
+    const { registry, keys } = makeDispatcher(conn);
+    new ActionDispatcher({ conn, pinia, registry, keys, input: gate, notifications: { focusNext: () => undefined } }).run({ type: "editScrollback" });
+    gate.sendInput("p1", "/err");
+    expect(conn.sendInput).not.toHaveBeenCalled();
+    session.tabUpserted({ ...makeTab("t1", "w1", "p2"), zoomedPaneId: "p2" });
+    session.paneUpserted(makePane("p2", "t1"));
+    resolveEdit({ pane: { id: "p2" } });
+    await flush();
+    expect(conn.sendInput).toHaveBeenCalledWith("p2", "/err");
+  });
+
+  it("失敗したらトーストを出し、焦点も打った文字も元の pane のまま（AC5）", async () => {
+    const conn = makeConnection();
+    conn.rejectWith["pane.edit_scrollback"] = "spawn_failed";
+    const gate = new InputGate(conn);
+    const view = useViewStore(pinia);
+    view.focusPane("p1");
+    const { registry, keys } = makeDispatcher(conn);
+    new ActionDispatcher({ conn, pinia, registry, keys, input: gate, notifications: { focusNext: () => undefined } }).run({ type: "editScrollback" });
+    gate.sendInput("p1", "q");
+    await flush();
+    expect(view.focusedPaneId).toBe("p1");
+    expect(view.toasts.map((t) => t.message)).toEqual(["スクロールバックをエディタで開けませんでした"]);
+    expect(conn.sendInput).toHaveBeenCalledWith("p1", "q");
+  });
+
+  it("エディタがすぐ終わって応答の時点で pane が無ければ、焦点は元の pane のまま・打った文字も元の pane へ", async () => {
+    const conn = makeConnection();
+    conn.resolveWith["pane.edit_scrollback"] = { pane: { id: "p2" } }; // p2 は session に無い（閉じた）
+    const gate = new InputGate(conn);
+    const view = useViewStore(pinia);
+    view.focusPane("p1");
+    const { registry, keys } = makeDispatcher(conn);
+    new ActionDispatcher({ conn, pinia, registry, keys, input: gate, notifications: { focusNext: () => undefined } }).run({ type: "editScrollback" });
+    gate.sendInput("p1", "ls");
+    await flush();
+    expect(view.focusedPaneId).toBe("p1");
+    expect(conn.sendInput).toHaveBeenCalledWith("p1", "ls");
+  });
+
+  it("焦点の pane が無ければ何も送らない", async () => {
+    const conn = makeConnection();
+    makeDispatcher(conn).dispatcher.run({ type: "editScrollback" });
+    await flush();
+    expect(conn.requests).toEqual([]);
   });
 });
 

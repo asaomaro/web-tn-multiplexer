@@ -34,7 +34,7 @@ describe("HelpDialog — 表示", () => {
     expect(names).toEqual(["全体", "移動", "workspace / tab", "pane"]);
   });
 
-  it("後続のキーは灰色クラスで「未対応（後続: ◯◯）」と出す", async () => {
+  it("既定の表示：割り当てなしの行は灰色。「未対応（後続: ◯◯）」の行はもう無い（20260926-edit-scrollback で最後の e が昇格）", async () => {
     const view = useViewStore(pinia);
     const wrapper = mountDialog();
     await open(view, wrapper);
@@ -43,7 +43,7 @@ describe("HelpDialog — 表示", () => {
     // `o` は 20260920-agent-notifications で「次の知らせへ移る」になった。
     expect(wrapper.text()).toContain("次の知らせへ移る");
     // `shift+r` は 20260922-appearance-settings-rest T7 で「設定を読み直す」（reload_config）の
-    // 既定割り当てに昇格し、「後続」の案内からは外れた（残っているのは e だけ。下の assertion）。
+    // 既定割り当てに昇格し、「後続」の案内からは外れた。
     expect(wrapper.text()).toContain("設定を読み直す");
     // `s` の行を特定して見る——「設定」は「設定を読み直す」（reload_config）にも含まれるので、全文の `toContain` では
     // `s` の表記が何であっても通ってしまう（20260921-herdr-settings-gaps で「通知の設定」から「設定」に広げた）。
@@ -52,7 +52,9 @@ describe("HelpDialog — 表示", () => {
     expect(wrapper.text(), "壊れた表示（work 名が空）を出さない").not.toContain("未対応（後続: ）");
     // `shift+g`（グルーピングの枠）は 20260920-git-worktree-actions で「新しい worktree」に置き換わった。
     expect(wrapper.text()).toContain("新しい worktree");
-    expect(wrapper.text()).toContain("未対応（後続: 端末機能の拡張）");
+    const eLabel = wrapper.findAll("dt").find((dt) => dt.text() === "prefix+e")?.element.nextElementSibling?.textContent;
+    expect(eLabel).toBe("スクロールバックをエディタで開く");
+    expect(wrapper.text()).not.toContain("未対応");
   });
 
   it("H/J/K/L（swap）は herdr のヘルプにも出ないので、ここにも出さない（D76）", async () => {
@@ -166,7 +168,7 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     const wrapper = mountDialog();
     await open(view, wrapper);
     const groups = wrapper.findAll(".help-dialog-group");
-    // 全体：prefix・?・q・s・o・（後続の shift+r）
+    // 全体：prefix・?・q・s・o・shift+r
     expect(groups[0]!.findAll("dt").map((el) => el.text())).toEqual(["ctrl+b", "prefix+?", "prefix+q", "prefix+s", "prefix+o", "prefix+shift+r"]);
     expect(groups[0]!.findAll("dd")[0]!.text()).toContain("prefix");
     // 移動（navigate モードの操作は現在の割り当てから作る。20260923-navigate-mode-keys。AC7）。
@@ -186,12 +188,12 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     // workspace / tab
     expect(groups[2]!.findAll("dt").map((el) => el.text())).toContain("prefix+1..9");
     expect(groups[2]!.findAll("dt").map((el) => el.text())).toContain("prefix+shift+n");
-    // pane：巡回（prefix+tab・prefix+shift+tab）は操作の行、swap は出さない、後続の e は最後
+    // pane：巡回（prefix+tab・prefix+shift+tab）は操作の行、swap は出さない、e はスクロールバックをエディタで開く（20260926-edit-scrollback）
     const pane = groups[3]!.findAll("dt").map((el) => el.text());
     expect(pane).toContain("prefix+tab");
     expect(pane).toContain("prefix+shift+tab");
     expect(pane).toContain("prefix+-");
-    expect(pane.at(-1)).toBe("prefix+e");
+    expect(pane).toContain("prefix+e");
     expect(wrapper.text()).not.toContain("入れ替え");
   });
 
@@ -231,24 +233,17 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     expect(none?.classes()).toContain("help-dialog-grayed");
   });
 
-  it("「後続」の案内は、そのキーがまだ「後続」のときだけ出す（別の操作に割り当てたら出さない）", async () => {
+  it("e を別の操作に割り当てると、スクロールバックをエディタで開く行は「なし」（灰色）になる（20260926-edit-scrollback の AC10）", async () => {
     const settings = useSettingsStore(pinia);
     settings.setKeyBindings("goto", ["prefix+g", "prefix+e"]);
     const view = useViewStore(pinia);
     const wrapper = mountDialog();
     await open(view, wrapper);
-    expect(wrapper.text()).not.toContain("未対応（後続: 端末機能の拡張）"); // e は goto の割り当て
-    // shift+r は 20260922-appearance-settings-rest T7 で reload_config の既定割り当てに
-    // 昇格したので、ここでは触っていない shift+r の通常の行がそのまま出ることを確かめる
-    // （「後続」の案内ではなく、既定どおりの操作の行）。
-    expect(rowOf(wrapper, "prefix+shift+r")?.element.nextElementSibling?.textContent).toBe(
-      "設定を読み直す",
-    );
     expect(rowOf(wrapper, "prefix+g / prefix+e")).toBeDefined();
-    // 「後続」の行そのものが出ない（work が空の壊れた行「未対応（後続: undefined）」にもならない）
-    expect(rowOf(wrapper, "prefix+e"), "e の後続の行は無い").toBeUndefined();
+    expect(rowOf(wrapper, "prefix+e")).toBeUndefined();
+    const row = wrapper.findAll("dd").find((dd) => dd.text() === "スクロールバックをエディタで開く");
+    expect(row?.element.previousElementSibling?.textContent).toBe("なし");
     expect(wrapper.text()).not.toContain("undefined");
-    expect(wrapper.text()).not.toContain("未対応（後続: ）");
   });
 
   it("shift+r を別の操作に割り当てると、reload_config の既定行は「なし」になる（後続ではなく通常の上書き。全体の群）", async () => {
@@ -264,7 +259,7 @@ describe("HelpDialog — 現在の割り当て（AC11）", () => {
     const none = rowOf(wrapper, "なし");
     expect(none?.element.nextElementSibling?.textContent).toBe("設定を読み直す");
     expect(none?.classes()).toContain("help-dialog-grayed");
-    expect(wrapper.text()).toContain("未対応（後続: 端末機能の拡張）"); // e はそのまま
+    expect(rowOf(wrapper, "prefix+e")?.element.nextElementSibling?.textContent).toBe("スクロールバックをエディタで開く"); // e はそのまま
   });
 
   it("絞り込みは現在の表記でも効く（ctrl+alt）。一致 0 件の群は消える", async () => {

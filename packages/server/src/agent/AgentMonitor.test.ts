@@ -32,6 +32,9 @@ class FakeMirror implements Mirror {
   bottomLines(): string[] {
     return this.linesValue;
   }
+  plainText(): string {
+    return "";
+  }
   title(): string {
     return this.titleValue;
   }

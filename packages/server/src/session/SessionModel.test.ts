@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NotFoundError, SessionModel, type NewPaneInit } from "./SessionModel.js";
+import * as Layout from "./LayoutTree.js";
 
 const init: NewPaneInit = { cwd: "/home/u", shell: "/bin/bash", cols: 80, rows: 24 };
 
@@ -71,6 +72,51 @@ describe("SessionModel — split / close panes", () => {
     expect(model.getTab(tab.id)?.layout).toEqual({ type: "pane", paneId: pane.id });
     expect(model.getTab(tab.id)?.focusedPaneId).toBe(pane.id); // 消えた方にフォーカスがあったので移る
     expect(model.getPane(newPane.id)).toBeUndefined();
+  });
+
+  describe("closePane の後継の希望（20260926-edit-scrollback）", () => {
+    function threePanes() {
+      const model = new SessionModel();
+      const { tab, pane: p1 } = model.createWorkspace("/home/u", "api", init);
+      const { pane: p2 } = model.splitPane(p1.id, "right", undefined, model.reserveNextPaneId(), init);
+      const { pane: p3 } = model.splitPane(p2.id, "right", undefined, model.reserveNextPaneId(), init);
+      return { model, tab, p1: p1.id, p2: p2.id, p3: p3.id };
+    }
+
+    it("閉じた pane が焦点なら、残っている希望の pane を焦点にし successorPaneId に入れる（最初の葉ではなく）", () => {
+      const { model, tab, p1, p2, p3 } = threePanes();
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(p3);
+      const result = model.closePane(p3, p2);
+      expect(result).toEqual({ removedPaneIds: [p3], removedTabIds: [], closedWorkspaceId: null, successorPaneId: p2 });
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(p2);
+      expect(model.getFocus()?.paneId).toBe(p2);
+      expect(Layout.leaves(model.getTab(tab.id)!.layout)[0]).toBe(p1); // 既定なら p1 になるところ
+    });
+
+    it("閉じた pane が焦点でなければ焦点は動かさないが、successorPaneId は入れる（別のブラウザの後継の手がかり）", () => {
+      const { model, tab, p1, p2, p3 } = threePanes();
+      model.focusPane(p1);
+      const result = model.closePane(p3, p2);
+      expect(result.successorPaneId).toBe(p2);
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(p1);
+    });
+
+    it("希望の pane がその tab に無ければ、既定（最初の葉）で successorPaneId は付けない", () => {
+      const { model, tab, p1, p2, p3 } = threePanes();
+      model.closePane(p2);
+      const result = model.closePane(p3, p2);
+      expect(result).toEqual({ removedPaneIds: [p3], removedTabIds: [], closedWorkspaceId: null });
+      expect(Object.hasOwn(result, "successorPaneId")).toBe(false); // toEqual は undefined の値とキー無しを区別しない
+      expect(model.getTab(tab.id)?.focusedPaneId).toBe(p1);
+    });
+
+    it("tab ごと閉じる連鎖では希望を無視する", () => {
+      const model = new SessionModel();
+      const { workspace, pane } = model.createWorkspace("/home/u", "api", init);
+      const other = model.createTab(workspace.id, "second", init);
+      const result = model.closePane(pane.id, other.pane.id);
+      expect(result.successorPaneId).toBeUndefined();
+    });
   });
 
   it("closing the last pane in a tab closes the tab too, without double-counting", () => {
