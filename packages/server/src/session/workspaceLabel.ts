@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as nodePath from "node:path";
 import { withTimeout } from "./withTimeout.js";
@@ -24,6 +24,11 @@ export interface WorkspaceLabelDeps {
   /** ファイルの中身。読めなければ null。 */
   readFile: (path: string) => Promise<string | null>;
   home: () => string;
+  /**
+   * シンボリックリンクを解決した実パス。読めなければ null。無ければ解決しない（文字列の比較だけ）。追従で「同じディレクトリか」を見るのに使う
+   * （監視は `/proc/<pid>/cwd` の実パスを入れるので、リンクを含む論理パスで開いた場所と文字列が違う。20260926-workspace-label-follow-cwd）。
+   */
+  realpath?: (path: string) => Promise<string | null>;
   /** パスの扱い（既定は `node:path`＝サーバの OS。テストで `path.win32` を渡して Windows の形を確かめる）。 */
   path?: PathApi;
   timeoutMs?: number;
@@ -197,6 +202,13 @@ export const defaultWorkspaceLabelDeps: WorkspaceLabelDeps = {
   readFile: async (p) => {
     try {
       return await readFile(p, "utf8");
+    } catch {
+      return null;
+    }
+  },
+  realpath: async (p) => {
+    try {
+      return await realpath(p);
     } catch {
       return null;
     }

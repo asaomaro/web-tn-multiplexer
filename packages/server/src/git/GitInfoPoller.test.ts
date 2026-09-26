@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { HostInfo } from "@wtm/protocol";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { basename, join } from "node:path";
+import type { HostInfo, Workspace } from "@wtm/protocol";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Disposable } from "../util/Disposable.js";
 import { MemoryLogger } from "../log/Logger.js";
 import { EventBus } from "../bus/EventBus.js";
@@ -11,7 +11,7 @@ import type { PersistScheduler } from "../session/PersistScheduler.js";
 import { SessionModel } from "../session/SessionModel.js";
 import { SessionService } from "../session/SessionService.js";
 import { makeTempDir } from "../persist/atomicFile.js";
-import { ChildProcessGitRunner } from "../infra/GitRunner.js";
+import { ChildProcessGitRunner, type GitRunner } from "../infra/GitRunner.js";
 import { DefaultGitInfoPoller } from "./GitInfoPoller.js";
 
 class AlwaysUpHost implements TerminalHost {
@@ -215,6 +215,208 @@ describe("DefaultGitInfoPoller", () => {
       const second = service.snapshot().workspaces[0]!;
       expect(second).toBe(first); // 同一参照のまま＝モデルを書き換えていない・二重 publish もしない
     });
+  });
+});
+
+// 20260926-workspace-label-follow-cwd：git の情報と自動の名前を、最初の tab の最初の pane のいまの場所から一緒に決め直す（design D1〜D4）。
+describe("DefaultGitInfoPoller — 最初の pane のいまの場所への追従", () => {
+  let repoA: string;
+  let repoB: string;
+  let plain: string;
+  let bus: EventBus;
+  let service: SessionService;
+  let runs: string[];
+  let gate: { cwd: string; wait: Promise<void> } | null;
+  let poller: DefaultGitInfoPoller;
+
+  async function repo(branch: string): Promise<string> {
+    const dir = await makeTempDir("wtm-follow-");
+    await runGit(dir, ["init", "-b", branch]);
+    await runGit(dir, ["config", "user.email", "t@example.com"]);
+    await runGit(dir, ["config", "user.name", "t"]);
+    await runGit(dir, ["commit", "--allow-empty", "-m", "init"]);
+    await mkdir(join(dir, "sub"), { recursive: true });
+    return dir;
+  }
+
+  beforeEach(async () => {
+    repoA = await repo("main");
+    repoB = await repo("other");
+    plain = await mkdirTemp();
+    bus = new EventBus();
+    service = new SessionService({
+      model: new SessionModel(),
+      terminals: new AlwaysUpTerminalManager(),
+      bus,
+      persist: new NoopPersist(),
+      serverVersion: "test",
+      host: HOST_INFO,
+      scrollbackLines: 1000,
+      spawnGraceMs: 1,
+      defaultCwd: repoA,
+      logger: new MemoryLogger(),
+    });
+    runs = [];
+    gate = null;
+    const real = new ChildProcessGitRunner();
+    const git: GitRunner = {
+      run: async (cwd, args, timeoutMs) => {
+        runs.push(cwd);
+        if (gate && cwd === gate.cwd) await gate.wait;
+        return real.run(cwd, args, timeoutMs);
+      },
+    };
+    poller = new DefaultGitInfoPoller(service, git, 60_000, bus); // 周期は待たない——追従はバスで起きることを見る
+  });
+
+  afterEach(async () => {
+    poller.stop();
+    for (const dir of [repoA, repoB, plain]) await rm(dir, { recursive: true, force: true });
+  });
+
+  const ws = (id: string) => service.getWorkspace(id)!;
+
+  it("最初の pane が別のリポジトリへ移ると、名前と git が 1 つの workspace.updated でそのリポジトリのものになる（AC1・AC10）", async () => {
+    const { workspace, pane } = await service.createWorkspace(repoA, undefined);
+    poller.start();
+    await poller.pollNow();
+    expect(ws(workspace.id)).toMatchObject({ label: basename(repoA), git: { branch: "main" } });
+    const updates: Workspace[] = [];
+    bus.subscribe((e) => {
+      if (e.event === "workspace.updated") updates.push(e.data.workspace);
+    });
+    service.updatePaneRuntime(pane.id, { cwd: join(repoB, "sub") });
+    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 5000 });
+    expect(updates.map((w) => [w.label, w.git?.branch]), "名前と git は同じ 1 回で").toEqual([[basename(repoB), "other"]]);
+    expect(ws(workspace.id).cwd, "開いた場所は変えない（AC9）").toBe(repoA);
+  });
+
+  it("git の外へ移ると、名前がフォルダ名になり git の情報が消える（AC2）", async () => {
+    const { workspace, pane } = await service.createWorkspace(repoA, undefined);
+    poller.start();
+    await poller.pollNow();
+    service.updatePaneRuntime(pane.id, { cwd: plain });
+    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(plain), git: null }), { timeout: 5000 });
+  });
+
+  it("付けた名前は変えず、git だけがいまの場所のものになる（AC3）", async () => {
+    const { workspace, pane } = await service.createWorkspace(repoA, "mine");
+    poller.start();
+    await poller.pollNow();
+    service.updatePaneRuntime(pane.id, { cwd: repoB });
+    await vi.waitFor(() => expect(ws(workspace.id).git).toMatchObject({ branch: "other" }), { timeout: 5000 });
+    expect(ws(workspace.id)).toMatchObject({ label: "mine", autoLabel: false });
+  });
+
+  it("最初の pane 以外の場所の変化・場所の変わらないイベントでは git に問い合わせない（AC4・AC11）", async () => {
+    const { workspace, pane } = await service.createWorkspace(repoA, undefined);
+    const right = await service.splitPane(pane.id, "right", undefined);
+    const { pane: second } = await service.createTab(workspace.id, undefined);
+    poller.start();
+    await poller.pollNow();
+    const before = runs.length;
+    service.updatePaneRuntime(right.pane.id, { cwd: repoB });
+    service.updatePaneRuntime(second.id, { cwd: repoB });
+    service.updatePaneRuntime(pane.id, { title: "vim" }); // 題名だけの pane.updated
+    await service.renameWorkspace(workspace.id, "named"); // 名前だけの workspace.updated
+    await new Promise((r) => setTimeout(r, 50));
+    expect(runs.length - before).toBe(0);
+    expect(ws(workspace.id).git).toMatchObject({ branch: "main" });
+  });
+
+  // AC5：最初の pane が代わる操作ごとに 1 件。閉じる操作は `pane.closed`・`tab.closed` の後に必ず `layout.updated` か `workspace.updated` も
+  // 出るので、この 2 種類の購読は念のためで、テストでは見分けられない（decisions D7）。
+  describe("最初の pane が代わると、新しい最初の pane の場所に追従する（AC5）", () => {
+    async function withSecondPaneInB() {
+      const { workspace, pane } = await service.createWorkspace(repoA, undefined);
+      const right = await service.splitPane(pane.id, "right", undefined);
+      service.updatePaneRuntime(right.pane.id, { cwd: repoB });
+      poller.start();
+      await poller.pollNow();
+      expect(ws(workspace.id).git).toMatchObject({ branch: "main" });
+      return { workspace, pane, right: right.pane };
+    }
+    const followedB = (id: string) =>
+      vi.waitFor(() => expect(ws(id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 5000 });
+
+    it("pane.closed：最初の pane を閉じる", async () => {
+      const { workspace, pane } = await withSecondPaneInB();
+      await service.closePane(pane.id);
+      await followedB(workspace.id);
+    });
+
+    it("layout.updated：入れ替える", async () => {
+      const { workspace, pane, right } = await withSecondPaneInB();
+      service.swapPaneWith(pane.id, right.id);
+      await followedB(workspace.id);
+    });
+
+    it("tab.closed：先頭の tab を閉じる", async () => {
+      const { workspace, pane } = await service.createWorkspace(repoA, undefined);
+      const { pane: second } = await service.createTab(workspace.id, undefined);
+      service.updatePaneRuntime(second.id, { cwd: repoB });
+      poller.start();
+      await poller.pollNow();
+      await service.closeTab(service.getPane(pane.id)!.tabId);
+      await followedB(workspace.id);
+    });
+
+    it("workspace.updated：tab を並べ替える", async () => {
+      const { workspace } = await service.createWorkspace(repoA, undefined);
+      const { tab, pane: second } = await service.createTab(workspace.id, undefined);
+      service.updatePaneRuntime(second.id, { cwd: repoB });
+      poller.start();
+      await poller.pollNow();
+      service.moveTab(tab.id, "previous");
+      await followedB(workspace.id);
+    });
+  });
+
+  it("見直しの間に場所が変わったら、古い場所の結果で上書きしない（AC6）", async () => {
+    const { workspace, pane } = await service.createWorkspace(repoA, undefined);
+    let release: () => void = () => undefined;
+    gate = { cwd: repoA, wait: new Promise<void>((r) => (release = r)) };
+    poller.start(); // 1 周目は repoA の git で止まる
+    await vi.waitFor(() => expect(runs).toContain(repoA));
+    service.updatePaneRuntime(pane.id, { cwd: repoB });
+    await vi.waitFor(() => expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } }), { timeout: 5000 });
+    release();
+    // 止まっていた repoA の見直しが git を 4 本とも走らせ終える（＝古い結果を入れようとする）まで待つ。
+    await vi.waitFor(() => expect(runs.filter((c) => c === repoA).length).toBeGreaterThanOrEqual(4), { timeout: 5000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ws(workspace.id)).toMatchObject({ label: basename(repoB), git: { branch: "other" } });
+  });
+
+  it("復元した workspace は、保存の最初の pane の場所で git と名前を取る（AC8）", async () => {
+    await service.restore({
+      schema: 1,
+      savedAt: "2026-09-26T00:00:00Z",
+      nextId: { w: 10, t: 10, p: 10, s: 1, a: 1, g: 1 },
+      groups: [],
+      workspaces: [
+        {
+          id: "w1",
+          label: "1",
+          cwd: repoA,
+          activeTabId: "t1",
+          tabs: [{ id: "t1", label: "1", focusedPaneId: "p1", zoomedPaneId: null, layout: { type: "pane", paneId: "p1" }, panes: [{ id: "p1", label: null, cwd: repoB, shell: "/bin/sh" }] }],
+        },
+      ],
+      focus: null,
+    });
+    await poller.pollNow();
+    expect(ws("w1")).toMatchObject({ label: basename(repoB), cwd: repoA, git: { branch: "other" } });
+  });
+
+  it("stop の後は場所が変わっても見直さない", async () => {
+    const { pane } = await service.createWorkspace(repoA, undefined);
+    poller.start();
+    await poller.pollNow();
+    poller.stop();
+    const before = runs.length;
+    service.updatePaneRuntime(pane.id, { cwd: repoB });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(runs.length).toBe(before);
   });
 });
 

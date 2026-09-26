@@ -186,7 +186,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
   });
 
   const gitRunner = new ChildProcessGitRunner();
-  const gitPoller = new DefaultGitInfoPoller(session, gitRunner);
+  const gitPoller = new DefaultGitInfoPoller(session, gitRunner, undefined, bus); // 最初の pane の場所の変化にすぐ気づく（20260926-workspace-label-follow-cwd）
   // worktree の一覧と作成（20260920-git-worktree-actions）。`GitInfoPoller` と同じ runner を使い回す。
   const worktrees = new DefaultWorktreeService(session, gitRunner, logger, options.worktreeDir);
 
@@ -339,8 +339,9 @@ function toSessionFileData(session: SessionService): SessionFileData {
       groupId: ws.groupId,
       cwd: ws.cwd,
       activeTabId: ws.activeTabId,
-      tabs: snapshot.tabs
-        .filter((t) => t.workspaceId === ws.id)
+      // tab は並べ替えた順（`ws.tabIds`）で保存する——復元の tab の並びと、最初の tab（名前と git を決める場所。20260926-workspace-label-follow-cwd）が保たれる。
+      tabs: ws.tabIds
+        .flatMap((id) => snapshot.tabs.filter((t) => t.id === id))
         .map((tab) => ({
           id: tab.id,
           label: tab.label,

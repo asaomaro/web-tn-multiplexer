@@ -1,4 +1,4 @@
-import type { AgentInfo, HostInfo, LayoutNode } from "@wtm/protocol";
+import type { AgentInfo, GitInfo, HostInfo, LayoutNode, Workspace } from "@wtm/protocol";
 import { RpcError } from "@wtm/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Disposable } from "../util/Disposable.js";
@@ -1889,5 +1889,354 @@ describe("SessionService — workspace の自動の名前", () => {
       expect(service.snapshot().workspaces.map((w) => w.label)).toEqual(["a", "b", "c"]);
       expect(s.calls, "止まった 1 つ（w1 の最初の stat）の後は問い合わせない").toEqual(["/r/a"]);
     });
+  });
+});
+
+// 20260926-workspace-label-follow-cwd：自動の名前を、最初の tab の最初の pane のいまの場所から決め直す（design D1〜D7）。
+describe("SessionService — 最初の pane のいまの場所（名前の追従）", () => {
+  const GIT: GitInfo = { branch: "main", ahead: 0, behind: 0, repoKey: "/q/.git", isLinkedWorktree: false };
+
+  function setup(deps: WorkspaceLabelDeps = fakeLabelDeps(["/r", "/q"])) {
+    const terminals = new FakeTerminalManager();
+    const bus = new EventBus();
+    const persist = new FakePersistScheduler();
+    const updated: Workspace[] = [];
+    bus.subscribe((e) => {
+      if (e.event === "workspace.updated") updated.push(e.data.workspace);
+    });
+    const service = makeService(terminals, bus, persist, undefined, deps);
+    return { service, bus, persist, updated };
+  }
+
+  /** stat を数える deps。 */
+  function countingDeps(gitRoots: string[] = ["/r", "/q"]) {
+    const base = fakeLabelDeps(gitRoots);
+    const calls: string[] = [];
+    const deps: WorkspaceLabelDeps = { ...base, stat: (p) => (calls.push(p), base.stat(p)) };
+    return { deps, calls };
+  }
+
+  it("いまの場所は最初の tab の、画面の並びで先頭の pane の場所。ほかの pane・ほかの tab の場所では変わらず、開いた場所も変えない（AC4・AC9）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", undefined);
+    const right = await h.service.splitPane(pane.id, "right", undefined);
+    const { pane: second } = await h.service.createTab(workspace.id, undefined);
+    expect(h.service.identityCwdOf(workspace.id)).toBe("/r/src");
+    h.service.updatePaneRuntime(right.pane.id, { cwd: "/q/a" });
+    h.service.updatePaneRuntime(second.id, { cwd: "/q/b" });
+    expect(h.service.identityCwdOf(workspace.id), "分割した pane・2 つ目の tab の pane では変わらない").toBe("/r/src");
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/c" });
+    expect(h.service.identityCwdOf(workspace.id)).toBe("/q/c");
+    expect(h.service.getWorkspace(workspace.id)!.cwd, "開いた場所は変えない").toBe("/r/src");
+    expect(h.service.identityCwdOf("w999")).toBeUndefined();
+  });
+
+  it("最初の pane を閉じる・入れ替える・先頭の tab を並べ替えると、新しい最初の pane の場所になる（AC5）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", undefined);
+    const right = await h.service.splitPane(pane.id, "right", undefined);
+    h.service.updatePaneRuntime(right.pane.id, { cwd: "/q/right" });
+    h.service.swapPaneWith(pane.id, right.pane.id);
+    expect(h.service.identityCwdOf(workspace.id), "入れ替えで左上に来た pane").toBe("/q/right");
+    h.service.swapPaneWith(pane.id, right.pane.id);
+    await h.service.closePane(pane.id);
+    expect(h.service.identityCwdOf(workspace.id), "閉じたら残りの先頭").toBe("/q/right");
+    const { tab: tab2, pane: p2 } = await h.service.createTab(workspace.id, undefined);
+    h.service.updatePaneRuntime(p2.id, { cwd: "/srv/two" });
+    h.service.moveTab(tab2.id, "previous");
+    expect(h.service.identityCwdOf(workspace.id), "並べ替えで先頭になった tab").toBe("/srv/two");
+  });
+
+  it("最初の pane が別のリポジトリへ移ると、その根の名前と git を 1 つの workspace.updated で入れて保存を予約する（AC1・AC2・AC10）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", undefined);
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/pkg/deep" });
+    const label = await h.service.followedLabel(workspace.id, "/q/pkg/deep");
+    expect(label).toMatchObject({ label: "q", degraded: false });
+    const touches = h.persist.touchCount;
+    h.updated.length = 0;
+    h.service.applyWorkspaceIdentity(workspace.id, "/q/pkg/deep", GIT, label);
+    expect(h.updated.map((w) => [w.label, w.autoLabel, w.git?.branch])).toEqual([["q", true, "main"]]);
+    expect(h.persist.touchCount - touches, "名前は保存にある").toBe(1);
+    h.service.updatePaneRuntime(pane.id, { cwd: "/srv/plain" });
+    h.service.applyWorkspaceIdentity(workspace.id, "/srv/plain", null, await h.service.followedLabel(workspace.id, "/srv/plain"));
+    expect(h.updated.at(-1)).toMatchObject({ label: "plain", autoLabel: true, git: null });
+  });
+
+  it("場所が変わっていなければ名前を決め直さない（fs に問い合わせない。AC11）", async () => {
+    const c = countingDeps();
+    const h = setup(c.deps);
+    const { workspace } = await h.service.createWorkspace("/r/src", undefined);
+    const asked = c.calls.length;
+    expect(await h.service.followedLabel(workspace.id, "/r/src")).toBeNull();
+    expect(c.calls.length).toBe(asked);
+    const moved = await h.service.followedLabel(workspace.id, "/q/x");
+    h.service.updatePaneRuntime(h.service.snapshot().panes[0]!.id, { cwd: "/q/x" });
+    h.service.applyWorkspaceIdentity(workspace.id, "/q/x", null, moved);
+    const after = c.calls.length;
+    expect(await h.service.followedLabel(workspace.id, "/q/x"), "決め直した場所も記録する").toBeNull();
+    expect(c.calls.length).toBe(after);
+  });
+
+  // review ラウンド 1：監視は `/proc/<pid>/cwd` の実パスを入れる。リンクを含む論理パスで開いても、`cd` していなければ名前を変えない。
+  it("開いた場所（リンクを含む論理パス）と監視が入れた実パスが同じディレクトリなら、名前を決め直さない", async () => {
+    const base = fakeLabelDeps(["/r", "/q"]);
+    const real: Record<string, string> = { "/link/proj": "/data/proj-2024", "/data/proj-2024": "/data/proj-2024", "/data/other": "/data/other" };
+    const c = { calls: 0 };
+    const h = setup({ ...base, stat: (p) => (c.calls++, base.stat(p)), realpath: async (p) => real[p] ?? null });
+    const { workspace, pane } = await h.service.createWorkspace("/link/proj", undefined);
+    expect(h.service.getWorkspace(workspace.id)!.label).toBe("proj");
+    h.service.updatePaneRuntime(pane.id, { cwd: "/data/proj-2024" });
+    const asked = c.calls;
+    const same = await h.service.followedLabel(workspace.id, "/data/proj-2024");
+    expect(same, "いまの名前のまま、場所だけ記録する").toMatchObject({ label: "proj", degraded: false });
+    expect(c.calls, "名前を決めるために fs をたどらない").toBe(asked);
+    h.service.applyWorkspaceIdentity(workspace.id, "/data/proj-2024", null, same);
+    expect(h.service.getWorkspace(workspace.id)!.label).toBe("proj");
+    expect(await h.service.followedLabel(workspace.id, "/data/proj-2024"), "記録したので次は問い合わせもしない").toBeNull();
+    h.service.updatePaneRuntime(pane.id, { cwd: "/data/other" });
+    expect(await h.service.followedLabel(workspace.id, "/data/other"), "別のディレクトリなら決め直す").toMatchObject({ label: "other" });
+  });
+
+  it("リンクを解決できない場所どうしは同じとみなさず、決め直す", async () => {
+    const h = setup({ ...fakeLabelDeps(["/r", "/q"]), realpath: async () => null });
+    const { workspace, pane } = await h.service.createWorkspace("/srv/a", undefined);
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/b" });
+    expect(await h.service.followedLabel(workspace.id, "/q/b")).toMatchObject({ label: "q" });
+  });
+
+  it("fs が詰まっている間はリンクを解決しに行かない。解決が上限を超えたら詰まりとして数える", async () => {
+    let hang = false;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const resolved: string[] = [];
+    const base = fakeLabelDeps(["/r", "/q"]);
+    const h = setup({ ...base, timeoutMs: 20, realpath: async (p) => (resolved.push(p), hang ? gate.then(() => p) : p) });
+    const { workspace, pane } = await h.service.createWorkspace("/srv/a", undefined);
+    hang = true;
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/b" });
+    const first = await h.service.followedLabel(workspace.id, "/q/b");
+    expect(first, "解決が上限を超えた——決め直すが、詰まっているのでフォルダ名").toMatchObject({ label: "b", degraded: true });
+    const asked = resolved.length;
+    await h.service.followedLabel(workspace.id, "/q/b");
+    expect(resolved.length, "詰まっている間は解決しに行かない").toBe(asked);
+    hang = false;
+    release();
+  });
+
+  it("付けた名前は変えず、git だけ入れる（AC3）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", "mine");
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/x" });
+    const label = await h.service.followedLabel(workspace.id, "/q/x");
+    expect(label).toBeNull();
+    h.service.applyWorkspaceIdentity(workspace.id, "/q/x", GIT, label);
+    expect(h.service.getWorkspace(workspace.id)).toMatchObject({ label: "mine", autoLabel: false, git: GIT });
+  });
+
+  it("見直しの間に場所が変わったら、名前も git も捨てる（AC6）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", undefined);
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/x" });
+    const label = await h.service.followedLabel(workspace.id, "/q/x");
+    h.service.updatePaneRuntime(pane.id, { cwd: "/srv/next" });
+    h.updated.length = 0;
+    h.service.applyWorkspaceIdentity(workspace.id, "/q/x", GIT, label);
+    expect(h.updated).toEqual([]);
+    expect(h.service.getWorkspace(workspace.id)).toMatchObject({ label: "r", git: null });
+  });
+
+  it("見直しの間に名前を付けたら、名前は捨てて付けた名前が勝つ（git は入れる。design D5）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", undefined);
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/x" });
+    const label = await h.service.followedLabel(workspace.id, "/q/x");
+    await h.service.renameWorkspace(workspace.id, "mine");
+    await h.service.renameWorkspace(workspace.id, null); // 自動に戻したが世代が進んでいる
+    h.service.applyWorkspaceIdentity(workspace.id, "/q/x", GIT, { ...label!, label: "stale" });
+    expect(h.service.getWorkspace(workspace.id)).toMatchObject({ label: "q", autoLabel: true, git: GIT });
+  });
+
+  it("名前を空にして確定すると、開いた場所ではなく最初の pane のいまの場所の名前になる（AC7）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", "mine");
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/x" });
+    await h.service.renameWorkspace(workspace.id, null);
+    expect(h.service.getWorkspace(workspace.id)).toMatchObject({ label: "q", autoLabel: true });
+  });
+
+  it("名前を空にして確定した待ちの間に場所が変わったら、新しい場所で決め直す。決まらなければ名前は入れず自動の印だけ立てる（AC6）", async () => {
+    const base = fakeLabelDeps(["/r", "/q"]);
+    let onStat: (p: string) => void = () => undefined;
+    const h = setup({ ...base, stat: (p) => (onStat(p), base.stat(p)) });
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", "mine");
+    h.service.updatePaneRuntime(pane.id, { cwd: "/r/a" });
+    let moves = 0;
+    onStat = (p) => {
+      if (p === "/r/a" && moves++ === 0) h.service.updatePaneRuntime(pane.id, { cwd: "/q/b" });
+    };
+    await h.service.renameWorkspace(workspace.id, null);
+    expect(h.service.getWorkspace(workspace.id), "新しい場所 /q/b の名前").toMatchObject({ label: "q", autoLabel: true });
+
+    await h.service.renameWorkspace(workspace.id, "named");
+    let n = 0;
+    onStat = () => h.service.updatePaneRuntime(pane.id, { cwd: `/srv/moving${n++}` }); // 決めるたびに場所が変わる
+    await h.service.renameWorkspace(workspace.id, null);
+    expect(h.service.getWorkspace(workspace.id), "古い場所の名前で上書きしない").toMatchObject({ label: "named", autoLabel: true });
+    onStat = () => undefined;
+    const cwd = h.service.identityCwdOf(workspace.id)!;
+    expect(await h.service.followedLabel(workspace.id, cwd), "見直しが決め直す").toMatchObject({ label: cwd.split("/").at(-1) });
+  });
+
+  it("復元は、保存の最初の tab の先頭の pane の場所から名前を決める（以前の版の保存でも。AC8・AC14）", async () => {
+    const c = countingDeps();
+    const h = setup(c.deps);
+    await h.service.restore({
+      schema: 1,
+      savedAt: "2026-09-21T00:00:00Z",
+      nextId: { w: 10, t: 10, p: 10, s: 1, a: 1, g: 1 },
+      groups: [],
+      workspaces: [
+        {
+          id: "w1",
+          label: "1", // 以前の版（autoLabel の印が無い）
+          cwd: "/srv/opened",
+          activeTabId: "t1",
+          tabs: [
+            {
+              id: "t1",
+              label: "1",
+              focusedPaneId: "p2",
+              zoomedPaneId: null,
+              layout: { type: "split", id: "s1", dir: "right", ratio: 0.5, a: { type: "pane", paneId: "p1" }, b: { type: "pane", paneId: "p2" } },
+              panes: [
+                { id: "p2", label: null, cwd: "/srv/other", shell: "/bin/sh" },
+                { id: "p1", label: null, cwd: "/q/deep", shell: "/bin/sh" },
+              ],
+            },
+          ],
+        },
+      ],
+      focus: null,
+    });
+    expect(h.service.getWorkspace("w1")).toMatchObject({ label: "q", autoLabel: true, cwd: "/srv/opened" });
+    const asked = c.calls.length;
+    expect(await h.service.followedLabel("w1", "/q/deep"), "復元で決めた場所も記録する").toBeNull();
+    expect(c.calls.length).toBe(asked);
+  });
+
+  it("止まった fs のためにフォルダ名で代えた名前は、決め直し済みと記録しない（次の見直しで決め直す。AC15）", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    let hang = true;
+    const base = fakeLabelDeps(["/r"]);
+    const h = setup({ ...base, timeoutMs: 20, stat: (p) => (hang ? gate.then(() => base.stat(p)) : base.stat(p)) });
+    const { workspace } = await h.service.createWorkspace("/r/src", undefined);
+    expect(h.service.getWorkspace(workspace.id)!.label, "上限を超えたのでフォルダ名").toBe("src");
+    hang = false;
+    release();
+    await new Promise((r) => setTimeout(r, 10));
+    const label = await h.service.followedLabel(workspace.id, "/r/src");
+    expect(label, "同じ場所でも決め直す").toMatchObject({ label: "r", degraded: false });
+    h.service.applyWorkspaceIdentity(workspace.id, "/r/src", null, label);
+    expect(h.service.getWorkspace(workspace.id)!.label).toBe("r");
+  });
+
+  it("世代は待つ前に取る：見直しの待ちの間に名前を付けて自動に戻したら、見直しの名前は捨てる（design D5）", async () => {
+    let hang = false;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const base = fakeLabelDeps(["/r", "/q"]);
+    const h = setup({ ...base, timeoutMs: 60_000, stat: (p) => (hang ? gate.then(() => base.stat(p)) : base.stat(p)) });
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", undefined);
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/x" });
+    hang = true;
+    const following = h.service.followedLabel(workspace.id, "/q/x");
+    await h.service.renameWorkspace(workspace.id, "mine");
+    hang = false;
+    await h.service.renameWorkspace(workspace.id, null);
+    release();
+    const label = await following;
+    h.service.applyWorkspaceIdentity(workspace.id, "/q/x", null, { ...label!, label: "stale" });
+    expect(h.service.getWorkspace(workspace.id)).toMatchObject({ label: "q", autoLabel: true });
+  });
+
+  it("名前を空にして確定した場所も記録し、同じ場所では決め直さない（AC11）", async () => {
+    const c = countingDeps();
+    const h = setup(c.deps);
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", "mine");
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/x" });
+    await h.service.renameWorkspace(workspace.id, null);
+    const asked = c.calls.length;
+    expect(await h.service.followedLabel(workspace.id, "/q/x")).toBeNull();
+    expect(c.calls.length).toBe(asked);
+  });
+
+  it("追従で degraded の名前を入れたら、決め直し済みと記録しない（AC15）", async () => {
+    const h = setup();
+    const { workspace, pane } = await h.service.createWorkspace("/r/src", undefined);
+    h.service.updatePaneRuntime(pane.id, { cwd: "/q/x" });
+    h.service.applyWorkspaceIdentity(workspace.id, "/q/x", null, { label: "x", gen: 0, degraded: true });
+    expect(h.service.getWorkspace(workspace.id)!.label).toBe("x");
+    expect(await h.service.followedLabel(workspace.id, "/q/x")).toMatchObject({ label: "q", degraded: false });
+  });
+
+  /** 最初の問い合わせを上限（20ms）を超えて止め、`release` で返す deps。 */
+  function stuckOnce() {
+    let hang = true;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const base = fakeLabelDeps(["/r", "/q"]);
+    const deps: WorkspaceLabelDeps = { ...base, timeoutMs: 20, stat: (p) => (hang ? gate.then(() => base.stat(p)) : base.stat(p)) };
+    return {
+      deps,
+      release: async () => {
+        hang = false;
+        release();
+        await new Promise((r) => setTimeout(r, 10));
+      },
+    };
+  }
+
+  it("待つ前から詰まっていてフォルダ名にした名前も、決め直し済みと記録しない（AC15）", async () => {
+    const s = stuckOnce();
+    const h = setup(s.deps);
+    await h.service.createWorkspace("/r/src", undefined); // 上限を超えて詰まる
+    const { workspace } = await h.service.createWorkspace("/q/sub", undefined); // 詰まっている間：問い合わせずフォルダ名
+    expect(h.service.getWorkspace(workspace.id)!.label).toBe("sub");
+    await s.release();
+    expect(await h.service.followedLabel(workspace.id, "/q/sub")).toMatchObject({ label: "q" });
+  });
+
+  it("復元で上限を超えてフォルダ名にした名前は、決め直し済みと記録しない（AC15）", async () => {
+    const s = stuckOnce();
+    const h = setup(s.deps);
+    const paneTab = (id: string, cwd: string) => ({ id: `t-${id}`, label: "1", focusedPaneId: `p-${id}`, zoomedPaneId: null, layout: { type: "pane" as const, paneId: `p-${id}` }, panes: [{ id: `p-${id}`, label: null, cwd, shell: "/bin/sh" }] });
+    await h.service.restore({
+      schema: 1,
+      savedAt: "2026-09-26T00:00:00Z",
+      nextId: { w: 10, t: 10, p: 10, s: 1, a: 1, g: 1 },
+      groups: [],
+      workspaces: [{ id: "w1", label: "1", cwd: "/q/sub", activeTabId: "t-w1", tabs: [paneTab("w1", "/q/sub")] }],
+      focus: null,
+    });
+    expect(h.service.getWorkspace("w1")!.label).toBe("sub");
+    await s.release();
+    expect(await h.service.followedLabel("w1", "/q/sub")).toMatchObject({ label: "q" });
+  });
+
+  // 待ち終える前に詰まりが解ける順序（上限超えの直後に止まっていた問い合わせが返る）は、マイクロタスクの順序に依るので単体では確実に作れない
+  // （decisions D6）。ここでは上限を超えた問い合わせの結果が degraded になることだけを確かめる。
+  it("待つ間に上限を超え、返る前に詰まりが解けても、代えたフォルダ名は degraded（待ち終えた時点の詰まりでは決めない。AC15）", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    const base = fakeLabelDeps(["/r"]);
+    // 上限を超えたらすぐ止まっていた stat を返す（待ち終える前に詰まりが解ける）。
+    const h = setup({ ...base, timeoutMs: 20, stat: (p) => gate.then(() => base.stat(p)), onTimeout: () => release() });
+    const { workspace } = await h.service.createWorkspace("/srv/x", "named");
+    await h.service.renameWorkspace(workspace.id, null);
+    await new Promise((r) => setTimeout(r, 10));
+    const label = await h.service.followedLabel(workspace.id, "/srv/x");
+    expect(label, "決め直し済みと記録していないので、もう一度決める").not.toBeNull();
   });
 });

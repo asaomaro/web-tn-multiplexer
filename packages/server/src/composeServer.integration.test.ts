@@ -347,6 +347,25 @@ describe("composeServer (integration)", () => {
     expect(saved.workspaces.find((w) => w.id === named.id)).toMatchObject({ label: "persisted", autoLabel: false });
   }, 10000);
 
+  // 20260926-workspace-label-follow-cwd：tab を並べ替えた順で保存する（復元で最初の tab が変わらない——名前と git を決める場所）。
+  it.skipIf(process.platform === "win32")("保存した session.json の tab は並べ替えた順（workspace の tabIds の順）", async () => {
+    const stateDir = await makeTempDir("wtm-compose-");
+    // 待つだけのシェル——一式を並べて走らせる負荷の下で、既定のシェルが猶予の間に終わって tab ごと閉じたことがある（test-result の失敗の証跡）。
+    const shell = join(stateDir, "wait.sh");
+    await writeFile(shell, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    const port = await getFreePort();
+    const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [], shell });
+    cleanups.push(() => server.close());
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    await server.listen();
+    const { workspace, tab: first } = await server.session.createWorkspace(process.cwd(), "tabs");
+    const { tab: second } = await server.session.createTab(workspace.id, undefined);
+    server.session.moveTab(second.id, "previous");
+    await server.persist.flush();
+    const saved = JSON.parse(await readFile(join(stateDir, "session.json"), "utf8")) as { workspaces: { id: string; tabs: { id: string }[] }[] };
+    expect(saved.workspaces.find((w) => w.id === workspace.id)!.tabs.map((t) => t.id)).toEqual([second.id, first.id]);
+  }, 10000);
+
   it("persists and restores the session across two composeServer instances (AC18)", async () => {
     const stateDir = await makeTempDir("wtm-compose-");
     const port1 = await getFreePort();

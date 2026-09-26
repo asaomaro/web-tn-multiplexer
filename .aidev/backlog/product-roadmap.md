@@ -346,7 +346,13 @@ parent: 20260918-web-terminal-multiplexer
 - [ ] E2E の偽エージェントを support へ切り出す: 入力待ちの画面を出す偽のエージェント（exec -a claude と画面の文言）が agent-detection.spec.ts・notifications.spec.ts・settings.spec.ts の 3 か所に複製されている。判定ルール（herdr の toml）が変わると 3 か所を直すことになる。安定している 2 本の spec を書き換えるので、20260921-herdr-settings-gaps の範囲からは外した（出典: .aidev/works/20260921-herdr-settings-gaps/review.md）
 - [x] workspace の既定の名前をリポジトリ名（git でなければフォルダ名）から自動で付ける: 今はどこで開いても一律に「1」で、別のリポジトリで開いた workspace がサイドバーで見分けられない。herdr は repo 名か cwd のフォルダ名を自動の名前にし（src/workspace.rs の display_name・automatic_workspace_label。名前を変えた後は変えた名前のまま）、cwd が変われば追従する。worktree を開く経路が label を明示しているのはこの穴への個別の手当て（出典: .aidev/works/20260921-new-terminal-cwd/review.md）
   → 着地: 20260921-workspace-auto-label（feature/workspace-auto-label）。名前を付けていない workspace を、開いた場所のリポジトリの根のフォルダ名（git の外ならフォルダ名・ホームなら `~`）で呼ぶ。規則は `packages/server/src/session/workspaceLabel.ts`（herdr の `git_repo_root` 等を移植。git のコマンドは使わない）、自動か付けたものかは `Workspace.autoLabel`。名前を空にして確定すると自動に戻る（herdr に無い）。`cd` への追従は別の項目に起こした。E2E `workspace-auto-label.spec.ts`（ほかのブラウザが受けた `workspace.created` の名前が最初から根の名前）
-- [ ] workspace の名前と git の情報を、最初の pane のいまの場所に追従させる: 自動の名前（20260921-workspace-auto-label）とサイドバーの git の情報（GitInfoPoller）はどちらも workspace を開いた場所（Workspace.cwd）から決めていて、cd しても変わらない。herdr は最初の tab の根の pane のいまの場所から名前と git の状態を決め直す（src/workspace.rs の display_name_from_terminals）。名前だけ追従させると git の情報と食い違うので、両方をまとめて扱う（出典: .aidev/works/20260921-workspace-auto-label/requirements.md）
+- [x] workspace の名前と git の情報を、最初の pane のいまの場所に追従させる: 自動の名前（20260921-workspace-auto-label）とサイドバーの git の情報（GitInfoPoller）はどちらも workspace を開いた場所（Workspace.cwd）から決めていて、cd しても変わらない。herdr は最初の tab の根の pane のいまの場所から名前と git の状態を決め直す（src/workspace.rs の display_name_from_terminals）。名前だけ追従させると git の情報と食い違うので、両方をまとめて扱う（出典: .aidev/works/20260921-workspace-auto-label/requirements.md）
+  → 着地: 20260926-workspace-label-follow-cwd（feature/workspace-label-follow-cwd）。いまの場所＝最初の tab の、画面の並びで先頭の pane の `Pane.cwd`
+  （`packages/server/src/session/SessionService.ts:289` の `identityCwdOf`。herdr の根の pane とは入れ替え・移動のときだけ違う——decisions D2）。
+  `GitInfoPoller` が 1 回の見直しで同じ場所の git と自動の名前を決めてまとめて入れ（`SessionService.ts:301` `followedLabel`・`:317` `applyWorkspaceIdentity`）、
+  バスのイベントで場所の変化にすぐ気づく（`packages/server/src/git/GitInfoPoller.ts:15`）。名前を空にして確定・復元もいまの場所から。worktree の一覧・作成・削除も
+  いまの場所のリポジトリで（`packages/server/src/git/WorktreeService.ts:104`）。保存の tab の並びを並べ替えた順に直した。実測: `pnpm -s test` 3050 passed、
+  負の確認は変異 39 個のうち 36 個が落ちた（生き残った 3 個の理由は decisions D6・D7 と test-result.md）。E2E は未実行。
 - [x] テーマの色の個別の上書き: herdr の `[theme.custom]`（`accent`・`panel_bg`・`sidebar_bg`・状態の色など）と明暗別の `[theme.custom.light]`/`[theme.custom.dark]`。herdr でも設定ファイルでだけ変えられる。~~本製品には利用者が書く設定ファイルが無いので、設定の再読み込み（H25b）と合わせて置き場所から決める~~（20260921-theme-settings の対象外）（出典: .aidev/works/20260921-theme-settings/requirements.md）
   → 着地: 20260922-theme-custom-overrides（feature/theme-custom-overrides）。「置き場所」は設定の再読み込み（H25b）を待たず、既存の節「テーマ」に
   上級者向けの折りたたみとして決着した（本製品の設定は元々すべて即時反映・保存で、herdr の「再読み込み」に相当する操作はどの設定にも無い）。
@@ -418,3 +424,5 @@ parent: 20260918-web-terminal-multiplexer
   ときだけ救済する」という条件を足す必要があるが、影響範囲の見積もりに別の調査が要るため
   見送った（20260925-pane-move-global-focus decisions.md D0）。（出典:
   .aidev/works/20260925-pane-move-global-focus/decisions.md）
+- [ ] 消えたフォルダにいる pane の場所を「分からない」として扱う: Linux の監視は `/proc/<pid>/cwd` の readlink をそのまま `Pane.cwd` に入れるので、外で消されたフォルダ（消した worktree 等）にシェルがいると `"/path (deleted)"` が入る（`packages/server/src/platform/LinuxProcessInspector.ts:65`・`:120`）。新しく開く場所に加え、20260926-workspace-label-follow-cwd からは workspace の自動の名前にも `xxx (deleted)` が出うる。末尾の ` (deleted)` を読めなかったものとして扱う（出典: .aidev/works/20260926-workspace-label-follow-cwd/review.md）
+- [ ] 空になった後の作り直し・起動時の最初の workspace でも、作った直後に git の情報を取る: `workspace.create` の RPC だけが `pollWorkspaceNow` を呼ぶ（`packages/server/src/surface/methods/workspace.ts:17-21`）ので、`SessionService.recreateIfEmpty`・`ensureNotEmpty` が作った workspace は次の周期（最長 5 秒）までサイドバーの git の情報が空で、左上の pane の `cd` にもバスで気づかない（周期で拾う）（出典: .aidev/works/20260926-workspace-label-follow-cwd/review.md）
