@@ -1,4 +1,4 @@
-import type { TabId } from "@wtm/protocol";
+import { RpcError, type PaneId, type ServerEvent, type TabId } from "@wtm/protocol";
 import type { SessionService } from "../session/SessionService.js";
 import type { ClientRecord, ClientRegistry } from "./ClientRegistry.js";
 
@@ -21,6 +21,10 @@ import type { ClientRecord, ClientRegistry } from "./ClientRegistry.js";
  *   変わった（`onKindChanged`）——も同じく手放す（D106）。デスクトップは fit を無効にしても資格が残るので手放さない。design「権限の移り方」の「別の tab へ移ったら」は
  *   実装していない（権限は前の tab に残るが、`applyOwnerSize` は view の tab に絞るのでその tab の大きさは動かさない。
  *   その tab を見ている資格のある別のクライアントは、操作すれば権限を取れる。D106 の作業で確認）。
+ * - **pane への直結**（20260926-pane-direct-connect。herdr の terminal attach）：pane ごとに高々 1 クライアントが直結の所有者になり、
+ *   直結中はその pane の大きさを所有者が決める（`applyOwnerSize` はその pane を飛ばす＝大きさの鍵）。種別は問わない（`wtmctl` は external）。
+ *   所有者が抜けたら（`detach`・切断）、その tab の権限者の大きさへ戻す（権限者がいなければそのまま）。所有者が変わるたびに
+ *   `pane.attach_changed` を発行する。所有者は安全の境界ではない（INPUT は今までどおり誰でも書ける）。
  */
 export interface SizeAuthority {
   noteInteraction(clientId: string, paneId: string): void;
@@ -33,6 +37,18 @@ export interface SizeAuthority {
   /** `client.hello` で種別を決めた後に呼ぶ（資格を失ったら持っている権限を手放す。D106）。 */
   onKindChanged(clientId: string): void;
   onClientGone(clientId: string): void;
+  /** 直結の所有者になり、pane の大きさを当てる。別の所有者がいれば `takeover` が無い限り `pane_attached`。 */
+  attach(clientId: string, paneId: PaneId, cols: number, rows: number, takeover: boolean): void;
+  /** 所有者だけが大きさを変えられる（所有者でなければ `not_attached`）。 */
+  resizeAttached(clientId: string, paneId: PaneId, cols: number, rows: number): void;
+  /** 所有者なら直結を終え、tab の権限者の大きさへ戻す。所有者でなければ何もしない。 */
+  detach(clientId: string, paneId: PaneId): void;
+  attachOwner(paneId: PaneId): string | null;
+}
+
+/** `pane.attach_changed` の発行先（`EventBus`）。 */
+export interface SizeEventSink {
+  publish(event: ServerEvent): void;
 }
 
 /** サイズを決められるクライアントか（デスクトップか、`client.fit` を有効にしたクライアント。D13・D106）。 */
@@ -41,9 +57,13 @@ function canDecideSize(client: ClientRecord): boolean {
 }
 
 export class DefaultSizeAuthority implements SizeAuthority {
+  /** 直結の所有者（pane → clientId）。 */
+  private readonly attachments = new Map<PaneId, string>();
+
   constructor(
     private readonly clients: ClientRegistry,
     private readonly session: SessionService,
+    private readonly events?: SizeEventSink,
   ) {}
 
   noteInteraction(clientId: string, paneId: string): void {
@@ -107,6 +127,48 @@ export class DefaultSizeAuthority implements SizeAuthority {
     for (const tabId of this.ownedTabIds(clientId)) {
       this.transferOwnership(tabId, clientId);
     }
+    // 移譲の後に解放する（戻す大きさは移譲後の権限者のもの）。
+    for (const [paneId, owner] of [...this.attachments]) {
+      if (owner === clientId) this.releaseAttachment(paneId);
+    }
+  }
+
+  attach(clientId: string, paneId: PaneId, cols: number, rows: number, takeover: boolean): void {
+    const current = this.attachments.get(paneId);
+    if (current !== undefined && current !== clientId && !takeover) {
+      throw new RpcError(
+        "pane_attached",
+        `pane ${paneId} already has an attached client; retry with --takeover`,
+      );
+    }
+    this.attachments.set(paneId, clientId);
+    this.session.resizePane(paneId, cols, rows);
+    if (current !== clientId)
+      this.events?.publish({ event: "pane.attach_changed", data: { paneId, clientId } });
+  }
+
+  resizeAttached(clientId: string, paneId: PaneId, cols: number, rows: number): void {
+    if (this.attachments.get(paneId) !== clientId) {
+      throw new RpcError("not_attached", `this client is not attached to pane ${paneId}`);
+    }
+    this.session.resizePane(paneId, cols, rows);
+  }
+
+  detach(clientId: string, paneId: PaneId): void {
+    if (this.attachments.get(paneId) === clientId) this.releaseAttachment(paneId);
+  }
+
+  attachOwner(paneId: PaneId): string | null {
+    return this.attachments.get(paneId) ?? null;
+  }
+
+  /** 直結を終え、tab の権限者の大きさへ戻す（権限者がいない・pane がもう無いなら大きさはそのまま）。 */
+  private releaseAttachment(paneId: PaneId): void {
+    this.attachments.delete(paneId);
+    this.events?.publish({ event: "pane.attach_changed", data: { paneId, clientId: null } });
+    const pane = this.session.getPane(paneId);
+    const owner = pane ? this.session.getTab(pane.tabId)?.sizeOwnerClientId : null;
+    if (pane && owner) this.applyOwnerSize(owner, pane.tabId);
   }
 
   /** 資格が無ければ、持っている権限をすべて手放す（同じ tab を見ている資格のあるクライアントへ移すか、無しにしてサイズを保つ）。 */
@@ -146,7 +208,8 @@ export class DefaultSizeAuthority implements SizeAuthority {
     if (!client?.view || client.view.tabId !== tabId) return;
     for (const v of client.view.visible) {
       const pane = this.session.getPane(v.paneId);
-      if (pane?.tabId === tabId) this.session.resizePane(v.paneId, v.cols, v.rows);
+      if (pane?.tabId === tabId && !this.attachments.has(v.paneId))
+        this.session.resizePane(v.paneId, v.cols, v.rows);
     }
   }
 }

@@ -25,7 +25,10 @@ export type ErrorCode =
   | "agent_blocked"
   | "empty_agent_prompt"
   | "invalid_key"
-  | "agent_prompt_failed";
+  | "agent_prompt_failed"
+  // pane への直結（20260926-pane-direct-connect）。名前は herdr の理由文（already has an attached client）に対応させる。
+  | "pane_attached"
+  | "not_attached";
 
 export interface ProtocolError {
   code: ErrorCode;

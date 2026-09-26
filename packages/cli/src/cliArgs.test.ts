@@ -199,6 +199,34 @@ describe("parseArgs — pane read", () => {
   });
 });
 
+// 20260926-pane-direct-connect。
+describe("parseArgs — pane attach", () => {
+  it("既定は --takeover 無し", () => {
+    expect(parseArgs(["pane", "attach", "p1"], noEnv)).toEqual({
+      kind: "pane-attach",
+      opts: { url: DEFAULT_URL, token: undefined },
+      paneId: "p1",
+      takeover: false,
+    });
+  });
+  it("--takeover と --url/--token", () => {
+    expect(parseArgs(["pane", "attach", "p1", "--takeover", "--url", "http://h:1", "--token", "t"], noEnv)).toEqual({
+      kind: "pane-attach",
+      opts: { url: "http://h:1", token: "t" },
+      paneId: "p1",
+      takeover: true,
+    });
+  });
+  it.each([
+    [["pane", "attach"]],
+    [["pane", "attach", "p1", "p2"]],
+    [["pane", "attach", "p1", "--cols", "80"]],
+    [["pane", "attach", "p1", "--takeover", "yes"]],
+  ])("%j は使用誤り", (argv) => {
+    expect(() => parseArgs(argv, noEnv)).toThrow(CliUsageError);
+  });
+});
+
 describe("parseArgs — snapshot/watch", () => {
   it("snapshot に余分な位置引数は拒否する", () => {
     expect(() => parseArgs(["snapshot", "extra"], noEnv)).toThrow(CliUsageError);

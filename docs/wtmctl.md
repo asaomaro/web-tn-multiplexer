@@ -29,6 +29,7 @@ wtmctl pane close <paneId>
 wtmctl pane input <paneId> <text>          # Enter を付けずに送る
 wtmctl pane run <paneId> <command>         # command と改行を送る
 wtmctl pane read <paneId> [--follow] [--raw] [--timeout <ms>]
+wtmctl pane attach <paneId> [--takeover]   # 手元の端末をその pane に直結する（Ctrl+B q で切り離す）
 wtmctl snapshot
 wtmctl watch [--json]
 wtmctl agent list
@@ -38,6 +39,32 @@ wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>]
 wtmctl agent prompt <paneId> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
 wtmctl agent send-keys <paneId> <key>...
 ```
+
+## pane への直結（`pane attach`）
+
+手元の端末（SSH 先のシェルを含む）を pane 1 枚に直結し、ブラウザを開かずにその場の端末として操作する。
+
+```bash
+wtmctl pane attach p2              # 直結する
+wtmctl pane attach p2 --takeover   # 既に別の端末が直結していれば、それを奪って直結する
+```
+
+- つないだ時点の**見えている画面**を描き、以後の出力をそのまま流す。打鍵はそのまま pane へ送る（手元の端末は raw モード・代替画面になる）。
+  直結より前のスクロールバックは送らない。pane の出力に含まれる端末への問い合わせ（DA・カーソル位置の報告・色の問い合わせ・クリップボードの読み出し等）は
+  手元の端末に書かない——答えるのはサーバだけ（ブラウザと同じ）で、手元の端末にも答えさせると答えが二重に pane へ届くため。
+- **`Ctrl+B q` で切り離す**（pane のプロセスは止めない）。`Ctrl+B Ctrl+B` で `Ctrl+B` を 1 つ送る。`Ctrl+B` に続くそれ以外のキーは両方を送る。
+- 直結している間、**pane の大きさは手元の端末の大きさ**になり、手元の端末の大きさを変えると追従する。ブラウザの表示の大きさ（サイズ権限）は
+  その pane の大きさを変えない（同じ tab のほかの pane は今までどおり）。切り離すと、その tab の大きさを決めているブラウザの大きさへ戻る
+  （決めているブラウザがいなければ直結時の大きさのまま）。
+- **同じ pane に直結できるのは 1 つだけ**。既に直結があれば `pane_attached` で終わる（何も変えない）。`--takeover` なら奪い、奪われた側は
+  `attach_taken_over` で終わる。
+- 直結中もブラウザでの表示と入力はそのまま使える（ブラウザの入力は止めない。ブラウザから直結を奪う・切り離す操作は無い）。
+  直結の所有者は**安全の境界ではない**——認証済みの接続は今までどおり pane に書ける。ブラウザと同じ認証と `/ws`（Origin/Host の検査つき）を使う。
+- 終了コード: 切り離しは 0（stderr に `wtmctl: detached from <paneId>`）。奪われた（`attach_taken_over`）・pane のプロセスが終わった・pane が閉じられた
+  （`pane_closed`）・サーバ側から切れた（`connection_closed`）・既に直結がある（`pane_attached`）・pane が無い（`not_found`）・
+  標準入力か標準出力が端末でない（`not_a_tty`）は 1。使い方の誤りは 2。
+  どの終わり方でも、手元の端末のモード（色・カーソルの表示と形・スクロール領域・マウスの報告・bracketed paste 等）を戻し、代替画面から出る。
+  `SIGTERM`・`SIGHUP` で止められたときは切り離しと同じに扱う。
 
 ## エージェント（`agent`）
 
@@ -118,6 +145,21 @@ wtmctl agent send-keys "$pane" esc                         # 取り消す（答�
 ```
 
 ## herdr との対応と違い
+
+### `pane attach`
+
+herdr の `terminal attach <terminal_id> [--takeover]` に相当する（`docs/herdr-parity.md` の H40）。同じ点: 1 端末に書き込み可能な直結は 1 つ・
+`--takeover` で奪う・直結の大きさを優先してフル UI（ブラウザ）からは変えない・`Ctrl+B q` / `Ctrl+B Ctrl+B`・切り離しは終了コード 0 でそれ以外の終わり方は 1（使い方の誤りは 2）・
+フル UI からの入力は止めない。違い:
+
+- herdr はサーバで描き直したフレームを送るが、wtmctl は **pane の生の出力をそのまま流す**。このため pane の中のアプリが代替画面から出ると
+  手元の端末も主画面に出て、直結前の画面に出力が重なる。kitty keyboard のフラグ・modifyOtherKeys は切り離しても戻さない
+  （pane のエージェントがそれを有効にしていた場合、切り離した後に手元のシェルのキー入力の符号化が戻らないことがある）。
+- 直結中のサーバ側のスクロール（ホイール・PageUp/PageDown で遡る）は無い。対象は pane ID だけ（`agent attach <name>` は無い）。
+- 閲覧専用の `terminal session observe`・NDJSON で制御する `terminal session control` は無い（出力を追うだけなら `pane read --follow --raw`）。
+- Windows の端末からの直結は確かめていない（herdr はネイティブ Windows では直結できない）。
+
+### `agent`
 
 herdr の `agent list` / `agent get` / `agent wait` / `agent read` / `agent prompt`（`--wait`）/ `agent send-keys` に相当する
 （`docs/herdr-parity.md` の H39）。違い:

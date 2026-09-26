@@ -12,3 +12,8 @@ export type { RawServeArgs, ServeOptions } from "./config.js";
  * LAN の IPv4 があるのにサーバが 1 つも表示しない」退行を skip ではなく失敗にするために、同じ条件を重ねて持たずに使う（D103）。
  */
 export { lanIpv4Addresses, type InterfaceAddress } from "./util/net.js";
+/**
+ * node-pty の実装（20260926-pane-direct-connect）。cli の smoke が、ビルド済みの `wtmctl pane attach` を本物の端末（PTY）の中で
+ * 動かして raw モード・切り離しキーを確かめるのに使う（cli に node-pty を足さずに済む。decisions D5）。
+ */
+export { NodePtyBackend } from "./pty/NodePtyBackend.js";

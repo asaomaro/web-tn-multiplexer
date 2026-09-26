@@ -70,6 +70,36 @@ export interface PaneSubscribeResult {
 export const PaneUnsubscribeParams = z.object({ paneId });
 export type PaneUnsubscribeParams = z.infer<typeof PaneUnsubscribeParams>;
 
+// --- pane への直結（20260926-pane-direct-connect。herdr の terminal attach）---------------
+
+/**
+ * 直結の所有者になり、pane の大きさを `cols`×`rows` にする。別のクライアントが直結していれば、`takeover` が無い限り
+ * `pane_attached`。所有者は pane ごとに高々 1 つで、直結中はブラウザのサイズ権限がその pane の大きさを変えない。
+ */
+export const PaneAttachParams = z.object({
+  paneId,
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+  takeover: z.boolean().optional(),
+});
+export type PaneAttachParams = z.infer<typeof PaneAttachParams>;
+export interface PaneAttachResult {
+  cols: number;
+  rows: number;
+}
+
+/** 所有者だけが大きさを変えられる（所有者でなければ `not_attached`）。 */
+export const PaneAttachResizeParams = z.object({
+  paneId,
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+});
+export type PaneAttachResizeParams = z.infer<typeof PaneAttachResizeParams>;
+
+/** 所有者なら直結を終える（所有者でなければ何もしない）。 */
+export const PaneDetachParams = z.object({ paneId });
+export type PaneDetachParams = z.infer<typeof PaneDetachParams>;
+
 // --- 新しく開く場所（20260921-new-terminal-cwd。herdr の `terminal.new_cwd`） ----------------
 
 /**
@@ -433,6 +463,9 @@ export const METHOD_SCHEMAS = {
   "client.detach": ClientDetachParams,
   "pane.subscribe": PaneSubscribeParams,
   "pane.unsubscribe": PaneUnsubscribeParams,
+  "pane.attach": PaneAttachParams,
+  "pane.attach_resize": PaneAttachResizeParams,
+  "pane.detach": PaneDetachParams,
   "workspace.create": WorkspaceCreateParams,
   "workspace.rename": WorkspaceRenameParams,
   "workspace.focus": WorkspaceFocusParams,
@@ -487,6 +520,9 @@ export interface MethodResultMap {
   "client.detach": Record<string, never>;
   "pane.subscribe": PaneSubscribeResult;
   "pane.unsubscribe": Record<string, never>;
+  "pane.attach": PaneAttachResult;
+  "pane.attach_resize": Record<string, never>;
+  "pane.detach": Record<string, never>;
   "workspace.create": WorkspaceCreateResult;
   "workspace.rename": Record<string, never>;
   "workspace.focus": Record<string, never>;

@@ -10,6 +10,7 @@ import { registerLayoutMethods } from "./layout.js";
 import { registerWorktreeMethods } from "./worktree.js";
 import { registerAgentIntegrationMethods } from "./agentIntegration.js";
 import { registerAgentMethods } from "./agent.js";
+import { registerAttachMethods } from "./attach.js";
 
 export type { MethodDeps } from "./deps.js";
 
@@ -27,4 +28,5 @@ export function registerAllMethods(surface: ControlSurface, deps: MethodDeps): v
   registerWorktreeMethods(surface, deps);
   registerAgentIntegrationMethods(surface, deps);
   registerAgentMethods(surface, deps); // 20260926-agent-prompt-send-keys
+  registerAttachMethods(surface, deps); // 20260926-pane-direct-connect
 }

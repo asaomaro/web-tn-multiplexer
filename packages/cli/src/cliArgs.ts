@@ -19,6 +19,7 @@ const USAGE = [
   "wtmctl pane input <paneId> <text> [--url <URL>] [--token <TOKEN>]",
   "wtmctl pane run <paneId> <command> [--url <URL>] [--token <TOKEN>]",
   "wtmctl pane read <paneId> [--follow] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl pane attach <paneId> [--takeover] [--url <URL>] [--token <TOKEN>]",
   "wtmctl snapshot [--url <URL>] [--token <TOKEN>]",
   "wtmctl watch [--json] [--url <URL>] [--token <TOKEN>]",
   "wtmctl agent list [--url <URL>] [--token <TOKEN>]",
@@ -58,6 +59,7 @@ export type Command =
   | { kind: "pane-input"; opts: GlobalOpts; paneId: string; text: string }
   | { kind: "pane-run"; opts: GlobalOpts; paneId: string; command: string }
   | { kind: "pane-read"; opts: GlobalOpts; paneId: string; follow: boolean; raw: boolean; timeoutMs: number }
+  | { kind: "pane-attach"; opts: GlobalOpts; paneId: string; takeover: boolean }
   | { kind: "snapshot"; opts: GlobalOpts }
   | { kind: "watch"; opts: GlobalOpts; json: boolean }
   | { kind: "agent-list"; opts: GlobalOpts }
@@ -292,6 +294,13 @@ function parsePane(sub: string | undefined, rest: readonly string[], env: NodeJS
       raw: bools.has("--raw"),
       timeoutMs: timeoutRaw === undefined ? DEFAULT_READ_TIMEOUT_MS : parsePositiveInt(timeoutRaw, "--timeout"),
     };
+  }
+  // 20260926-pane-direct-connect（herdr の terminal attach）。
+  if (sub === "attach") {
+    const { positionals, values, bools } = parseFlags(rest, { values: URL_TOKEN.values!, bools: ["--takeover"] });
+    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    rejectExtra(positionals, 1, USAGE);
+    return { kind: "pane-attach", opts: globalOptsFrom(values, env), paneId, takeover: bools.has("--takeover") };
   }
   throw new CliUsageError(`unknown subcommand: wtmctl pane ${sub ?? ""}`.trimEnd(), USAGE);
 }

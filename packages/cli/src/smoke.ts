@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { composeServer } from "@wtm/server";
+import { composeServer, NodePtyBackend, type ComposedServer } from "@wtm/server";
 
 async function getFreePort(): Promise<number> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -48,6 +48,65 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<CliResult
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string; code?: number };
     return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: typeof e.code === "number" ? e.code : 1 };
+  }
+}
+
+/** `cond` が真になるまで待つ（100ms ごと・上限つき）。 */
+async function until(cond: () => boolean, message: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error(message);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+/** 出力の中に、印だけの行（コマンドを打った行ではなく実行された結果の行）があるか。 */
+function hasOutputLine(text: string, marker: string): boolean {
+  return text.split(/\r?\n/).some((l) => l.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trim() === marker);
+}
+
+/**
+ * 20260926-pane-direct-connect: ビルド済みの `wtmctl pane attach` を本物の端末（node-pty の PTY）の中で動かし、
+ * 大きさが PTY の大きさに揃うこと・打鍵の往復・大きさの追従・`Ctrl+B q` で終了コード 0・pane が残ることを確かめる。
+ */
+async function smokeAttach(server: ComposedServer, paneId: string, url: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const ptyEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) if (v !== undefined) ptyEnv[k] = v;
+  const pty = new NodePtyBackend().spawn({
+    shell: process.execPath,
+    args: [CLI_ENTRY, "pane", "attach", paneId, "--url", url],
+    cwd: process.cwd(),
+    env: ptyEnv,
+    cols: 100,
+    rows: 30,
+  });
+  let out = "";
+  pty.onData((d) => {
+    out += d;
+  });
+  let exitCode: number | null = null;
+  pty.onExit((e) => {
+    exitCode = e.exitCode;
+  });
+  const size = (): string => {
+    const p = server.session.getPane(paneId);
+    return p ? `${p.cols}x${p.rows}` : "gone";
+  };
+  try {
+    await until(() => size() === "100x30" && out.includes("\x1b[?1049h"), `pane attach did not take the terminal size (pane ${size()}): ${JSON.stringify(out.slice(-300))}`);
+    const marker = `wtmctl-smoke-attach-${Date.now()}`;
+    pty.write(`echo ${marker}\r`);
+    await until(() => hasOutputLine(out, marker), `pane attach did not round-trip the input: ${JSON.stringify(out.slice(-300))}`);
+    pty.resize(90, 25);
+    await until(() => size() === "90x25", `pane attach did not follow the terminal resize (pane ${size()})`);
+    pty.write("\x02q");
+    await until(() => exitCode !== null, "pane attach did not exit after Ctrl+B q");
+    if (exitCode !== 0) throw new Error(`pane attach exited with ${exitCode} after Ctrl+B q: ${JSON.stringify(out.slice(-300))}`);
+    if (!server.session.getPane(paneId)) throw new Error("the pane was closed by detaching");
+    // 切り離したら手元の端末を戻している（最後に代替画面から出る列を書いた）。
+    if (out.lastIndexOf("\x1b[?1049l") < out.lastIndexOf(marker)) throw new Error(`pane attach did not leave the alternate screen: ${JSON.stringify(out.slice(-300))}`);
+  } finally {
+    if (exitCode === null) pty.kill();
   }
 }
 
@@ -127,6 +186,15 @@ async function main(): Promise<void> {
     }
     if (!sawPrompt) throw new Error(`agent prompt was not submitted (marker "${promptMarker}" never printed)`);
     console.log("smoke(cli): wtmctl agent prompt ok (submitted; the shell printed the marker)");
+
+    // 20260926-pane-direct-connect: 端末でなければ繋がない（execFile の stdin は端末ではない）。
+    const notTty = await runCli(["pane", "attach", pane.id, "--url", url], env);
+    if (notTty.exitCode !== 1 || !notTty.stderr.includes("not_a_tty")) {
+      throw new Error(`pane attach without a terminal should fail with not_a_tty (exit ${notTty.exitCode}): ${notTty.stderr}`);
+    }
+    console.log("smoke(cli): wtmctl pane attach refuses a non-terminal (not_a_tty)");
+    await smokeAttach(server, pane.id, url, env);
+    console.log("smoke(cli): wtmctl pane attach ok (in a real PTY: size 100x30, echo round trip, resize 90x25, Ctrl+B q exit 0, left the alternate screen)");
 
     console.log("smoke(cli): PASS");
     process.exitCode = 0;
