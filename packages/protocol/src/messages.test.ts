@@ -13,6 +13,9 @@ import {
   MAX_AGENT_PROMPT_BYTES,
   METHOD_SCHEMAS,
   NewCwd,
+  PaneAttachParams,
+  PaneAttachResizeParams,
+  PaneDetachParams,
   PaneEditScrollbackParams,
   PaneMoveToEdgeParams,
   PaneMoveToNewTabParams,
@@ -265,5 +268,25 @@ describe("AgentPromptParams / AgentSendKeysParams", () => {
   it("方式の表にある", () => {
     expect(METHOD_SCHEMAS["agent.prompt"]).toBe(AgentPromptParams);
     expect(METHOD_SCHEMAS["agent.send_keys"]).toBe(AgentSendKeysParams);
+  });
+});
+
+// 20260926-pane-direct-connect：herdr の terminal attach に相当する方式。
+describe("PaneAttachParams / PaneAttachResizeParams / PaneDetachParams", () => {
+  it("大きさは正の整数。takeover は省略できる", () => {
+    expect(PaneAttachParams.parse({ paneId: "p1", cols: 80, rows: 24 })).toEqual({ paneId: "p1", cols: 80, rows: 24 });
+    expect(PaneAttachParams.parse({ paneId: "p1", cols: 80, rows: 24, takeover: true }).takeover).toBe(true);
+    for (const bad of [{ cols: 0, rows: 24 }, { cols: 80, rows: -1 }, { cols: 80.5, rows: 24 }]) {
+      expect(() => PaneAttachParams.parse({ paneId: "p1", ...bad })).toThrow();
+      expect(() => PaneAttachResizeParams.parse({ paneId: "p1", ...bad })).toThrow();
+    }
+    expect(() => PaneAttachParams.parse({ paneId: "", cols: 80, rows: 24 })).toThrow();
+    expect(() => PaneDetachParams.parse({ paneId: "" })).toThrow();
+  });
+
+  it("方式の表にある", () => {
+    expect(METHOD_SCHEMAS["pane.attach"]).toBe(PaneAttachParams);
+    expect(METHOD_SCHEMAS["pane.attach_resize"]).toBe(PaneAttachResizeParams);
+    expect(METHOD_SCHEMAS["pane.detach"]).toBe(PaneDetachParams);
   });
 });

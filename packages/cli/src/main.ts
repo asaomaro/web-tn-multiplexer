@@ -12,6 +12,7 @@ import {
   runAgentSendKeys,
   runAgentWait,
 } from "./commands/agent.js";
+import { runPaneAttach } from "./commands/attach.js";
 import { runTabClose, runTabCreate } from "./commands/tab.js";
 import { runPaneClose, runPaneInput, runPaneRead, runPaneRun, runPaneSplit } from "./commands/pane.js";
 import { runLogin, runSnapshot, runWatch } from "./commands/session.js";
@@ -33,6 +34,7 @@ function printHelp(): void {
       "wtmctl pane input <paneId> <text> [--url <URL>] [--token <TOKEN>]",
       "wtmctl pane run <paneId> <command> [--url <URL>] [--token <TOKEN>]",
       "wtmctl pane read <paneId> [--follow] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+      "wtmctl pane attach <paneId> [--takeover] [--url <URL>] [--token <TOKEN>]",
       "wtmctl snapshot [--url <URL>] [--token <TOKEN>]",
       "wtmctl watch [--json] [--url <URL>] [--token <TOKEN>]",
       "wtmctl agent list [--url <URL>] [--token <TOKEN>]",
@@ -48,6 +50,8 @@ function printHelp(): void {
       "agent wait は --until 省略時 idle/done/blocked のどれかで返り、--timeout 省略時は無期限に待ちます。",
       "agent prompt は bracketed paste のモードに合わせて本文を送り、300ms 後に Enter で確定します（blocked なら送りません）。",
       "--wait は送信後 5 秒以内に working/blocked を観測できなければ agent_prompt_stalled で終わります。",
+      "pane attach は手元の端末をその pane に直結します。Ctrl+B q で切り離し、Ctrl+B Ctrl+B で Ctrl+B を送ります。",
+      "同じ pane に直結できるのは 1 つだけで、--takeover で既存の直結を奪えます。",
     ].join("\n"),
   );
 }
@@ -82,6 +86,8 @@ async function main(): Promise<void> {
       return runPaneRun(cmd, store);
     case "pane-read":
       return runPaneRead(cmd, store);
+    case "pane-attach":
+      return runPaneAttach(cmd, store);
     case "snapshot":
       return runSnapshot(cmd, store);
     case "watch":

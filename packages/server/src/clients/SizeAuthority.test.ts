@@ -1,4 +1,4 @@
-import { TERMINAL_PALETTES, type HostInfo } from "@wtm/protocol";
+import { TERMINAL_PALETTES, type HostInfo, type ServerEvent } from "@wtm/protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Disposable } from "../util/Disposable.js";
 import { MemoryLogger } from "../log/Logger.js";
@@ -508,5 +508,251 @@ describe("DefaultSizeAuthority — fit と種別の変化（D106 の独立点検
     clients.setKind(mobile, "desktop");
     authority.onKindChanged(mobile);
     expect(session.getTab(tab.id)?.sizeOwnerClientId).toBe(client);
+  });
+});
+
+// 20260926-pane-direct-connect（herdr の terminal attach）。
+describe("DefaultSizeAuthority — pane への直結（所有者と大きさの鍵）", () => {
+  function makeAttachContext() {
+    const base = makeContext();
+    const published: ServerEvent[] = [];
+    const authority = new DefaultSizeAuthority(base.clients, base.session, { publish: (e) => published.push(e) });
+    return { ...base, authority, published };
+  }
+  const attachEvents = (published: ServerEvent[]) =>
+    published.filter((e) => e.event === "pane.attach_changed").map((e) => e.data);
+
+  async function withDesktopOwner(ctx: ReturnType<typeof makeAttachContext>) {
+    const { session, clients, authority } = ctx;
+    const { tab, pane } = await session.createWorkspace("/home/u", "api");
+    const { pane: other } = await session.splitPane(pane.id, "right", undefined);
+    const desktop = clients.register("desktop");
+    clients.setView(desktop, {
+      workspaceId: tab.workspaceId,
+      tabId: tab.id,
+      visible: [
+        { paneId: pane.id, cols: 100, rows: 30 },
+        { paneId: other.id, cols: 50, rows: 30 },
+      ],
+    });
+    authority.onViewChanged(desktop);
+    expect(session.getPane(pane.id)).toMatchObject({ cols: 100, rows: 30 });
+    return { tab, pane, other, desktop };
+  }
+
+  it("attach は pane の大きさを直結の大きさにし、所有者を記録して pane.attach_changed を 1 回出す（AC3）", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await withDesktopOwner(ctx);
+    const cli = ctx.clients.register("external");
+
+    ctx.authority.attach(cli, pane.id, 120, 40, false);
+
+    expect(ctx.authority.attachOwner(pane.id)).toBe(cli);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 120, rows: 40 });
+    expect(ctx.terminals.hosts.get(pane.id)?.resized).toEqual({ cols: 120, rows: 40 });
+    expect(attachEvents(ctx.published)).toEqual([{ paneId: pane.id, clientId: cli }]);
+
+    // 同じ所有者の当て直しは大きさだけ変え、イベントは出さない。
+    ctx.authority.attach(cli, pane.id, 90, 20, false);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 90, rows: 20 });
+    expect(attachEvents(ctx.published)).toHaveLength(1);
+  });
+
+  it("resizeAttached は所有者だけが大きさを変えられる。所有者でなければ not_attached で何も変えない（AC3）", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await withDesktopOwner(ctx);
+    const cli = ctx.clients.register("external");
+    const stranger = ctx.clients.register("external");
+    ctx.authority.attach(cli, pane.id, 120, 40, false);
+
+    ctx.authority.resizeAttached(cli, pane.id, 110, 35);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 110, rows: 35 });
+
+    expect(() => ctx.authority.resizeAttached(stranger, pane.id, 10, 10)).toThrow(expect.objectContaining({ code: "not_attached" }));
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 110, rows: 35 });
+  });
+
+  it("直結中はブラウザの client.view・操作・fit が直結中の pane の大きさを変えない。同じ tab のほかの pane は変わる（AC4）", async () => {
+    const ctx = makeAttachContext();
+    const { tab, pane, other, desktop } = await withDesktopOwner(ctx);
+    const cli = ctx.clients.register("external");
+    ctx.authority.attach(cli, pane.id, 120, 40, false);
+
+    ctx.clients.setView(desktop, {
+      workspaceId: tab.workspaceId,
+      tabId: tab.id,
+      visible: [
+        { paneId: pane.id, cols: 70, rows: 20 },
+        { paneId: other.id, cols: 60, rows: 20 },
+      ],
+    });
+    ctx.authority.onViewChanged(desktop);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 120, rows: 40 });
+    expect(ctx.session.getPane(other.id)).toMatchObject({ cols: 60, rows: 20 });
+
+    // 別のデスクトップが操作して権限を取る（claim → applyOwnerSize まで届く）。
+    const second = ctx.clients.register("desktop");
+    ctx.clients.setView(second, {
+      workspaceId: tab.workspaceId,
+      tabId: tab.id,
+      visible: [
+        { paneId: pane.id, cols: 33, rows: 11 },
+        { paneId: other.id, cols: 44, rows: 11 },
+      ],
+    });
+    ctx.authority.noteInteraction(second, pane.id);
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBe(second);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 120, rows: 40 });
+    expect(ctx.session.getPane(other.id)).toMatchObject({ cols: 44, rows: 11 });
+
+    // 権限者でないモバイルが「この端末に合わせる」で権限を取る（onFitChanged → claim → applyOwnerSize）。
+    const phone = ctx.clients.register("mobile");
+    ctx.clients.setView(phone, {
+      workspaceId: tab.workspaceId,
+      tabId: tab.id,
+      visible: [
+        { paneId: pane.id, cols: 20, rows: 30 },
+        { paneId: other.id, cols: 21, rows: 30 },
+      ],
+    });
+    ctx.clients.setFit(phone, true);
+    ctx.authority.onFitChanged(phone);
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBe(phone);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 120, rows: 40 });
+    expect(ctx.session.getPane(other.id)).toMatchObject({ cols: 21, rows: 30 });
+  });
+
+  it("別の所有者がいれば takeover 無しの attach は pane_attached で拒まれ、所有者も大きさも変わらない（AC8）", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await withDesktopOwner(ctx);
+    const first = ctx.clients.register("external");
+    const second = ctx.clients.register("external");
+    ctx.authority.attach(first, pane.id, 120, 40, false);
+
+    expect(() => ctx.authority.attach(second, pane.id, 80, 24, false)).toThrow(
+      expect.objectContaining({ code: "pane_attached", message: expect.stringContaining("--takeover") }),
+    );
+    expect(ctx.authority.attachOwner(pane.id)).toBe(first);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 120, rows: 40 });
+    expect(attachEvents(ctx.published)).toEqual([{ paneId: pane.id, clientId: first }]);
+  });
+
+  it("takeover の attach は所有者を入れ替え、新しい所有者の大きさにし、新しい所有者で pane.attach_changed を出す。前の所有者は大きさを変えられない（AC9）", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await withDesktopOwner(ctx);
+    const first = ctx.clients.register("external");
+    const second = ctx.clients.register("external");
+    ctx.authority.attach(first, pane.id, 120, 40, false);
+
+    ctx.authority.attach(second, pane.id, 80, 24, true);
+
+    expect(ctx.authority.attachOwner(pane.id)).toBe(second);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 80, rows: 24 });
+    expect(attachEvents(ctx.published)).toEqual([
+      { paneId: pane.id, clientId: first },
+      { paneId: pane.id, clientId: second },
+    ]);
+    expect(() => ctx.authority.resizeAttached(first, pane.id, 10, 10)).toThrow(expect.objectContaining({ code: "not_attached" }));
+    // 前の所有者の detach は何もしない（新しい所有者の直結は続く）。
+    ctx.authority.detach(first, pane.id);
+    expect(ctx.authority.attachOwner(pane.id)).toBe(second);
+  });
+
+  it("detach すると所有者を消し、tab の権限者の表示の大きさへ戻し、clientId: null の pane.attach_changed を出す（AC10）", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await withDesktopOwner(ctx);
+    const cli = ctx.clients.register("external");
+    ctx.authority.attach(cli, pane.id, 120, 40, false);
+
+    ctx.authority.detach(cli, pane.id);
+
+    expect(ctx.authority.attachOwner(pane.id)).toBeNull();
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 100, rows: 30 });
+    expect(attachEvents(ctx.published)).toEqual([
+      { paneId: pane.id, clientId: cli },
+      { paneId: pane.id, clientId: null },
+    ]);
+  });
+
+  it("所有者の接続が切れると（onClientGone）直結を解放して tab の権限者の大きさへ戻す（AC10）", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await withDesktopOwner(ctx);
+    const cli = ctx.clients.register("external");
+    ctx.authority.attach(cli, pane.id, 120, 40, false);
+
+    ctx.authority.onClientGone(cli);
+
+    expect(ctx.authority.attachOwner(pane.id)).toBeNull();
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 100, rows: 30 });
+    expect(attachEvents(ctx.published).at(-1)).toEqual({ paneId: pane.id, clientId: null });
+  });
+
+  it("tab の権限者がいなければ、直結が終わっても大きさは直結のまま（AC10）", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await ctx.session.createWorkspace("/home/u", "api");
+    const cli = ctx.clients.register("external");
+    ctx.authority.attach(cli, pane.id, 131, 43, false); // 既定の大きさ（120×40）と違う値にする
+
+    ctx.authority.detach(cli, pane.id);
+
+    expect(ctx.authority.attachOwner(pane.id)).toBeNull();
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 131, rows: 43 });
+  });
+
+  it("権限者の接続と直結の所有者が同時にいなくなっても、移譲先（別のデスクトップ）の大きさへ戻る（移譲の後に解放する）", async () => {
+    const ctx = makeAttachContext();
+    const { tab, pane, desktop } = await withDesktopOwner(ctx);
+    const next = ctx.clients.register("desktop");
+    ctx.clients.setView(next, { workspaceId: tab.workspaceId, tabId: tab.id, visible: [{ paneId: pane.id, cols: 77, rows: 22 }] });
+    const cli = ctx.clients.register("external");
+    ctx.authority.attach(cli, pane.id, 120, 40, false);
+
+    ctx.authority.onClientGone(desktop);
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBe(next);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 120, rows: 40 }); // まだ直結中
+
+    ctx.authority.onClientGone(cli);
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 77, rows: 22 });
+  });
+
+  it("tab の権限者自身が直結の所有者でもあり移譲先がいなければ、切断で自分の view の大きさへは戻さない（移譲してから解放する順序）", async () => {
+    const ctx = makeAttachContext();
+    const { tab, pane, desktop } = await withDesktopOwner(ctx);
+    ctx.authority.attach(desktop, pane.id, 120, 40, false);
+
+    ctx.authority.onClientGone(desktop);
+
+    expect(ctx.session.getTab(tab.id)?.sizeOwnerClientId).toBeNull();
+    expect(ctx.authority.attachOwner(pane.id)).toBeNull();
+    expect(ctx.session.getPane(pane.id)).toMatchObject({ cols: 120, rows: 40 });
+  });
+
+  it("直結していないクライアントの onClientGone は直結に触れない", async () => {
+    const ctx = makeAttachContext();
+    const { pane } = await withDesktopOwner(ctx);
+    const cli = ctx.clients.register("external");
+    const other = ctx.clients.register("external");
+    ctx.authority.attach(cli, pane.id, 120, 40, false);
+
+    ctx.authority.onClientGone(other);
+
+    expect(ctx.authority.attachOwner(pane.id)).toBe(cli);
+    expect(attachEvents(ctx.published)).toHaveLength(1);
+  });
+
+  it("pane が閉じた後の解放は大きさを戻さずに所有者だけを消す", async () => {
+    const ctx = makeAttachContext();
+    const { pane, other } = await withDesktopOwner(ctx);
+    const cli = ctx.clients.register("external");
+    ctx.authority.attach(cli, other.id, 120, 40, false);
+    await ctx.session.closePane(other.id);
+
+    const sizeEventsBefore = ctx.published.filter((e) => e.event === "pane.size_changed").length;
+
+    expect(() => ctx.authority.onClientGone(cli)).not.toThrow();
+    expect(ctx.authority.attachOwner(other.id)).toBeNull();
+    expect(attachEvents(ctx.published).at(-1)).toEqual({ paneId: other.id, clientId: null });
+    expect(ctx.published.filter((e) => e.event === "pane.size_changed")).toHaveLength(sizeEventsBefore);
+    expect(ctx.session.getPane(pane.id)).toBeDefined();
   });
 });

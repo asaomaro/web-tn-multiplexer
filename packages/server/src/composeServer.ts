@@ -186,7 +186,7 @@ export async function composeServer(rawArgs: RawServeArgs): Promise<ComposedServ
 
   const clients = new DefaultClientRegistry();
   palettes.attach({ getPane: (id) => session.getPane(id), getTab: (id) => session.getTab(id), clients });
-  const sizeAuthority = new DefaultSizeAuthority(clients, session);
+  const sizeAuthority = new DefaultSizeAuthority(clients, session, bus); // bus: pane.attach_changed（20260926-pane-direct-connect）
   const surface = new ControlSurface(logger);
   registerAllMethods(surface, { session, clients, sizeAuthority, terminals, worktrees, agentIntegrations, gitPoller });
   const wsServer = new WsServerWs(httpServer.server, originRejections, auth.authorizeUpgrade, logger);
