@@ -277,7 +277,8 @@ test("設定：キーだけで端末の節のラジオへ入り、矢印で選�
   await openApp(page, appServer);
   await openSettingsByKey(page);
   // Tab で節をまたいで進む（通知の switch のうち、許可の状態で押せないものは飛ばされるので回数は数えない）。
-  for (let i = 0; i < 12; i++) {
+  // 上限は余裕を持たせる（着いた時点で抜ける。20260926-pane-frame-auto-mode で表示の節に 2 つ増えた）。
+  for (let i = 0; i < 40; i++) {
     if (await page.evaluate(() => (document.activeElement as HTMLInputElement | null)?.name === "settings-scrollback")) break;
     await page.keyboard.press("Tab");
   }

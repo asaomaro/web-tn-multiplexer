@@ -171,13 +171,17 @@ parent: 20260918-web-terminal-multiplexer
   実測: unit 1542 本 green（E2E は未実行——[[e2e-only-on-request]]。ユーザー方針で
   このラウンドでは回していない）。PR #12（`20260922-tabbar-pane-appearance`）は
   この取り込みと内容が重複するため close・branch 削除した）
-- [ ] 外観と設定の残り（未着手分）: サイドバー行の色の条件付け・独自トークン（H21）、
-  pane の枠の描画モード「自動」（分割時だけ表示）・隙間の入切（H23。`PaneFrame.vue` の
-  「常に padding・太さ3段階」設計と両立しないため、`PaneLayout.vue` への手入れを伴う
-  再設計が要る。PR #12 が持っていた設計〔`bordered`/`multiPane` prop を `PaneLayout.vue`
-  経由で渡す〕が参考になる）、設定の onboarding（H25b）
+- [x] 外観と設定の残り（H23 分）: pane の枠の描画モード（常に/分割しているときだけ/表示しない。既定は herdr と逆の「常に」）・
+  隙間の入切〔D8〕（20260926-pane-frame-auto-mode。PR: feature/pane-frame-auto-mode ブランチから作成。余白を辺ごとに決める規則
+  `packages/web/src/layout/paneChrome.ts:35-47`（`resolvePaneChrome`）、隣と分割の受け渡し
+  `packages/web/src/components/PaneLayout.vue`、描き分け `packages/web/src/components/PaneFrame.vue`、設定
+  `packages/web/src/store/settings.ts`（`paneBorders`/`paneGaps`）・設定画面 `SettingsDialog.vue`。
+  ~~`PaneFrame.vue` の「常に padding・太さ3段階」設計と両立しない~~——太さ3段階は余白を取る辺の太さとしてそのまま両立した。
+  実測: unit 3042 本 green（全パッケージ）・負の確認 17 変異すべて検知・smoke pass（2本）。E2E は未実行）
+- [ ] 外観と設定の残り（未着手分）: サイドバー行の色の条件付け・独自トークン（H21）、設定の onboarding（H25b）
   〔D8〕(needs: 20260918-web-terminal-multiplexer)（
   20260922-appearance-settings-rest の requirements「対象外」／decisions.md [[D11]]で切り出し。
+  H23 の枠の描画モード・隙間の入切は 20260926-pane-frame-auto-mode で着地。
   出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）
 - [x] セッション永続化の拡張（エージェントの会話の再開のうち Claude Code・Codex）: 20260923-agent-session-resume
       で対応。両エージェント公式の hooks 機構（`SessionStart`）を使い、pane ごとに会話IDを本製品自身の

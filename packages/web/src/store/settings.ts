@@ -27,6 +27,7 @@ import {
   type ThemeOverrides,
 } from "../theme/themeOverrides.js";
 import type { CssVar } from "../theme/uiTokens.js";
+import { PANE_BORDERS, type PaneBorders } from "../layout/paneChrome.js";
 import { loadScrollbackPref, type ScrollbackPref } from "../term/scrollback.js";
 import {
   loadTabBarPosition,
@@ -100,6 +101,19 @@ export function loadPaneOuterBorders(raw: unknown): boolean {
 }
 
 /**
+ * pane の枠の描画モード（20260926-pane-frame-auto-mode。herdr の `ui.pane_borders`）。3 値のどれかでなければ
+ * 既定の「常に」——herdr の既定（`auto`）と逆で、今までの見た目（単一 pane にも枠）を既定にする（decisions D2）。
+ */
+export function loadPaneBorders(raw: unknown): PaneBorders {
+  return PANE_BORDERS.includes(raw as PaneBorders) ? (raw as PaneBorders) : "always";
+}
+
+/** pane の間の隙間（herdr の `ui.pane_gaps`）。boolean でなければ既定の「入」（今までの見た目）。 */
+export function loadPaneGaps(raw: unknown): boolean {
+  return typeof raw === "boolean" ? raw : true;
+}
+
+/**
  * 新しく開く場所の方針（20260921-new-terminal-cwd。herdr の `terminal.new_cwd`）。**ブラウザごと**に持ち、作成の要求に載せる
  * （サーバは方針を持たない。design D1）。
  */
@@ -156,6 +170,9 @@ export const useSettingsStore = defineStore("settings", () => {
   const tabBarRight = ref<TabBarRightEntry[]>(loadTabBarRightEntries(initial["tabBarRight"]));
   const tabBarRightSeparator = ref(loadTabBarRightSeparator(initial["tabBarRightSeparator"]));
   const paneOuterBorders = ref(loadPaneOuterBorders(initial["paneOuterBorders"]));
+  /** pane の枠の描画モード・隙間（`PaneFrame.vue` が読む。20260926-pane-frame-auto-mode）。 */
+  const paneBorders = ref<PaneBorders>(loadPaneBorders(initial["paneBorders"]));
+  const paneGaps = ref(loadPaneGaps(initial["paneGaps"]));
   /** このブラウザの scrollback の設定。使う行数は `term/scrollback.ts` の `effectiveScrollback` が決める。 */
   const scrollback = ref<ScrollbackPref>(loadScrollbackPref(initial["scrollback"]));
   /** 新しい workspace・tab・分割を開く場所の方針と、「指定した場所」のパス（方針が `path` のときだけ使う）。 */
@@ -268,6 +285,18 @@ export const useSettingsStore = defineStore("settings", () => {
   function setPaneOuterBorders(v: boolean): void {
     paneOuterBorders.value = v;
     writePrefs({ paneOuterBorders: v });
+  }
+
+  /** 反映と保存を同時に行う。 */
+  function setPaneBorders(v: PaneBorders): void {
+    paneBorders.value = v;
+    writePrefs({ paneBorders: v });
+  }
+
+  /** 反映と保存を同時に行う。 */
+  function setPaneGaps(v: boolean): void {
+    paneGaps.value = v;
+    writePrefs({ paneGaps: v });
   }
 
   /** 反映と保存を同時に行う。**効くのはその後に作る端末から**（既に開いている pane は変えない。AC9）。 */
@@ -385,7 +414,8 @@ export const useSettingsStore = defineStore("settings", () => {
   });
 
   /**
-   * 同じブラウザの別のウィンドウ・タブでの変更に追従する（PR #12 から取り込み）。この 4 項目はどれも
+   * 同じブラウザの別のウィンドウ・タブでの変更に追従する（PR #12 から取り込み。枠の描画モード・隙間は
+   * 20260926-pane-frame-auto-mode）。この 6 項目はどれも
    * 単純な値の「常に書く」形なので、保存値を読み直して違えば置き換えるだけでよい。
    */
   window.addEventListener("storage", () => {
@@ -398,6 +428,10 @@ export const useSettingsStore = defineStore("settings", () => {
     if (nextSeparator !== tabBarRightSeparator.value) tabBarRightSeparator.value = nextSeparator;
     const nextOuter = loadPaneOuterBorders(prefs["paneOuterBorders"]);
     if (nextOuter !== paneOuterBorders.value) paneOuterBorders.value = nextOuter;
+    const nextBorders = loadPaneBorders(prefs["paneBorders"]);
+    if (nextBorders !== paneBorders.value) paneBorders.value = nextBorders;
+    const nextGaps = loadPaneGaps(prefs["paneGaps"]);
+    if (nextGaps !== paneGaps.value) paneGaps.value = nextGaps;
   });
 
   /**
@@ -480,6 +514,8 @@ export const useSettingsStore = defineStore("settings", () => {
     tabBarRight,
     tabBarRightSeparator,
     paneOuterBorders,
+    paneBorders,
+    paneGaps,
     scrollback,
     newCwdPolicy,
     newCwdPath,
@@ -505,6 +541,8 @@ export const useSettingsStore = defineStore("settings", () => {
     updateTabBarRightEntry,
     setTabBarRightSeparator,
     setPaneOuterBorders,
+    setPaneBorders,
+    setPaneGaps,
     setScrollback,
     setNewCwdPolicy,
     setNewCwdPath,

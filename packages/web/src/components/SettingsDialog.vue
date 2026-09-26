@@ -2,6 +2,7 @@
 import { DEFAULT_THEME_NAME, isThemeName, THEME_APPEARANCE, THEME_NAMES, type AgentIntegrationKind, type ThemeName } from "@wtm/protocol";
 import { computed, inject, nextTick, ref, watch } from "vue";
 import { ActionDispatcherKey, DeviceKindKey, NotificationControllerKey } from "../injection.js";
+import type { PaneBorders } from "../layout/paneChrome.js";
 import type { DesktopPermission } from "../notify/ports.js";
 import { useAgentIntegrationsStore } from "../store/agentIntegrations.js";
 import { useNotificationsStore } from "../store/notifications.js";
@@ -174,6 +175,21 @@ const paneFrameChoices: readonly { value: PaneFrameThickness; label: string }[] 
 
 function choosePaneFrameThickness(v: PaneFrameThickness): void {
   settings.setPaneFrameThickness(v);
+}
+
+/** pane の枠の描画モード・隙間（20260926-pane-frame-auto-mode）。選んだ時点で反映・保存（確定ボタン無し。AC-I2）。 */
+const paneBordersChoices: readonly { value: PaneBorders; label: string }[] = [
+  { value: "always", label: "常に" },
+  { value: "auto", label: "分割しているときだけ" },
+  { value: "off", label: "表示しない" },
+];
+
+function choosePaneBorders(v: PaneBorders): void {
+  settings.setPaneBorders(v);
+}
+
+function togglePaneGaps(): void {
+  settings.setPaneGaps(!settings.paneGaps);
 }
 
 /** pane にエージェント名を可視で出すか（20260922-appearance-settings-rest。既定は無効。AC10）。 */
@@ -668,6 +684,37 @@ function onNativeCancel(ev: Event): void {
             <span>状態を記号でも示す</span>
           </button>
           <p class="settings-note">{{ symbolsNote }}</p>
+        </li>
+        <li class="settings-row">
+          <fieldset class="settings-fieldset" aria-describedby="settings-pane-borders-note">
+            <legend class="settings-legend">pane の枠の表示</legend>
+            <label v-for="c in paneBordersChoices" :key="c.value" class="settings-radio">
+              <input
+                type="radio"
+                name="settings-pane-borders"
+                :value="c.value"
+                :checked="settings.paneBorders === c.value"
+                @change="choosePaneBorders(c.value)"
+              />
+              <span>{{ c.label }}</span>
+            </label>
+          </fieldset>
+          <p id="settings-pane-borders-note" class="settings-note">
+            余白の無い辺（枠を表示しないときの外周の辺と、隙間を切ったときの隣と接する辺）では、枠の右クリックでメニューを開けず、選択の強調も出ません。枠を表示しないときは名前の表示（ドラッグの掴み手）も出ません。メニューは選んでいる pane の枠へ Tab で移り、Enter で開けます。
+          </p>
+        </li>
+        <li class="settings-row">
+          <button
+            type="button"
+            role="switch"
+            class="settings-switch"
+            :aria-checked="settings.paneGaps"
+            aria-describedby="settings-pane-borders-note"
+            @click="togglePaneGaps"
+          >
+            <span class="settings-mark">{{ settings.paneGaps ? "入" : "切" }}</span>
+            <span>pane の間に隙間を空ける</span>
+          </button>
         </li>
         <li class="settings-row">
           <fieldset class="settings-fieldset">

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   formatDatetime,
-  loadPaneBordersMode,
   loadTabBarPosition,
   loadTabBarRightEntries,
   loadTabBarRightSeparator,
@@ -22,19 +21,6 @@ describe("loadTabBarPosition — tab バーの位置（AC1）", () => {
     expect(loadTabBarPosition(undefined)).toBe("top");
     expect(loadTabBarPosition(null)).toBe("top");
     expect(loadTabBarPosition(1)).toBe("top");
-  });
-});
-
-describe("loadPaneBordersMode — pane の枠の描画（AC5）", () => {
-  it("auto・always・off はそのまま読む", () => {
-    expect(loadPaneBordersMode("auto")).toBe("auto");
-    expect(loadPaneBordersMode("always")).toBe("always");
-    expect(loadPaneBordersMode("off")).toBe("off");
-  });
-  it("それ以外・型違いは既定の auto", () => {
-    expect(loadPaneBordersMode("framed")).toBe("auto");
-    expect(loadPaneBordersMode(true)).toBe("auto");
-    expect(loadPaneBordersMode(undefined)).toBe("auto");
   });
 });
 

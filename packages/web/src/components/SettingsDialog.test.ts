@@ -842,6 +842,68 @@ describe("SettingsDialog — 端末の節 — 新しく開く場所（AC4・AC10
   });
 });
 
+// 20260926-pane-frame-auto-mode（design「振る舞いの詳細」設定画面）。
+describe("SettingsDialog — 表示の節 — pane の枠の表示・隙間（AC6・AC-I1〜AC-I4）", () => {
+  const displaySection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    w.get('section[aria-labelledby="settings-display"]');
+  const bordersRadios = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w).findAll('input[type="radio"][name="settings-pane-borders"]');
+  const checkedBorders = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    bordersRadios(w)
+      .filter((r) => (r.element as HTMLInputElement).checked)
+      .map((r) => (r.element as HTMLInputElement).value);
+  const gapsSwitch = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) =>
+    displaySection(w)
+      .findAll('[role="switch"]')
+      .find((sw) => sw.text().includes("隙間を空ける"))!;
+
+  it("「表示」節に 3 値のラジオ（同じ name の 1 群）と説明があり、既定は「常に」（AC-I1・AC-I3）", async () => {
+    const { wrapper } = await openDialog();
+    expect(bordersRadios(wrapper).map((r) => (r.element as HTMLInputElement).value)).toEqual(["always", "auto", "off"]);
+    expect(checkedBorders(wrapper)).toEqual(["always"]);
+    const fieldset = bordersRadios(wrapper)[0]!.element.closest("fieldset")!;
+    expect(fieldset.querySelector("legend")!.textContent).toBe("pane の枠の表示");
+    const note = document.getElementById(fieldset.getAttribute("aria-describedby")!)!;
+    expect(note.textContent).toContain("右クリック");
+    expect(note.textContent).toContain("Tab");
+  });
+
+  it("選ぶとその場で反映・保存され、フォーカスはそのラジオに留まる。閉じても値は残る（AC6・AC-I1・AC-I2・AC-I4）", async () => {
+    const { wrapper, view } = await openDialog();
+    // 値ごとに選ぶ（選んだラジオの値がそのまま渡ることを確かめる。taskcheck T5）。
+    for (const value of ["off", "always", "auto"]) {
+      const radio = bordersRadios(wrapper).find((r) => (r.element as HTMLInputElement).value === value)!;
+      (radio.element as HTMLInputElement).focus();
+      await radio.trigger("change");
+      expect(useSettingsStore(pinia).paneBorders, value).toBe(value);
+      expect(readPrefs()["paneBorders"], value).toBe(value);
+      await wrapper.vm.$nextTick();
+      expect(checkedBorders(wrapper), value).toEqual([value]);
+      expect(document.activeElement, value).toBe(radio.element);
+    }
+    view.closeDialog();
+    await wrapper.vm.$nextTick();
+    expect(useSettingsStore(pinia).paneBorders, "閉じても取り消されない").toBe("auto");
+    expect(useSettingsStore(createPinia()).paneBorders, "再読み込みしても残る").toBe("auto");
+  });
+
+  it("隙間の switch は button（Space/Enter で押せる）で既定「入」。押すと「切」になり保存され、フォーカスは留まる（AC6・AC-I2〜AC-I4）", async () => {
+    const { wrapper } = await openDialog();
+    const sw = gapsSwitch(wrapper);
+    expect(sw.element.tagName).toBe("BUTTON");
+    expect(document.getElementById(sw.attributes("aria-describedby")!)!.textContent).toContain("隙間を切ったとき");
+    expect(sw.attributes("aria-checked")).toBe("true");
+    (sw.element as HTMLButtonElement).focus();
+    await sw.trigger("click");
+    expect(useSettingsStore(pinia).paneGaps).toBe(false);
+    expect(sw.attributes("aria-checked")).toBe("false");
+    expect(readPrefs()["paneGaps"]).toBe(false);
+    expect(document.activeElement).toBe(sw.element);
+    await sw.trigger("click");
+    expect(useSettingsStore(pinia).paneGaps, "押し直すと元に戻る").toBe(true);
+  });
+});
+
 // 20260921-theme-settings：テーマの節（design D4・decisions D11。AC1・AC5〜AC7・AC-I2・AC-I4）。
 describe("SettingsDialog — テーマの節", () => {
   const themeSection = (w: Awaited<ReturnType<typeof openDialog>>["wrapper"]) => w.get('section[aria-labelledby="settings-theme"]');
