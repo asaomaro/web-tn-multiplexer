@@ -17,3 +17,12 @@ export { lanIpv4Addresses, type InterfaceAddress } from "./util/net.js";
  * 動かして raw モード・切り離しキーを確かめるのに使う（cli に node-pty を足さずに済む。decisions D5）。
  */
 export { NodePtyBackend } from "./pty/NodePtyBackend.js";
+/**
+ * 空いているポートで組み立てて待ち受けさせる（20260926-load-flaky-tests の D3）。cli の結合テストが、番号だけ取って後で待ち受ける
+ * 間に別のテストにポートを取られて `EADDRINUSE` で落ちないように使う。
+ */
+export {
+  composeServerOnFreePort,
+  getFreePort,
+  type ComposeOnFreePortOptions,
+} from "./composeServerOnFreePort.js";

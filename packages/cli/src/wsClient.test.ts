@@ -1,10 +1,8 @@
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { composeServer, type ComposedServer } from "@wtm/server";
+import { composeServerOnFreePort, type ComposedServer } from "@wtm/server";
 import { login } from "./httpAuth.js";
 import { EventEmitter } from "node:events";
 import type { ServerEvent } from "@wtm/protocol";
@@ -17,27 +15,14 @@ import { AuthError, RpcFailure, WsWtmClient, connect, type WtmClient } from "./w
  * （`main.integration.test.ts`）で確認する。
  */
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? reject(err) : resolve(port)));
-    });
-    probe.on("error", reject);
-  });
-}
-
 let server: ComposedServer;
 let origin: string;
 let token: string;
 
 beforeEach(async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "wtmctl-wsclient-test-"));
-  const port = await getFreePort();
-  server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
-  await server.listen();
-  origin = `http://127.0.0.1:${port}`;
+  server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
+  origin = `http://127.0.0.1:${server.options.port}`;
   token = server.freshToken!;
 });
 

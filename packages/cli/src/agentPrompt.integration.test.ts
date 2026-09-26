@@ -1,9 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { composeServer, type ComposedServer } from "@wtm/server";
+import { composeServerOnFreePort, type ComposedServer } from "@wtm/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAgentPrompt, runAgentSendKeys } from "./commands/agent.js";
 import { runPaneRun } from "./commands/pane.js";
@@ -35,17 +33,6 @@ process.stdin.on("data", (buf) => {
   }
 });
 `;
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-    probe.on("error", rejectPromise);
-  });
-}
 
 function captureStdout(): { text(): string; restore(): void } {
   const chunks: string[] = [];
@@ -86,13 +73,11 @@ describe("wtmctl agent prompt / send-keys integration（偽のエージェント
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "wtmctl-prompt-it-"));
-    server = await composeServer({
+    server = await composeServerOnFreePort({
       host: "127.0.0.1",
-      port: String(await getFreePort()),
       stateDir: join(dir, "state"),
       origin: [],
     });
-    await server.listen();
     if (!server.freshToken) throw new Error("expected a freshly generated token");
     url = `http://${server.options.host}:${server.options.port}`;
     store = new FsSessionStore(join(dir, "session.json"));

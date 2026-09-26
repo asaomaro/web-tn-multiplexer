@@ -1,10 +1,8 @@
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { composeServer, type ComposedServer } from "@wtm/server";
+import { composeServerOnFreePort, type ComposedServer } from "@wtm/server";
 import WebSocket from "ws";
 import { runPaneRead, runPaneRun, runPaneSplit } from "./commands/pane.js";
 import { runLogin, runSnapshot, runWatch } from "./commands/session.js";
@@ -17,17 +15,6 @@ import { FsSessionStore } from "./session.js";
  * ——本物の `AuthService`/`OriginPolicy`/実 PTY を経由させることが AC7・AC9 の検証そのものであるため
  * （tasks.md「テスト方針」）。
  */
-
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-    probe.on("error", rejectPromise);
-  });
-}
 
 /** `process.stdout.write` を差し替えて、そのテストの間に書かれたものをすべて集める。 */
 function captureStdout(): { text(): string; restore(): void } {
@@ -62,9 +49,8 @@ describe("wtmctl main integration（実サーバ・実 PTY）", () => {
 
   beforeAll(async () => {
     stateDir = await mkdtemp(join(tmpdir(), "wtmctl-it-state-"));
-    port = await getFreePort();
-    server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir, origin: [] });
-    await server.listen();
+    server = await composeServerOnFreePort({ host: "127.0.0.1", stateDir, origin: [] });
+    port = server.options.port;
     if (!server.freshToken) throw new Error("expected a freshly generated token");
     token = server.freshToken;
     url = `http://127.0.0.1:${port}`;
@@ -91,7 +77,7 @@ describe("wtmctl main integration（実サーバ・実 PTY）", () => {
     paneId = result.pane.id;
 
     expect(await store.get(url)).toBeTruthy();
-  });
+  }, 10_000); // ログイン（scrypt）と実 PTY の起動。負荷の下で最大 4.4 秒（20260926-load-flaky-tests の D5）
 
   it("2回目以降はキャッシュ済みセッションを再利用し、/api/login を呼ばない（AC5, AC7）", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -150,8 +136,7 @@ describe("wtmctl main integration（実サーバ・実 PTY）", () => {
     // 実際に別テストの `JSON.parse` が失敗する形で再現した）。このテストだけ**専用の使い捨てサーバ**を
     // 立て、確認が終わったらサーバごと閉じて接続を確実に切ってから次のテストへ進む。
     const dedicatedStateDir = await mkdtemp(join(tmpdir(), "wtmctl-it-follow-state-"));
-    const dedicatedServer = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: dedicatedStateDir, origin: [] });
-    await dedicatedServer.listen();
+    const dedicatedServer = await composeServerOnFreePort({ host: "127.0.0.1", stateDir: dedicatedStateDir, origin: [] });
     try {
       if (!dedicatedServer.freshToken) throw new Error("expected a freshly generated token");
       const dedicatedUrl = `http://${dedicatedServer.options.host}:${dedicatedServer.options.port}`;
@@ -185,8 +170,7 @@ describe("wtmctl main integration（実サーバ・実 PTY）", () => {
   it("watch: 別クライアントが起こした workspace.created イベントを受け取る（AC6）", async () => {
     // 上の「pane read --follow」と同じ理由（後続テストへの汚染を避ける）で専用サーバを使う。
     const dedicatedStateDir = await mkdtemp(join(tmpdir(), "wtmctl-it-watch-state-"));
-    const dedicatedServer = await composeServer({ host: "127.0.0.1", port: String(await getFreePort()), stateDir: dedicatedStateDir, origin: [] });
-    await dedicatedServer.listen();
+    const dedicatedServer = await composeServerOnFreePort({ host: "127.0.0.1", stateDir: dedicatedStateDir, origin: [] });
     try {
       if (!dedicatedServer.freshToken) throw new Error("expected a freshly generated token");
       const dedicatedUrl = `http://${dedicatedServer.options.host}:${dedicatedServer.options.port}`;
@@ -222,7 +206,7 @@ describe("wtmctl main integration（実サーバ・実 PTY）", () => {
       await dedicatedServer.close().catch(() => undefined);
       await rm(dedicatedStateDir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 35_000); // 専用の実サーバの起動＋中の締め切り 10 秒。負荷の下で 15 秒の上限で落ちた（20260926-load-flaky-tests の D5）
 
   it("login コマンド: --token で明示ログインし、別のセッションキャッシュへ書き込む（AC7 の前提）", async () => {
     const otherDir = await mkdtemp(join(tmpdir(), "wtmctl-it-session2-"));

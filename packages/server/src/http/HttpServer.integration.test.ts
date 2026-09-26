@@ -1,7 +1,6 @@
 import { rm, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { connect, createServer } from "node:net";
-import type { AddressInfo } from "node:net";
+import { connect } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeTempDir } from "../persist/atomicFile.js";
 import { FsAuthFile } from "../persist/AuthFile.js";
@@ -12,33 +11,22 @@ import { DefaultLoginRateLimiter } from "../auth/LoginRateLimiter.js";
 import { MemoryLogger } from "../log/Logger.js";
 import { LOG_THROTTLE_MAX_LINES } from "../log/LogThrottle.js";
 import { HttpServer } from "./HttpServer.js";
+import { listenOnFreePort } from "../composeServerOnFreePort.js";
 
-/** OS に自由なポートを 1 つ選ばせてから、そのポート番号を使って本物のサーバを立てる（OriginPolicy がポートを先に知る必要があるため）。 */
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const probe = createServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-    probe.on("error", rejectPromise);
-  });
-}
-
+/** 本物のサーバを 0 番で待ち受けさせ、割り当てられたポートを OriginPolicy に渡す。 */
 async function startServer(webDistDir: string, opts: { extraOrigins?: string[] } = {}) {
   const stateDir = await makeTempDir("wtm-http-state-");
   const auth = new DefaultAuthService(new FsAuthFile(stateDir));
   await auth.initialize();
   const { token } = await auth.ensureToken();
-  const port = await getFreePort();
-  const origins = new DefaultOriginPolicy(
-    { host: "127.0.0.1", port, secure: false, extraOrigins: opts.extraOrigins ?? [] },
-    { addresses: () => [], lanAddresses: () => [], hostnames: () => [] },
-  );
+  // ポートは待ち受けた後に決まる（listen(0)。20260926-load-flaky-tests の D3）。方針は検査のたびに opts.port を読む。
+  const originOpts = { host: "127.0.0.1", port: 0, secure: false, extraOrigins: opts.extraOrigins ?? [] };
+  const origins = new DefaultOriginPolicy(originOpts, { addresses: () => [], lanAddresses: () => [], hostnames: () => [] });
   const rateLimiter = new DefaultLoginRateLimiter();
   const logger = new MemoryLogger();
   const http = new HttpServer(auth, new OriginRejectionLog(logger, origins), rateLimiter, { webDistDir, logger });
-  await new Promise<void>((resolve) => http.server.listen(port, "127.0.0.1", resolve));
+  const port = await listenOnFreePort(http.server);
+  originOpts.port = port;
   const baseUrl = `http://127.0.0.1:${port}`;
   return { baseUrl, port, token: token!, auth, stateDir, logger, close: () => new Promise<void>((r) => http.server.close(() => r())) };
 }

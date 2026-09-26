@@ -1,11 +1,11 @@
 import { createServer as createHttpServer, type Server as HttpServerType } from "node:http";
-import { connect, createServer as createNetServer } from "node:net";
-import type { AddressInfo } from "node:net";
+import { connect } from "node:net";
 import type { HostInfo } from "@wtm/protocol";
 import { decodeFrame, encodeInputFrame, FRAME_TYPE } from "@wtm/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { MemoryLogger } from "../log/Logger.js";
+import { listenOnFreePort } from "../composeServerOnFreePort.js";
 import { EventBus } from "../bus/EventBus.js";
 import type { CreatePaneOptions, TerminalManager } from "../terminal/TerminalManager.js";
 import type { TerminalHost } from "../terminal/TerminalHost.js";
@@ -66,17 +66,6 @@ class RealCatTerminalManager implements TerminalManager {
   }
 }
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const probe = createNetServer();
-    probe.listen(0, "127.0.0.1", () => {
-      const port = (probe.address() as AddressInfo).port;
-      probe.close((err) => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-    probe.on("error", rejectPromise);
-  });
-}
-
 interface TestServer {
   port: number;
   token: string;
@@ -93,8 +82,9 @@ async function startTestServer(opts: { commandFor?: (index: number) => string; g
   const auth = new DefaultAuthService(new FsAuthFile(stateDir));
   await auth.initialize();
   const { token } = await auth.ensureToken();
-  const port = await getFreePort();
-  const origins = new DefaultOriginPolicy({ host: "127.0.0.1", port, secure: false, extraOrigins: [] }, { addresses: () => [], lanAddresses: () => [], hostnames: () => [] });
+  // ポートは待ち受けた後に決まる（listen(0)。20260926-load-flaky-tests の D3）。方針は検査のたびに opts.port を読む。
+  const originOpts = { host: "127.0.0.1", port: 0, secure: false, extraOrigins: [] as string[] };
+  const origins = new DefaultOriginPolicy(originOpts, { addresses: () => [], lanAddresses: () => [], hostnames: () => [] });
 
   const terminals = new RealCatTerminalManager(opts.commandFor);
   const bus = new EventBus();
@@ -125,7 +115,8 @@ async function startTestServer(opts: { commandFor?: (index: number) => string; g
   const wsServer = new WsServerWs(httpServer, originGate, auth.authorizeUpgrade, wsLogger);
   new WsGateway(wsServer, surface, clients, sizeAuthority, terminals, bus, auth, new MemoryLogger(), opts.gatewayNow ? { now: opts.gatewayNow } : {});
 
-  await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", resolve));
+  const port = await listenOnFreePort(httpServer);
+  originOpts.port = port;
 
   async function connectAuthorized(): Promise<{ ws: WebSocket; cookie: string }> {
     const cookie = await login(port, token!);
@@ -507,13 +498,14 @@ describe("WsGateway flow control (integration, real ws + real PTY)", () => {
   it("WsServerWs の onDrain は実物の ws の上で実際に呼ばれる（ws は drain を emit しないので、以前は一度も呼ばれず、流量制御で止めた購読が永久に再開しなかった。D98）", async () => {
     // 流量制御で止めた購読の再開（`OutputFanout.retryStale`）は、出力を出し続けている pane ならミラーが追いつくたびにも
     // 呼ばれる（`TerminalHost`）が、混んでいる瞬間に小さな出力を出してその後は黙っている pane は、この `onDrain` だけが頼り。
-    const port = await getFreePort();
     const httpServer = createHttpServer();
-    const origins = new DefaultOriginPolicy({ host: "127.0.0.1", port, secure: false, extraOrigins: [] }, { addresses: () => [], lanAddresses: () => [], hostnames: () => [] });
+    const originOpts = { host: "127.0.0.1", port: 0, secure: false, extraOrigins: [] as string[] };
+    const origins = new DefaultOriginPolicy(originOpts, { addresses: () => [], lanAddresses: () => [], hostnames: () => [] });
     const wsServer = new WsServerWs(httpServer, new OriginRejectionLog(new MemoryLogger(), origins), async () => ({ ok: true, sessionId: "s" }), new MemoryLogger());
     let calls = 0;
     wsServer.onConnection((conn) => conn.onDrain(() => calls++));
-    await new Promise<void>((resolve) => httpServer.listen(port, "127.0.0.1", resolve));
+    const port = await listenOnFreePort(httpServer);
+    originOpts.port = port;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}` } });
     try {
       await new Promise<void>((resolve, reject) => {

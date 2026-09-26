@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -79,5 +79,62 @@ describe("FsSessionStore", () => {
     const fileStat = await stat(filePath);
     expect(dirStat.mode & 0o777).toBe(0o700);
     expect(fileStat.mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("FsSessionStore — 並行する読み書き（20260926-load-flaky-tests）", () => {
+  it("書き込みと並行した読み取りは、書き込みの前か後の内容を読む（ほかの接続先の cookie が消えて見えない。AC1）", async () => {
+    const store = new FsSessionStore(filePath);
+    await store.set("http://127.0.0.1:7780", "wtm_session=keep");
+    let writing = true;
+    const writer = (async () => {
+      try {
+        for (let i = 0; i < 40; i++) await store.set("http://127.0.0.1:7781", `wtm_session=w${i}`);
+      } finally {
+        writing = false;
+      }
+    })();
+    const seen: (string | undefined)[] = [];
+    // 別のインスタンス（別の `wtmctl` と同じく、鎖の外から読む）で読み続ける。
+    const reader = (async () => {
+      const other = new FsSessionStore(filePath);
+      while (writing) seen.push(await other.get("http://127.0.0.1:7780"));
+    })();
+    await Promise.all([writer, reader]);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.filter((c) => c !== "wtm_session=keep")).toEqual([]);
+  });
+
+  it("同じプロセスで 2 つの接続先を同時に保存・削除しても、ほかの接続先は失われない（同じファイルを指す別のインスタンスでも。AC2）", async () => {
+    const a = new FsSessionStore(filePath);
+    const b = new FsSessionStore(filePath);
+    await a.set("http://127.0.0.1:7782", "wtm_session=c");
+    await Promise.all([
+      a.set("http://127.0.0.1:7780", "wtm_session=a"),
+      b.set("http://127.0.0.1:7781", "wtm_session=b"),
+      a.clear("http://127.0.0.1:7782"),
+    ]);
+    expect(await a.get("http://127.0.0.1:7780")).toBe("wtm_session=a");
+    expect(await a.get("http://127.0.0.1:7781")).toBe("wtm_session=b");
+    expect(await a.get("http://127.0.0.1:7782")).toBeUndefined();
+  });
+
+  it("保存が 1 度失敗しても、同じファイルへの次の保存は行われる（直列化の鎖が失敗で止まらない）", async () => {
+    const store = new FsSessionStore(filePath);
+    await mkdir(filePath, { recursive: true }); // 保存先がディレクトリ——置き換え（rename）が失敗する
+    await expect(store.set("http://127.0.0.1:7780", "wtm_session=a")).rejects.toThrow();
+    await rm(filePath, { recursive: true });
+    await store.set("http://127.0.0.1:7781", "wtm_session=b");
+    expect(await store.get("http://127.0.0.1:7781")).toBe("wtm_session=b");
+    expect(await readdir(join(dir, "nested"))).toEqual(["session.json"]); // 失敗した回の一時ファイルも残っていない
+  });
+
+  it("書き込みに使った一時ファイルを残さない", async () => {
+    const store = new FsSessionStore(filePath);
+    await Promise.all([
+      store.set("http://127.0.0.1:7780", "wtm_session=a"),
+      store.set("http://127.0.0.1:7781", "wtm_session=b"),
+    ]);
+    expect(await readdir(join(dir, "nested"))).toEqual(["session.json"]);
   });
 });
