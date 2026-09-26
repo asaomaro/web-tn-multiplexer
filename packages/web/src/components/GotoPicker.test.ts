@@ -124,6 +124,20 @@ describe("GotoPicker — 文字の絞り込み", () => {
     expect(wrapper.findAll(".goto-picker-label").map((el) => el.text())).toEqual(["w1"]);
   });
 
+  it("名前（agent rename）の付いたエージェントの pane は、名前でもエージェントの種類の表示名でも引ける（20260926-agent-start-rename）", async () => {
+    const session = useSessionStore(pinia);
+    const view = useViewStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted(makePane("p1", "t1", { agent: makeAgent({ label: "Claude Code", name: "reviewer" }) }));
+    const wrapper = mountPicker(makeConnection());
+    await open(view, wrapper);
+    for (const query of ["reviewer", "claude"]) {
+      await wrapper.get("input").setValue(query);
+      expect(wrapper.findAll(".goto-picker-label").map((el) => el.text()), query).toEqual(["w1", "t1", "reviewer"]);
+    }
+  });
+
   it("絞り込み中は一致した枝だけを自動展開する（折りたたんでいても出す）", async () => {
     const session = useSessionStore(pinia);
     const view = useViewStore(pinia);

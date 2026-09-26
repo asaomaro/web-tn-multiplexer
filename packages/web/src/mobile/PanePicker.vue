@@ -107,7 +107,7 @@ function selectPane(paneId: string, tabId: string, workspaceId: string): void {
         @click="selectPane(pane.id, pane.tabId, workspace?.id ?? '')"
       >
         <StateIcon class="pane-picker-state" :state="state" />
-        <span class="pane-picker-label">{{ workspace?.label }} / {{ tab?.label }} — {{ agent.label }}</span>
+        <span class="pane-picker-label">{{ workspace?.label }} / {{ tab?.label }} — {{ agent.name ? `${agent.name}（${agent.label}）` : agent.label }}</span>
       </button>
     </section>
   </div>

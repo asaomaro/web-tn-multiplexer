@@ -40,6 +40,9 @@ const MESSAGES: Record<ErrorCode, string> = {
   empty_agent_prompt: "送る内容が空です。",
   invalid_key: "知らないキーの名前が含まれていたため、何も送りませんでした。",
   agent_prompt_failed: "エージェントへの送信に失敗しました（端末が閉じた等）。",
+  // エージェントの名前（20260926-agent-start-rename）。今は wtmctl agent rename だけが送る方式で、ブラウザには通常来ない。
+  invalid_agent_name: "エージェントの名前は英小文字で始まり、英小文字・数字・-・_ の 1〜32 文字にしてください。",
+  agent_name_taken: "その名前は別のエージェントが使っています。",
   // pane への直結（20260926-pane-direct-connect）。今は wtmctl pane attach だけが送る方式で、ブラウザには通常来ない——
   // 表が全 code の網羅を要求するので登録しておく。
   pane_attached: "この pane には既に別の端末が直結しています。",

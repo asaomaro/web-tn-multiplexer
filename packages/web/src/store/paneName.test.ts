@@ -20,6 +20,11 @@ describe("paneNameOf", () => {
     expect(paneNameOf(makePane({ agent: makeAgent(), title: "vim" }))).toBe("Claude Code");
   });
 
+  it("label が無ければ、エージェントの種類の表示名より先に agent rename で付けた名前（20260926-agent-start-rename AC13）", () => {
+    expect(paneNameOf(makePane({ agent: makeAgent({ name: "reviewer" }), title: "vim" }))).toBe("reviewer");
+    expect(paneNameOf(makePane({ label: "editor", agent: makeAgent({ name: "reviewer" }) }))).toBe("editor");
+  });
+
   it("どちらも無ければ端末のタイトル", () => {
     expect(paneNameOf(makePane({ title: "vim" }))).toBe("vim");
   });

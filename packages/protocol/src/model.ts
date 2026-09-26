@@ -119,6 +119,11 @@ export interface AgentInfo {
   verified: boolean;
   /** 状態が変わった時刻（epoch ms）。 */
   since: number;
+  /**
+   * 利用者が付けた名前（20260926-agent-start-rename。herdr の agent name）。書式は `isValidAgentName`、live なエージェント間で一意。
+   * この検出（`instanceId`）にだけ付き、終了・入れ替わりで消える。無ければ項目自体を持たない。
+   */
+  name?: string;
 }
 
 export interface HostInfo {

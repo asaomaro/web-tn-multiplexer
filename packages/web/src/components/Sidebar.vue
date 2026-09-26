@@ -464,6 +464,7 @@ watch(
           </template>
         </div>
         <div v-if="!view.sidebarCollapsed" class="sidebar-row-line2">
+          <span v-if="agent.name" class="sidebar-agent-name">{{ agent.name }}</span>
           <span>{{ agent.label }}</span>
           <span v-if="!agent.verified" class="sidebar-unverified">未検証</span>
         </div>
@@ -590,6 +591,10 @@ watch(
   opacity: 0.75;
 }
 .sidebar-row-line2 > .sidebar-unverified {
+  opacity: 1;
+}
+/* 利用者が付けた名前（agent rename）は、どのエージェントかを見分ける主な手がかりなので薄めない。 */
+.sidebar-row-line2 > .sidebar-agent-name {
   opacity: 1;
 }
 /* 縮めると意味を失うので縮ませない。 */

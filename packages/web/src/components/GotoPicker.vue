@@ -78,7 +78,8 @@ const rows = computed<GotoRow[]>(() => {
         // 連鎖の正典は `store/paneName.ts` の `paneNameOf`（herdr のフォールバック連鎖と同じ）。
         // ここは tab 内の順番を既定にする。
         const label = paneNameOf(pane, `pane ${index + 1}`);
-        if (!filtering || (statusMatch(state) && (textMatch(label) || textMatch(pane.cwd)))) {
+        // 名前（agent rename）が呼び名になっても、エージェントの種類の表示名でも引けるようにする（20260926-agent-start-rename）。
+        if (!filtering || (statusMatch(state) && (textMatch(label) || textMatch(pane.agent?.label ?? "") || textMatch(pane.cwd)))) {
           paneRows.push({ depth: 2, label, meta: pane.cwd, state, current: view.focusedPaneId === paneId, target: { kind: "pane", paneId } });
         }
       }

@@ -1,4 +1,4 @@
-import { AgentPromptParams, AgentSendKeysParams, RpcError } from "@wtm/protocol";
+import { AgentPromptParams, AgentRenameParams, AgentSendKeysParams, RpcError } from "@wtm/protocol";
 import type { AgentInfo } from "@wtm/protocol";
 import {
   AGENT_PROMPT_SUBMIT_DELAY_MS,
@@ -115,5 +115,13 @@ export function registerAgentMethods(surface: ControlSurface, deps: MethodDeps):
       }
       return {};
     },
+  });
+
+  // 名前を付ける／外す（20260926-agent-start-rename）。PTY には何も書かない。
+  surface.register("agent.rename", {
+    schema: AgentRenameParams,
+    handler: (_ctx, params) => ({
+      agent: deps.session.renameAgent(params.paneId, params.instanceId, params.name),
+    }),
   });
 }

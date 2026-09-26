@@ -56,6 +56,15 @@ describe("PanePicker — 表示", () => {
     expect(wrapper.find('[aria-label="spaces"]').text()).toContain("t1");
     expect(wrapper.find('[aria-label="agents"]').text()).toContain("Claude Code");
   });
+
+  it("agent rename で付けた名前があれば、種類の表示名と一緒に出す（20260926-agent-start-rename）", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1", ["t1"]));
+    session.tabUpserted(makeTab("t1", "w1", "p1"));
+    session.paneUpserted(makePane("p1", "t1", makeAgent({ name: "reviewer" })));
+    const wrapper = mountPicker(makeConnection());
+    expect(wrapper.find('[aria-label="agents"] .pane-picker-label').text()).toBe("w1 / t1 — reviewer（Claude Code）");
+  });
 });
 
 // 20260921-herdr-settings-gaps の D2：状態の印は `StateIcon`（字形と読み上げの名前まで見る）。

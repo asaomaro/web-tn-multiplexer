@@ -33,11 +33,12 @@ wtmctl pane attach <paneId> [--takeover]   # 手元の端末をその pane に�
 wtmctl snapshot
 wtmctl watch [--json]
 wtmctl agent list
-wtmctl agent get <paneId>
-wtmctl agent wait <paneId> [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
-wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>]
-wtmctl agent prompt <paneId> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
-wtmctl agent send-keys <paneId> <key>...
+wtmctl agent get <target>                  # <target> は pane ID か、agent rename で付けた名前
+wtmctl agent wait <target> [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
+wtmctl agent read <target> [--lines <N>] [--raw] [--timeout <ms>]
+wtmctl agent prompt <target> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
+wtmctl agent send-keys <target> <key>...
+wtmctl agent rename <target> <name>|--clear
 ```
 
 ## pane への直結（`pane attach`）
@@ -69,7 +70,26 @@ wtmctl pane attach p2 --takeover   # 既に別の端末が直結していれば�
 ## エージェント（`agent`）
 
 pane の中で検出されたコーディングエージェント（Claude Code・Codex 等。ブラウザのサイドバーに状態が出るもの）を、
-**その pane の ID** で指して扱う。
+**その pane の ID** か、**`agent rename` で付けた名前**で指して扱う（下の `<target>`）。
+
+### 名前と `<target>`
+
+- `agent rename <target> <name>` … エージェントに名前を付ける（既に名前があれば置き換える）。`--clear` で外す。
+  `{"agent":{…}}` を出す（`name` は付けた名前、外したら `null`）。
+- 名前は **英小文字で始まり、英小文字・数字・`-`・`_` の 1〜32 文字**（`[a-z][a-z0-9_-]{0,31}`）。外れると `invalid_agent_name`。
+- 名前は**いま検出されているエージェントの間で一意**。他のエージェントが使っている名前は `agent_name_taken`（同じエージェントへの
+  付け直しは成功する）。エージェントの居ない pane には付けられない（`agent_not_found`）。
+- 名前は**付けたときのエージェント**に付く。そのエージェントが終了した・pane の前面が別のエージェントに入れ替わった・pane が
+  閉じたときに消え、次に現れたエージェントには引き継がれない。検出が一度外れると（前面のプロセスが一瞬見えなかった等）
+  別のエージェントとして数え直すので、そのときも消える。サーバを再起動すると消える（保存しない）。
+- `<target>` は、まず **pane ID として**そのエージェントの居る pane を探し、無ければ**名前として**探す。pane ID と同じ形の名前
+  （`p3` 等）も付けられるが、その文字列の pane にエージェントが居ればそちらが優先される。見つからなければ `agent_not_found`。
+- 名前で指したときも、コマンドが接続した時点のエージェントにだけ送る・名前を付ける（その後に入れ替わっていたら何もせずに
+  `agent_not_found`）。
+- ブラウザでは、サイドバーのエージェントの行・携帯の pane 選択のエージェント一覧・pane の呼び名（pane の枠の見出し・移動の候補・通知）に名前が出る
+  （pane に自分で付けたラベルがあればそちらが優先）。ブラウザから名前を付ける操作は無い。
+
+### 状態と各コマンド
 
 | 状態 | 意味 |
 |---|---|
@@ -84,22 +104,22 @@ pane の中で検出されたコーディングエージェント（Claude Code�
 画面に見えているだけの pane で完了した場合など、ブラウザでは `idle` なのに CLI では `done` のままのことがある
 （herdr でも CLI とクライアントのバッジは別々に既読を持つ）。
 
-- `agent list` … エージェントの居る pane の一覧 `{"agents":[…]}`。各要素は `paneId`・`workspaceId`・`tabId`・
+- `agent list` … エージェントの居る pane の一覧 `{"agents":[…]}`。各要素は `paneId`・`name`（名前。無ければ `null`）・`workspaceId`・`tabId`・
   `status`（上の 5 値）・`kind`（`claude` 等）・`label`・`state`（サーバの生の状態。`done` を含まない）・
   `instanceId`・`since` など。
-- `agent get <paneId>` … 1 件 `{"agent":{…}}`。
-- `agent wait <paneId>` … 状態が `--until` のどれかになったら `{"agent":{…}}` を出して終わる。
+- `agent get <target>` … 1 件 `{"agent":{…}}`。
+- `agent wait <target>` … 状態が `--until` のどれかになったら `{"agent":{…}}` を出して終わる。
   - 呼び出した時点で一致していれば即座に返る。`--until` は繰り返し指定でき、省略時は `idle`・`done`・`blocked`。
   - 状態の変化はサーバからの push で受け取る（ポーリングしない）。
   - `--timeout` を省略すると無期限に待つ（指定できる上限は 2147483647ms）。時間切れは `timeout` のエラー（終了コード 1）。
     接続の死活確認は無いので、スリープやネットワーク断で接続が切れたまま気づけないことがある。長い待ちでは `--timeout` を付ける。
   - 待っている間にエージェントが終了した・別のエージェントに入れ替わった・pane が閉じたら `agent_not_running`、
     サーバが接続を閉じたら `connection_closed`（どちらも終了コード 1）。
-- `agent read <paneId>` … その pane の画面（スクロールバック込み）の末尾 `--lines` 行（既定 80。末尾の空行は数えない）を
+- `agent read <target>` … その pane の画面（スクロールバック込み）の末尾 `--lines` 行（既定 80。末尾の空行は数えない）を
   テキストで出す（alternate screen を使うエージェントでは今の alt screen の中身だけ）。既定で ANSI エスケープを除く（`--raw` で除かない。そのときは端末の制御列〔カーソル移動・モード設定〕を
   含むので、端末へそのまま流さない）。`--timeout` は画面内容がサーバから届くまで
   待つ上限（既定 5000ms。超えたら `timeout`）。
-- `agent prompt <paneId> <text>` … エージェントへ prompt を送って確定する。`{"agent":{…}}` を出す（`--wait` 無しは送信を始めた時点の
+- `agent prompt <target> <text>` … エージェントへ prompt を送って確定する。`{"agent":{…}}` を出す（`--wait` 無しは送信を始めた時点の
   エージェント、`--wait` は一致した時点のもの）。
   - 本文は、送る瞬間にその pane の端末で bracketed paste が有効なら `ESC[200~`…`ESC[201~` で包んで 1 つの貼り付けとして送る
     （複数行でも途中の改行で確定されない。本文の中の `ESC[200~`・`ESC[201~` は取り除く）。無効なら包まずに送る。
@@ -119,13 +139,13 @@ pane の中で検出されたコーディングエージェント（Claude Code�
     `agent_prompt_stalled` ではなく締め切りで `timeout`。省略すると、活動を確かめた後は無期限に待つ。
   - 待っている間にエージェントが終了した・入れ替わった・pane が閉じたら `agent_not_running`。
   - `timeout`・`agent_prompt_stalled`・`agent_prompt_failed`・`agent_not_running`・`connection_closed` は「送られなかった」ことを意味しない。送り直す前に `agent read` で確かめる（二重に送らないため）。
-- `agent send-keys <paneId> <key>...` … エージェントの UI（承認ダイアログ・メニュー）へキーを送る。`blocked` でも送れる。`{"ok":true,"paneId":…}` を出す。
+- `agent send-keys <target> <key>...` … エージェントの UI（承認ダイアログ・メニュー）へキーを送る。`blocked` でも送れる。`{"ok":true,"paneId":…}` を出す（名前で指しても `paneId` は解決した pane の ID）。
   - キー名: `enter`/`return`・`esc`/`escape`・`tab`・`shift+tab`・`backspace`/`bs`・`space`・`up`/`down`/`left`/`right`・`f1`〜`f12`・1 文字
     （`y` 等。大文字は shift つき）・記号名（`minus` `comma` `period` `slash` `backslash` `quote` `double_quote` `semicolon` `colon`
     `percent` `ampersand` `backtick` `plus`）。修飾は `ctrl`/`control`・`alt`/`option`/`meta`・`shift` を `+` でつなぐ（例 `ctrl+c`。別名は `C-c` だけで、`C-x` のような書き方は使えない）。
   - 矢印は端末のアプリケーションカーソルモードに合わせて送る。符号化は xterm の既定のもの（`ctrl+enter` のように既定の符号化で表せない組み合わせは使えない）。
   - 不明なキー名が 1 つでもあれば**何も送らずに** `invalid_key`。
-- 対象の pane が無い・エージェントが検出されていないと `agent_not_found`。
+- 対象の pane が無い・エージェントが検出されていない・どのエージェントも持たない名前だと `agent_not_found`。
 - 読み取り（`get`・`wait`・`read`）は既読を進めない（`done` は `done` のまま）。
 
 ### 例: エージェントに作業させて、終わるのを待って結果を読む
@@ -161,11 +181,13 @@ herdr の `terminal attach <terminal_id> [--takeover]` に相当する（`docs/h
 
 ### `agent`
 
-herdr の `agent list` / `agent get` / `agent wait` / `agent read` / `agent prompt`（`--wait`）/ `agent send-keys` に相当する
+herdr の `agent list` / `agent get` / `agent wait` / `agent read` / `agent prompt`（`--wait`）/ `agent send-keys` / `agent rename` に相当する
 （`docs/herdr-parity.md` の H39）。違い:
 
-- 対象は **pane ID だけ**。herdr のエージェント名（`agent start` / `agent rename` で付ける名前）は無い。
-- `agent start`・`agent rename`・`agent focus`・`agent explain`・`agent attach` は無い。
+- 名前の書式・一意性・`<target>` の解決順（pane ID → 名前）・`--clear`・code（`invalid_agent_name`・`agent_name_taken`・
+  `agent_not_found`）は herdr と同じ。違うのは、名前が消える条件（herdr は検出の一時的な揺れでは消さないが、本製品は検出が一度
+  外れると別のエージェントとして数え直すので消える）と、保存しないこと（herdr は session に保存して復元する）。
+- `agent start`（空いているシェルの pane でエージェントを起動して名前を付ける）・`agent focus`・`agent explain`・`agent attach` は無い。
 - `agent prompt`: herdr の Windows 向けの回避策（Codex への貼り付けの区切り・Copilot へのフォーカス通知）と `agent_not_ready`（名前付きで
   起動中の判定）は無い。`--timeout` が送信の途中で尽きたらその時点で `timeout` になる（herdr の Unix 版は送信の完了を待つ）。
   待ち行列の後ろで待っている間の `blocked`・エージェントの終了を書く直前にも確かめる（herdr は受け付けの時点だけ）。

@@ -23,11 +23,13 @@ const USAGE = [
   "wtmctl snapshot [--url <URL>] [--token <TOKEN>]",
   "wtmctl watch [--json] [--url <URL>] [--token <TOKEN>]",
   "wtmctl agent list [--url <URL>] [--token <TOKEN>]",
-  "wtmctl agent get <paneId> [--url <URL>] [--token <TOKEN>]",
-  "wtmctl agent wait <paneId> [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
-  "wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
-  "wtmctl agent prompt <paneId> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
-  "wtmctl agent send-keys <paneId> <key>... [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent get <target> [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent wait <target> [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent read <target> [--lines <N>] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent prompt <target> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent send-keys <target> <key>... [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent rename <target> <name>|--clear [--url <URL>] [--token <TOKEN>]",
+  "（<target> は pane ID か、agent rename で付けた名前）",
 ].join("\n");
 
 export const DEFAULT_URL = "http://127.0.0.1:7780";
@@ -63,6 +65,7 @@ export type Command =
   | { kind: "snapshot"; opts: GlobalOpts }
   | { kind: "watch"; opts: GlobalOpts; json: boolean }
   | { kind: "agent-list"; opts: GlobalOpts }
+  // agent-* の paneId は pane ID かエージェントの名前（`agentTarget.ts` の `resolveAgentTarget` で解決する。20260926-agent-start-rename）。
   | { kind: "agent-get"; opts: GlobalOpts; paneId: string }
   | { kind: "agent-wait"; opts: GlobalOpts; paneId: string; until: AgentStatus[]; timeoutMs: number | undefined }
   | { kind: "agent-read"; opts: GlobalOpts; paneId: string; lines: number; raw: boolean; timeoutMs: number }
@@ -75,7 +78,9 @@ export type Command =
       until: AgentStatus[];
       timeoutMs: number | undefined;
     }
-  | { kind: "agent-send-keys"; opts: GlobalOpts; paneId: string; keys: string[] };
+  | { kind: "agent-send-keys"; opts: GlobalOpts; paneId: string; keys: string[] }
+  /** `name: null` は `--clear`（名前を外す）。 */
+  | { kind: "agent-rename"; opts: GlobalOpts; paneId: string; name: string | null };
 
 const DEFAULT_READ_TIMEOUT_MS = 5000;
 /** herdr の `agent read` の既定（recent の 80 行）。 */
@@ -333,13 +338,13 @@ function parseAgent(sub: string | undefined, rest: readonly string[], env: NodeJ
   }
   if (sub === "get") {
     const { positionals, values } = parseFlags(rest, URL_TOKEN);
-    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    const paneId = requirePositional(positionals, 0, "target", USAGE);
     rejectExtra(positionals, 1, USAGE);
     return { kind: "agent-get", opts: globalOptsFrom(values, env), paneId };
   }
   if (sub === "wait") {
     const { positionals, values, multi } = parseFlags(rest, { values: [...URL_TOKEN.values!, "--timeout"], multi: ["--until"] });
-    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    const paneId = requirePositional(positionals, 0, "target", USAGE);
     rejectExtra(positionals, 1, USAGE);
     const timeoutRaw = values.get("--timeout");
     return {
@@ -352,7 +357,7 @@ function parseAgent(sub: string | undefined, rest: readonly string[], env: NodeJ
   }
   if (sub === "read") {
     const { positionals, values, bools } = parseFlags(rest, { values: [...URL_TOKEN.values!, "--lines", "--timeout"], bools: ["--raw"] });
-    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    const paneId = requirePositional(positionals, 0, "target", USAGE);
     rejectExtra(positionals, 1, USAGE);
     const linesRaw = values.get("--lines");
     const timeoutRaw = values.get("--timeout");
@@ -372,7 +377,7 @@ function parseAgent(sub: string | undefined, rest: readonly string[], env: NodeJ
       bools: ["--wait"],
       multi: ["--until"],
     });
-    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    const paneId = requirePositional(positionals, 0, "target", USAGE);
     const text = requirePositional(positionals, 1, "text", USAGE);
     rejectExtra(positionals, 2, USAGE);
     const wait = bools.has("--wait");
@@ -394,10 +399,23 @@ function parseAgent(sub: string | undefined, rest: readonly string[], env: NodeJ
   }
   if (sub === "send-keys") {
     const { positionals, values } = parseFlags(rest, URL_TOKEN);
-    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    const paneId = requirePositional(positionals, 0, "target", USAGE);
     const keys = positionals.slice(1);
     if (keys.length === 0) throw new CliUsageError("missing key", USAGE);
     return { kind: "agent-send-keys", opts: globalOptsFrom(values, env), paneId, keys };
+  }
+  // 20260926-agent-start-rename。`<target> <name>` か `<target> --clear` のどちらか（herdr の `agent rename <target> <name>|--clear`）。
+  if (sub === "rename") {
+    const { positionals, values, bools } = parseFlags(rest, { values: URL_TOKEN.values!, bools: ["--clear"] });
+    const paneId = requirePositional(positionals, 0, "target", USAGE);
+    const clear = bools.has("--clear");
+    if (clear) {
+      rejectExtra(positionals, 1, USAGE);
+      return { kind: "agent-rename", opts: globalOptsFrom(values, env), paneId, name: null };
+    }
+    const name = requirePositional(positionals, 1, "name (or --clear)", USAGE);
+    rejectExtra(positionals, 2, USAGE);
+    return { kind: "agent-rename", opts: globalOptsFrom(values, env), paneId, name };
   }
   throw new CliUsageError(`unknown subcommand: wtmctl agent ${sub ?? ""}`.trimEnd(), USAGE);
 }
