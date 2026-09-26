@@ -9,6 +9,6 @@ import type { Pane } from "@wtm/protocol";
  * 既定値だけ呼ぶ側が決める（`GotoPicker` は tab 内の順番、通知は pane の id）。
  */
 export function paneNameOf(pane: Pane, fallback = `pane ${pane.id}`): string {
-  return pane.label || pane.agent?.label || pane.title || fallback;
+  return pane.label || pane.agent?.name || pane.agent?.label || pane.title || fallback;
 }
 

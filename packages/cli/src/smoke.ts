@@ -169,6 +169,24 @@ async function main(): Promise<void> {
     server.session.updatePaneRuntime(pane.id, {
       agent: { instanceId: "smoke-agent", kind: "claude", label: "Claude Code", state: "idle", completionSeq: 0, serverSeenSeq: 0, verified: true, since: Date.now() },
     });
+    // 20260926-agent-start-rename: agent.rename の RPC と名前による対象指定の配線（名前を付ける → 名前で引く → 外す）。
+    const renamed = await runCli(["agent", "rename", pane.id, "smoke-agent", "--url", url], env);
+    if (renamed.exitCode !== 0) throw new Error(`agent rename failed (exit ${renamed.exitCode}): ${renamed.stderr}`);
+    const byName = await runCli(["agent", "get", "smoke-agent", "--url", url], env);
+    const named = JSON.parse(byName.stdout || "{}") as { agent?: { paneId?: string; name?: string | null } };
+    if (byName.exitCode !== 0 || named.agent?.paneId !== pane.id || named.agent?.name !== "smoke-agent") {
+      throw new Error(`agent get by name failed (exit ${byName.exitCode}): ${byName.stdout} ${byName.stderr}`);
+    }
+    const cleared = await runCli(["agent", "rename", "smoke-agent", "--clear", "--url", url], env);
+    const unnamed = JSON.parse(cleared.stdout || "{}") as { agent?: { name?: string | null } };
+    if (cleared.exitCode !== 0 || unnamed.agent?.name !== null) throw new Error(`agent rename --clear failed (exit ${cleared.exitCode}): ${cleared.stdout} ${cleared.stderr}`);
+    const gone = await runCli(["agent", "get", "smoke-agent", "--url", url], env);
+    if (gone.exitCode !== 1 || !gone.stderr.includes("agent_not_found")) throw new Error(`the cleared name should not resolve (exit ${gone.exitCode}): ${gone.stderr}`);
+    const byId = await runCli(["agent", "get", pane.id, "--url", url], env);
+    if (byId.exitCode !== 0 || (JSON.parse(byId.stdout) as { agent: { name: string | null } }).agent.name !== null) {
+      throw new Error(`agent get by pane id should show no name after --clear (exit ${byId.exitCode}): ${byId.stdout} ${byId.stderr}`);
+    }
+    console.log("smoke(cli): wtmctl agent rename ok (named, resolved by name, cleared)");
     const keys = await runCli(["agent", "send-keys", pane.id, "C-c", "--url", url], env);
     if (keys.exitCode !== 0) throw new Error(`agent send-keys failed (exit ${keys.exitCode}): ${keys.stderr}`);
     console.log("smoke(cli): wtmctl agent send-keys ok (the RPC accepted the keys)");

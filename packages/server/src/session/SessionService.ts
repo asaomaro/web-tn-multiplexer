@@ -18,7 +18,7 @@ import type {
   WorkspaceGroup,
   WorkspaceId,
 } from "@wtm/protocol";
-import { RpcError } from "@wtm/protocol";
+import { INVALID_AGENT_NAME_MESSAGE, isValidAgentName, RpcError } from "@wtm/protocol";
 import type { SessionFileData, SessionFilePane, SessionFileTab, SessionFileWorkspace } from "../persist/SessionFile.js";
 import type { TerminalManager } from "../terminal/TerminalManager.js";
 import { removeScrollbackDir, scrollbackEditorArgv, writeScrollbackFile } from "../terminal/scrollbackEditor.js";
@@ -899,6 +899,11 @@ export class SessionService {
     // visibleWorking だけが変わって state 等は同じ、という新しい `AgentInfo` オブジェクトを返すことがある
     // （その3フラグは `AgentInfo`（`@wtm/protocol`）には含まれない、判定内部だけの情報）。busy/title と
     // 同じ「実際に変わったときだけ発行する」規約に揃える。
+    // 名前は AgentTracker が知らないので、同じ検出（instanceId）の間だけ前の名前を引き継ぐ（20260926-agent-start-rename design
+    // 「名前の引き継ぎ」）。別の instanceId（入れ替わり）・null（終了）には引き継がない＝名前は消える。
+    if (patch.agent && patch.agent.name === undefined && pane.agent?.name !== undefined && pane.agent.instanceId === patch.agent.instanceId) {
+      patch = { ...patch, agent: { ...patch.agent, name: pane.agent.name } };
+    }
     const agentChanged = patch.agent !== undefined && !sameAgent(pane.agent, patch.agent);
     // 画面判定でエージェントが消えたら（非 null → null）、報告されていた会話参照も一緒に捨てる
     // （20260923-agent-session-resume design D9）。エージェントを終了して別の作業をしている pane が、
@@ -915,6 +920,32 @@ export class SessionService {
     // 会話参照の消滅も保存契機にする（design D8）——さもないと、サーバが不意に落ちたときに
     // 「もう有効ではない」という事実が session.json に反映されないまま残ることがある。
     if (cwdChanged || clearsAgentSession) this.persist.touch();
+  }
+
+  /**
+   * エージェントに名前を付ける／外す（null）（20260926-agent-start-rename。herdr の `rename_agent_target`）。失敗は何も変えない。
+   * 引き継ぎの規則が `null` を打ち消さないよう、`updatePaneRuntime` を通さずモデルへ直接書く。名前は保存しない。
+   */
+  renameAgent(paneId: PaneId, expectedInstanceId: string | undefined, name: string | null): AgentInfo {
+    const pane = this.model.getPane(paneId);
+    if (!pane) throw new RpcError("agent_not_found", `pane not found: ${paneId}`);
+    const agent = pane.agent;
+    if (!agent) throw new RpcError("agent_not_found", `no agent detected in pane: ${paneId}`);
+    if (expectedInstanceId !== undefined && agent.instanceId !== expectedInstanceId) {
+      throw new RpcError("agent_not_found", `agent ${expectedInstanceId} is no longer running in pane: ${paneId}`);
+    }
+    if (name !== null) {
+      if (!isValidAgentName(name)) throw new RpcError("invalid_agent_name", INVALID_AGENT_NAME_MESSAGE);
+      const holder = this.model.listPanes().find((p) => p.id !== paneId && p.agent?.name === name);
+      if (holder) throw new RpcError("agent_name_taken", `agent name ${name} is already used by pane ${holder.id}`);
+    }
+    const next: AgentInfo = { ...agent };
+    if (name === null) delete next.name;
+    else next.name = name;
+    if (sameAgent(agent, next)) return agent;
+    const updated = this.model.updatePaneRuntime(paneId, { agent: next });
+    this.bus.publish({ event: "pane.agent_status_changed", data: { paneId, agent: updated.agent } });
+    return next;
   }
 
   updateWorkspaceGit(workspaceId: WorkspaceId, git: GitInfo | null): void {
@@ -1185,7 +1216,8 @@ function sameAgent(a: AgentInfo | null, b: AgentInfo | null): boolean {
     a.completionSeq === b.completionSeq &&
     a.serverSeenSeq === b.serverSeenSeq &&
     a.verified === b.verified &&
-    a.since === b.since
+    a.since === b.since &&
+    a.name === b.name
   );
 }
 

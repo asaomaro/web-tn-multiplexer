@@ -40,6 +40,8 @@ export interface AgentLocation {
 
 export interface AgentView {
   paneId: string;
+  /** `agent rename` で付けた名前（無ければ null。20260926-agent-start-rename）。 */
+  name: string | null;
   workspaceId: string | null;
   tabId: string;
   status: AgentStatus;
@@ -56,6 +58,7 @@ export interface AgentView {
 export function toAgentView(loc: AgentLocation, agent: AgentInfo): AgentView {
   return {
     paneId: loc.paneId,
+    name: agent.name ?? null,
     workspaceId: loc.workspaceId,
     tabId: loc.tabId,
     status: statusOf(agent),

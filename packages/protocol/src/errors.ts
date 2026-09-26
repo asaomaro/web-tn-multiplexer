@@ -26,6 +26,9 @@ export type ErrorCode =
   | "empty_agent_prompt"
   | "invalid_key"
   | "agent_prompt_failed"
+  // エージェントの名前（20260926-agent-start-rename）。herdr と同じ code。
+  | "invalid_agent_name"
+  | "agent_name_taken"
   // pane への直結（20260926-pane-direct-connect）。名前は herdr の理由文（already has an attached client）に対応させる。
   | "pane_attached"
   | "not_attached";

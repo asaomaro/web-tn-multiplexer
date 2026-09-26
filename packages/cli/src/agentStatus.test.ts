@@ -91,6 +91,7 @@ describe("toAgentView", () => {
     );
     expect(view).toEqual({
       paneId: "p1",
+      name: null,
       workspaceId: "w1",
       tabId: "t1",
       status: "done",
@@ -103,6 +104,12 @@ describe("toAgentView", () => {
       since: 1000,
       verified: true,
     });
+  });
+
+  it("名前があれば name に出し、無ければ null（20260926-agent-start-rename AC9）", () => {
+    const loc = { paneId: "p1", tabId: "t1", workspaceId: "w1" };
+    expect(toAgentView(loc, agent({ name: "reviewer" })).name).toBe("reviewer");
+    expect(toAgentView(loc, agent()).name).toBeNull();
   });
 });
 

@@ -510,6 +510,19 @@ describe("Sidebar — agents", () => {
     expect(row.find(".sidebar-state-icon").attributes("data-state")).toBe("working");
   });
 
+  it("agent rename で付けた名前があれば、エージェントの種類の表示名の前に出す（20260926-agent-start-rename AC13）", () => {
+    const session = useSessionStore(pinia);
+    session.workspaceUpserted(makeWorkspace("w1"));
+    session.tabUpserted(makeTab("t1", "w1"));
+    session.paneUpserted(makePane("p1", "t1", makeAgent({ label: "Claude Code", name: "reviewer" })));
+    session.paneUpserted(makePane("p2", "t1", makeAgent({ instanceId: "a2", label: "Codex" })));
+    const wrapper = mountSidebar(makeConnection());
+    const lines = wrapper.findAll(".sidebar-agents .sidebar-row-line2").map((el) => el.findAll("span").map((s) => s.text()));
+    expect(lines).toContainEqual(["reviewer", "Claude Code"]);
+    expect(lines).toContainEqual(["Codex"]);
+    expect(wrapper.findAll(".sidebar-agent-name")).toHaveLength(1);
+  });
+
   it("verified が false なら「未検証」を出す", () => {
     const session = useSessionStore(pinia);
     session.workspaceUpserted(makeWorkspace("w1"));

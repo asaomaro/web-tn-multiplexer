@@ -455,6 +455,21 @@ export const AgentSendKeysParams = z.object({
 });
 export type AgentSendKeysParams = z.infer<typeof AgentSendKeysParams>;
 
+/**
+ * 名前を付ける／外す（20260926-agent-start-rename。herdr の agent.rename）。`name: null` で外す。書式はスキーマでは弾かない
+ * （サーバが `invalid_agent_name` で返す。herdr と同じ code）。`instanceId` の扱いは `AgentPromptParams` と同じ。
+ */
+export const AgentRenameParams = z.object({
+  paneId,
+  instanceId: z.string().min(1).optional(),
+  name: z.string().nullable(),
+});
+export type AgentRenameParams = z.infer<typeof AgentRenameParams>;
+export interface AgentRenameResult {
+  /** 名前を変えた後のエージェント。 */
+  agent: AgentInfo;
+}
+
 export const METHOD_SCHEMAS = {
   "client.hello": ClientHelloParams,
   "client.view": ClientViewParams,
@@ -508,6 +523,7 @@ export const METHOD_SCHEMAS = {
   "agent_integration.set_auto_resume": AgentIntegrationSetAutoResumeParams,
   "agent.prompt": AgentPromptParams,
   "agent.send_keys": AgentSendKeysParams,
+  "agent.rename": AgentRenameParams,
 } as const;
 
 export type MethodName = keyof typeof METHOD_SCHEMAS;
@@ -566,6 +582,7 @@ export interface MethodResultMap {
   "agent_integration.set_auto_resume": Record<string, never>;
   "agent.prompt": AgentPromptResult;
   "agent.send_keys": Record<string, never>;
+  "agent.rename": AgentRenameResult;
 }
 
 export type ParamsOf<M extends MethodName> = z.infer<(typeof METHOD_SCHEMAS)[M]>;

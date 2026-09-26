@@ -1,4 +1,5 @@
 import type { AgentInfo, ServerEvent, SessionSnapshot } from "@wtm/protocol";
+import { resolveAgentTarget, type AgentPane } from "../agentTarget.js";
 import {
   currentScreen,
   judgeWait,
@@ -30,22 +31,10 @@ type AgentWaitCmd = Extract<Command, { kind: "agent-wait" }>;
 type AgentReadCmd = Extract<Command, { kind: "agent-read" }>;
 type AgentPromptCmd = Extract<Command, { kind: "agent-prompt" }>;
 type AgentSendKeysCmd = Extract<Command, { kind: "agent-send-keys" }>;
-
-interface AgentPane {
-  paneId: string;
-  tabId: string;
-  agent: AgentInfo;
-}
+type AgentRenameCmd = Extract<Command, { kind: "agent-rename" }>;
 
 function workspacesByTab(snapshot: SessionSnapshot): Map<string, string> {
   return new Map(snapshot.tabs.map((t) => [t.id, t.workspaceId]));
-}
-
-function requireAgentPane(snapshot: SessionSnapshot, paneId: string): AgentPane {
-  const pane = snapshot.panes.find((p) => p.id === paneId);
-  if (!pane) throw new RpcFailure("agent_not_found", `pane not found: ${paneId}`);
-  if (!pane.agent) throw new RpcFailure("agent_not_found", `no agent detected in pane: ${paneId}`);
-  return { paneId: pane.id, tabId: pane.tabId, agent: pane.agent };
 }
 
 function viewOf(target: AgentPane, workspaces: Map<string, string>): AgentView {
@@ -70,7 +59,7 @@ export async function runAgentList(cmd: AgentListCmd, store: SessionStore): Prom
 
 export async function runAgentGet(cmd: AgentGetCmd, store: SessionStore): Promise<void> {
   const hello = await withSession(cmd.opts, store, async (client) => client.hello());
-  const target = requireAgentPane(hello.snapshot, cmd.paneId);
+  const target = resolveAgentTarget(hello.snapshot, cmd.paneId);
   printJson({ agent: viewOf(target, workspacesByTab(hello.snapshot)) });
 }
 
@@ -166,7 +155,7 @@ export async function runAgentWait(cmd: AgentWaitCmd, store: SessionStore): Prom
   const agent = await withSession(cmd.opts, store, async (client) => {
     const events = new EventFeed();
     const hello = await client.hello(events.push);
-    const target = requireAgentPane(hello.snapshot, cmd.paneId);
+    const target = resolveAgentTarget(hello.snapshot, cmd.paneId);
     const workspaces = workspacesByTab(hello.snapshot);
     const until = resolveUntil(cmd.until);
     if (judgeWait(target.agent.instanceId, target.agent, until) === "match") {
@@ -180,14 +169,14 @@ export async function runAgentWait(cmd: AgentWaitCmd, store: SessionStore): Prom
 export async function runAgentRead(cmd: AgentReadCmd, store: SessionStore): Promise<void> {
   const text = await withSession(cmd.opts, store, async (client) => {
     const hello = await client.hello();
-    requireAgentPane(hello.snapshot, cmd.paneId);
+    const { paneId } = resolveAgentTarget(hello.snapshot, cmd.paneId);
     const snapshot = await readPaneSnapshot(
       client,
-      cmd.paneId,
+      paneId,
       hello.snapshot.limits.scrollbackLines,
       cmd.timeoutMs,
     );
-    await client.request("pane.unsubscribe", { paneId: cmd.paneId });
+    await client.request("pane.unsubscribe", { paneId });
     return snapshot;
   });
   const screen = currentScreen(text);
@@ -324,11 +313,11 @@ export async function runAgentPrompt(cmd: AgentPromptCmd, store: SessionStore): 
     const deadline = cmd.timeoutMs === undefined ? undefined : Date.now() + cmd.timeoutMs;
     const events = new EventFeed();
     const hello = await client.hello(events.push);
-    const target = requireAgentPane(hello.snapshot, cmd.paneId);
+    const target = resolveAgentTarget(hello.snapshot, cmd.paneId);
     const workspaces = workspacesByTab(hello.snapshot);
     if (!cmd.wait) {
       const result = await client.request("agent.prompt", {
-        paneId: cmd.paneId,
+        paneId: target.paneId,
         instanceId: target.agent.instanceId,
         text: cmd.text,
       });
@@ -348,14 +337,30 @@ export async function runAgentPrompt(cmd: AgentPromptCmd, store: SessionStore): 
 }
 
 export async function runAgentSendKeys(cmd: AgentSendKeysCmd, store: SessionStore): Promise<void> {
-  await withSession(cmd.opts, store, async (client) => {
+  const paneId = await withSession(cmd.opts, store, async (client) => {
     const hello = await client.hello();
-    const target = requireAgentPane(hello.snapshot, cmd.paneId);
+    const target = resolveAgentTarget(hello.snapshot, cmd.paneId);
     await client.request("agent.send_keys", {
-      paneId: cmd.paneId,
+      paneId: target.paneId,
       instanceId: target.agent.instanceId,
       keys: cmd.keys,
     });
+    return target.paneId;
   });
-  printJson({ ok: true, paneId: cmd.paneId });
+  printJson({ ok: true, paneId });
+}
+
+/** `agent rename`（20260926-agent-start-rename design「`wtmctl agent rename`」）。解決した時点のエージェントにだけ付ける。 */
+export async function runAgentRename(cmd: AgentRenameCmd, store: SessionStore): Promise<void> {
+  const agent = await withSession(cmd.opts, store, async (client) => {
+    const hello = await client.hello();
+    const target = resolveAgentTarget(hello.snapshot, cmd.paneId);
+    const result = await client.request("agent.rename", {
+      paneId: target.paneId,
+      instanceId: target.agent.instanceId,
+      name: cmd.name,
+    });
+    return viewOf({ ...target, agent: result.agent }, workspacesByTab(hello.snapshot));
+  });
+  printJson({ agent });
 }

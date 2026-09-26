@@ -358,3 +358,26 @@ describe("parseArgs — agent", () => {
     expect(() => parseArgs(argv, noEnv)).toThrow(CliUsageError);
   });
 });
+
+// 20260926-agent-start-rename（AC6）。
+describe("parseArgs — agent rename", () => {
+  const opts = { url: DEFAULT_URL, token: undefined };
+  it("<target> <name> で名前を付け、<target> --clear で外す", () => {
+    expect(parseArgs(["agent", "rename", "p1", "reviewer"], noEnv)).toEqual({ kind: "agent-rename", opts, paneId: "p1", name: "reviewer" });
+    expect(parseArgs(["agent", "rename", "reviewer", "--clear"], noEnv)).toEqual({ kind: "agent-rename", opts, paneId: "reviewer", name: null });
+    expect(parseArgs(["agent", "rename", "--clear", "p1"], noEnv)).toMatchObject({ paneId: "p1", name: null });
+  });
+  it("名前の書式は CLI では検査しない（サーバが invalid_agent_name で返す）", () => {
+    expect(parseArgs(["agent", "rename", "p1", "Bad.Name"], noEnv)).toMatchObject({ name: "Bad.Name" });
+  });
+  it.each([
+    [["agent", "rename"]],
+    [["agent", "rename", "p1"]],
+    [["agent", "rename", "p1", "reviewer", "--clear"]],
+    [["agent", "rename", "p1", "reviewer", "extra"]],
+    [["agent", "rename", "p1", "--clear", "extra"]],
+    [["agent", "rename", "p1", "--wait"]],
+  ])("使い方の誤り: %j", (argv) => {
+    expect(() => parseArgs(argv, noEnv)).toThrow(CliUsageError);
+  });
+});

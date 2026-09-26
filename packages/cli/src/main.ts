@@ -9,6 +9,7 @@ import {
   runAgentList,
   runAgentPrompt,
   runAgentRead,
+  runAgentRename,
   runAgentSendKeys,
   runAgentWait,
 } from "./commands/agent.js";
@@ -38,15 +39,17 @@ function printHelp(): void {
       "wtmctl snapshot [--url <URL>] [--token <TOKEN>]",
       "wtmctl watch [--json] [--url <URL>] [--token <TOKEN>]",
       "wtmctl agent list [--url <URL>] [--token <TOKEN>]",
-      "wtmctl agent get <paneId> [--url <URL>] [--token <TOKEN>]",
-      "wtmctl agent wait <paneId> [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
-      "wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
-      "wtmctl agent prompt <paneId> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
-      "wtmctl agent send-keys <paneId> <key>... [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent get <target> [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent wait <target> [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent read <target> [--lines <N>] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent prompt <target> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent send-keys <target> <key>... [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent rename <target> <name>|--clear [--url <URL>] [--token <TOKEN>]",
       "",
       "環境変数: WTMCTL_URL（既定 http://127.0.0.1:7780）・WTMCTL_TOKEN",
       "",
       "pane input/pane run は、実プロセスへ実際に届いたことまでは保証しません（INPUT フレームに ack はありません）。",
+      "agent の <target> は pane ID か、agent rename で付けた名前です（名前は英小文字で始まる 1〜32 文字の [a-z0-9_-]）。",
       "agent wait は --until 省略時 idle/done/blocked のどれかで返り、--timeout 省略時は無期限に待ちます。",
       "agent prompt は bracketed paste のモードに合わせて本文を送り、300ms 後に Enter で確定します（blocked なら送りません）。",
       "--wait は送信後 5 秒以内に working/blocked を観測できなければ agent_prompt_stalled で終わります。",
@@ -104,6 +107,8 @@ async function main(): Promise<void> {
       return runAgentPrompt(cmd, store);
     case "agent-send-keys":
       return runAgentSendKeys(cmd, store);
+    case "agent-rename":
+      return runAgentRename(cmd, store);
     default: {
       // 網羅性チェック：`Command` に新しい種類が足されたのにここへ分岐を足し忘れると、ここで型エラーになる
       // （coding のタスク横断点検で見つけた——`switch` 単体では TS は非網羅を黙って許す。この tsconfig は
