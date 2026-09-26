@@ -20,6 +20,9 @@ class AlwaysUpHost implements TerminalHost {
   resized: { cols: number; rows: number } | null = null;
   constructor(readonly paneId: string) {}
   write(): void {}
+  writeModal(): Promise<void> {
+    return Promise.resolve();
+  }
   resize(cols: number, rows: number): void {
     this.resized = { cols, rows };
   }

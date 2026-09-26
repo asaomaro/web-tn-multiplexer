@@ -5,6 +5,8 @@ import {
   DEFAULT_UNTIL,
   judgeWait,
   lastLines,
+  PROMPT_EFFECT_TIMEOUT_MS,
+  PromptWait,
   resolveUntil,
   statusOf,
   toAgentView,
@@ -130,5 +132,56 @@ describe("currentScreen", () => {
     expect(
       currentScreen("$ ls\r\nfileA\r\n$ codex\u001B[?1049h\u001B[HALT-ROW-1\r\nALT-ROW-2"),
     ).toBe("\u001B[HALT-ROW-1\r\nALT-ROW-2");
+  });
+});
+
+// 20260926-agent-prompt-send-keys
+describe("PromptWait（agent prompt --wait の活動の確認 → 状態待ち）", () => {
+  it("活動の確認の上限は herdr と同じ 5000ms", () => {
+    expect(PROMPT_EFFECT_TIMEOUT_MS).toBe(5000);
+  });
+
+  it("活動を観測するまでは、until に含まれる idle・done でも一致しない（AC6）", () => {
+    const w = new PromptWait("a1", DEFAULT_UNTIL, false);
+    expect(w.observe(agent({ state: "idle" }))).toBe("pending");
+    expect(w.observe(agent({ state: "idle", completionSeq: 2, serverSeenSeq: 1 }))).toBe("pending"); // done
+    expect(w.observe(agent({ state: "unknown" }))).toBe("pending");
+    expect(w.activityObserved).toBe(false);
+  });
+
+  it("working を観測した後は、until のどれかで一致する（AC8）", () => {
+    const w = new PromptWait("a1", DEFAULT_UNTIL, false);
+    expect(w.observe(agent({ state: "working" }))).toBe("pending");
+    expect(w.activityObserved).toBe(true);
+    expect(w.observe(agent({ state: "unknown" }))).toBe("pending");
+    expect(w.observe(agent({ state: "idle", completionSeq: 1 }))).toBe("match");
+  });
+
+  it("活動として観測した blocked が until に含まれていれば、それで一致する（既定の until）（AC8）", () => {
+    const w = new PromptWait("a1", DEFAULT_UNTIL, false);
+    expect(w.observe(agent({ state: "blocked" }))).toBe("match");
+  });
+
+  it("until を絞れば、活動の後でもそれ以外では一致しない（--until の複数指定）（AC8）", () => {
+    const w = new PromptWait("a1", ["done", "unknown"], false);
+    expect(w.observe(agent({ state: "blocked" }))).toBe("pending");
+    expect(w.observe(agent({ state: "idle" }))).toBe("pending");
+    expect(w.observe(agent({ state: "unknown" }))).toBe("match");
+  });
+
+  it("送信前から working なら活動を観測済みとして始める（idle ですぐ一致・until に working があれば working で一致）（AC8）", () => {
+    expect(new PromptWait("a1", DEFAULT_UNTIL, true).observe(agent({ state: "idle" }))).toBe(
+      "match",
+    );
+    expect(new PromptWait("a1", ["working"], true).observe(agent({ state: "working" }))).toBe(
+      "match",
+    );
+  });
+
+  it("居なくなった・入れ替わったら gone（活動の前でも後でも）（AC9）", () => {
+    expect(new PromptWait("a1", DEFAULT_UNTIL, false).observe(null)).toBe("gone");
+    expect(
+      new PromptWait("a1", DEFAULT_UNTIL, true).observe(agent({ instanceId: "a2", state: "idle" })),
+    ).toBe("gone");
   });
 });

@@ -19,6 +19,14 @@ export interface MirrorSnapshot {
   text: string;
 }
 
+/** 入力の組み立てに要る端末のモード（20260926-agent-prompt-send-keys）。 */
+export interface InputModes {
+  /** `CSI ? 2004 h`。有効なら貼り付けを `ESC[200~`…`ESC[201~` で包む。 */
+  bracketedPaste: boolean;
+  /** DECCKM（`CSI ? 1 h`）。有効なら矢印キーを `ESC O A` 等で送る。 */
+  applicationCursorKeys: boolean;
+}
+
 /**
  * サーバ側の端末エミュレータの包み（architecture.md「Mirror」）。
  * `@xterm/headless` 6.0.0 ＋ `@xterm/addon-serialize` 0.14.0（design E1・E2）。
@@ -45,6 +53,10 @@ export interface Mirror {
    * appearance が前回伝えた値と変わっていれば通知する。無効なら・変わっていなければ何もしない。
    */
   notifyAppearanceMayHaveChanged(): void;
+  /** 今の入力のモード（20260926-agent-prompt-send-keys）。書いた直後の出力は `flush()` を待つまで反映されない。 */
+  inputModes(): InputModes;
+  /** それまでに `write` した出力をエミュレータが処理し終えたら解決する（20260926-agent-prompt-send-keys）。 */
+  flush(): Promise<void>;
 }
 
 const DRAIN_LOW_WATERMARK = 256 * 1024; // 256KB（design「流量制御」）
@@ -143,6 +155,18 @@ export class XtermMirror implements Mirror {
 
   pendingBytes(): number {
     return this.pending;
+  }
+
+  inputModes(): InputModes {
+    return {
+      bracketedPaste: this.term.modes.bracketedPasteMode,
+      applicationCursorKeys: this.term.modes.applicationCursorKeysMode,
+    };
+  }
+
+  flush(): Promise<void> {
+    // 空の書き込みのコールバックは、それより前の書き込みを全部処理した後に呼ばれる（research F1 の実測）。
+    return new Promise((resolve) => this.term.write("", resolve));
   }
 
   onDrained(cb: () => void): Disposable {

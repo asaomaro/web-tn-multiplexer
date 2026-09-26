@@ -2,7 +2,14 @@ import type { AgentInfo, ServerEvent } from "@wtm/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStore } from "../session.js";
 import { RpcFailure, type WtmClient } from "../wsClient.js";
-import { runAgentGet, runAgentList, runAgentRead, runAgentWait } from "./agent.js";
+import {
+  runAgentGet,
+  runAgentList,
+  runAgentPrompt,
+  runAgentRead,
+  runAgentSendKeys,
+  runAgentWait,
+} from "./agent.js";
 
 vi.mock("../withSession.js", () => ({ withSession: vi.fn() }));
 vi.mock("../output.js", () => ({ printJson: vi.fn(), printLine: vi.fn(), printRaw: vi.fn() }));
@@ -437,6 +444,388 @@ describe("runAgentRead", () => {
     await expect(runAgentRead({ ...readCmd(), paneId }, store)).rejects.toMatchObject({
       code: "agent_not_found",
     });
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});
+
+// --- 20260926-agent-prompt-send-keys ------------------------------------------------------------
+
+interface PromptHarness {
+  client: FakeClient;
+  /** `agent.prompt` の要求を送った瞬間に呼ぶ（送信中に届くイベントを模す）。 */
+  onPromptSent: (fn: () => void) => void;
+  respond: (a: AgentInfo) => void;
+  fail: (code: string) => void;
+}
+
+/** `agent.prompt` の応答を手で返す偽クライアント（応答は送信〔300ms の遅延 Enter〕を書き終えた後に来る）。 */
+function promptHarness(panes: PaneSeed[], opts: { withHello?: ServerEvent[] } = {}): PromptHarness {
+  const client = fakeClient(panes, opts);
+  let resolveRpc: ((v: unknown) => void) | null = null;
+  let rejectRpc: ((e: Error) => void) | null = null;
+  let hook: (() => void) | null = null;
+  client.request = vi.fn((method: string) => {
+    if (method !== "agent.prompt") return Promise.resolve({});
+    return new Promise((resolve, reject) => {
+      resolveRpc = resolve;
+      rejectRpc = reject;
+      hook?.();
+    });
+  }) as unknown as FakeClient["request"];
+  return {
+    client,
+    onPromptSent: (fn) => (hook = fn),
+    respond: (a) => resolveRpc!({ agent: a }),
+    fail: (code) => rejectRpc!(new RpcFailure(code, code)),
+  };
+}
+
+function promptCmd(patch: Partial<Extract<Parameters<typeof runAgentPrompt>[0], object>> = {}) {
+  return {
+    kind: "agent-prompt" as const,
+    opts: OPTS,
+    paneId: "p1",
+    text: "line1\nline2",
+    wait: true,
+    until: [],
+    timeoutMs: undefined,
+    ...patch,
+  };
+}
+
+async function waitForPromptSent(client: FakeClient): Promise<void> {
+  await vi.waitFor(() =>
+    expect(client.request).toHaveBeenCalledWith("agent.prompt", expect.anything()),
+  );
+}
+
+function outcome(p: Promise<void>): Promise<unknown> {
+  return p.then(
+    () => "resolved",
+    (e: unknown) => e,
+  );
+}
+
+const IDLE = agent({ state: "idle" });
+
+describe("runAgentPrompt（--wait 無し）", () => {
+  it("agent.prompt を 1 回送り、応答のエージェントを { agent } で出す（AC4・AC12）", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t2", agent: IDLE }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd({ wait: false }), store);
+    await waitForPromptSent(h.client);
+    h.respond(agent({ state: "idle", completionSeq: 5 })); // hello の時点とは違う（応答のエージェントを出すこと）
+    await p;
+    expect(mockedWithSession).toHaveBeenCalledWith(OPTS, store, expect.any(Function));
+    expect(h.client.request).toHaveBeenCalledWith("agent.prompt", {
+      paneId: "p1",
+      instanceId: "a1", // hello で見たエージェント（入れ替わっていたらサーバが送らない）
+      text: "line1\nline2",
+    });
+    const out = mockedPrintJson.mock.calls[0]![0] as {
+      agent: { paneId: string; workspaceId: string; status: string };
+    };
+    expect(out.agent).toMatchObject({
+      paneId: "p1",
+      workspaceId: "w2",
+      status: "done",
+      completionSeq: 5,
+    });
+  });
+
+  it("サーバのエラー（agent_blocked 等）はそのまま（AC5）", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: agent({ state: "blocked" }) }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd({ wait: false }), store);
+    await waitForPromptSent(h.client);
+    h.fail("agent_blocked");
+    await expect(p).rejects.toMatchObject({ code: "agent_blocked" });
+  });
+
+  it.each([
+    ["pane が無い", "p9"],
+    ["エージェントが居ない", "p2"],
+  ])("%s なら送らずに agent_not_found", async (_label, paneId) => {
+    const h = promptHarness([{ id: "p2", tabId: "t1", agent: null }]);
+    useClient(h.client);
+    await expect(runAgentPrompt(promptCmd({ wait: false, paneId }), store)).rejects.toMatchObject({
+      code: "agent_not_found",
+    });
+    expect(h.client.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("runAgentPrompt --wait", () => {
+  it("--wait でも hello で見たエージェントの instanceId を渡す", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd(), store);
+    await waitForPromptSent(h.client);
+    expect(h.client.request).toHaveBeenCalledWith("agent.prompt", {
+      paneId: "p1",
+      instanceId: "a1",
+      text: "line1\nline2",
+    });
+    h.fail("agent_not_found");
+    await expect(p).rejects.toMatchObject({ code: "agent_not_found" });
+  });
+
+  it("要求を送る前の working は数えず、送った後の idle だけでは返らない。working を観測した後の idle（done）で返る（AC6・AC8）", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }], {
+      withHello: [statusChanged("p1", agent({ state: "working" }))],
+    });
+    useClient(h.client);
+    let settled = false;
+    const p = runAgentPrompt(promptCmd(), store).finally(() => (settled = true));
+    await waitForPromptSent(h.client);
+    h.respond(IDLE);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "idle", completionSeq: 1 })));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "working" })));
+    h.client.emitEvent(statusChanged("p1", agent({ state: "idle", completionSeq: 2 })));
+    await p;
+    const out = mockedPrintJson.mock.calls[0]![0] as {
+      agent: { status: string; completionSeq: number };
+    };
+    expect(out.agent).toMatchObject({ status: "done", completionSeq: 2 });
+  });
+
+  it("送信中（応答より前）に届いた working → idle も数える（一瞬だけの working）（AC6・AC8）", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    h.onPromptSent(() => {
+      h.client.emitEvent(statusChanged("p1", agent({ state: "working" })));
+      h.client.emitEvent(statusChanged("p1", agent({ state: "idle", completionSeq: 1 })));
+    });
+    const p = runAgentPrompt(promptCmd(), store);
+    await waitForPromptSent(h.client);
+    h.respond(IDLE);
+    await p;
+    expect((mockedPrintJson.mock.calls[0]![0] as { agent: { status: string } }).agent.status).toBe(
+      "done",
+    );
+  });
+
+  it("既定の until では、活動として観測した blocked で即座に返る（AC8）", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd(), store);
+    await waitForPromptSent(h.client);
+    h.respond(IDLE);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "blocked" })));
+    await p;
+    expect((mockedPrintJson.mock.calls[0]![0] as { agent: { status: string } }).agent.status).toBe(
+      "blocked",
+    );
+  });
+
+  it("--until を複数指定すると、活動の後にそのどれかで返る（AC8）", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    let settled = false;
+    const p = runAgentPrompt(promptCmd({ until: ["done", "unknown"] }), store).finally(
+      () => (settled = true),
+    );
+    await waitForPromptSent(h.client);
+    h.respond(IDLE);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "blocked" })));
+    h.client.emitEvent(statusChanged("p1", agent({ state: "idle" })));
+    await new Promise((r) => setTimeout(r, 20)); // 応答の続き（マイクロタスク）まで流す
+    expect(settled).toBe(false);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "unknown" })));
+    await p;
+    expect((mockedPrintJson.mock.calls[0]![0] as { agent: { status: string } }).agent.status).toBe(
+      "unknown",
+    );
+  });
+
+  it("hello の間に --timeout を使い切っていたら、送らずに timeout", async () => {
+    vi.useFakeTimers();
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    const hello = h.client.hello;
+    h.client.hello = vi.fn(async (cb?: (evt: ServerEvent) => void) => {
+      const result = await hello(cb);
+      vi.setSystemTime(Date.now() + 1000);
+      return result;
+    }) as unknown as FakeClient["hello"];
+    useClient(h.client);
+    await expect(runAgentPrompt(promptCmd({ timeoutMs: 500 }), store)).rejects.toMatchObject({
+      code: "timeout",
+    });
+    expect(h.client.request).not.toHaveBeenCalled();
+  });
+
+  it("送信前から working なら活動の確認を省く: idle で返り、5 秒以上何も来なくても stalled にならない（AC8）", async () => {
+    vi.useFakeTimers();
+    const working = agent({ state: "working" });
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: working }]);
+    useClient(h.client);
+    const result = outcome(runAgentPrompt(promptCmd(), store));
+    await waitForPromptSent(h.client);
+    h.respond(working);
+    await vi.advanceTimersByTimeAsync(60_000);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "idle" })));
+    expect(await result).toBe("resolved");
+  });
+
+  it("送信前から working で until に working があれば、応答で即座に返る（AC8）", async () => {
+    const working = agent({ state: "working" });
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: working }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd({ until: ["working"] }), store);
+    await waitForPromptSent(h.client);
+    h.respond(working);
+    await p;
+    expect((mockedPrintJson.mock.calls[0]![0] as { agent: { status: string } }).agent.status).toBe(
+      "working",
+    );
+  });
+
+  it("応答から 5000ms 以内に活動を観測できなければ、5000ms で agent_prompt_stalled（今の状態をメッセージに含む）（AC7）", async () => {
+    vi.useFakeTimers();
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const result = outcome(runAgentPrompt(promptCmd({ timeoutMs: 60_000 }), store));
+    await waitForPromptSent(h.client);
+    await vi.advanceTimersByTimeAsync(700); // 送信にかかった時間（締め切りの残りは 5 秒より十分長い）
+    h.respond(IDLE);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "idle", completionSeq: 3 })));
+    await vi.advanceTimersByTimeAsync(4999);
+    let done = false;
+    void result.then(() => (done = true));
+    await Promise.resolve();
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toMatchObject({
+      code: "agent_prompt_stalled",
+      message:
+        "agent prompt produced no observed working or blocked state within 5000 ms; current status is done",
+    });
+  });
+
+  it("--timeout の残りが 5000ms 以下なら、stalled ではなく締め切りで timeout（AC7）", async () => {
+    vi.useFakeTimers();
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const t0 = Date.now(); // 締め切りはコマンドの開始から数える
+    const result = outcome(runAgentPrompt(promptCmd({ timeoutMs: 3000 }), store));
+    await waitForPromptSent(h.client);
+    await vi.advanceTimersByTimeAsync(300);
+    h.respond(IDLE);
+    await vi.advanceTimersByTimeAsync(t0 + 2999 - Date.now());
+    let done = false;
+    void result.then(() => (done = true));
+    await Promise.resolve();
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toMatchObject({
+      code: "timeout",
+      message: "timed out waiting for agent status",
+    });
+  });
+
+  it("5000ms より前に活動を観測すれば stalled にならず、状態待ちへ進む（--timeout 省略なら無期限）（AC7・AC9）", async () => {
+    vi.useFakeTimers();
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    let settled = false;
+    const p = runAgentPrompt(promptCmd(), store).finally(() => (settled = true));
+    await waitForPromptSent(h.client);
+    h.respond(IDLE);
+    await vi.advanceTimersByTimeAsync(4000);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "working" })));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "idle" })));
+    await p;
+  });
+
+  it("--timeout は送信の時間も含めて数え、送信中に尽きても timeout（AC9）", async () => {
+    vi.useFakeTimers();
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const t0 = Date.now();
+    const result = outcome(runAgentPrompt(promptCmd({ timeoutMs: 200 }), store));
+    await waitForPromptSent(h.client);
+    await vi.advanceTimersByTimeAsync(t0 + 200 - Date.now());
+    expect(await result).toMatchObject({ code: "timeout" });
+  });
+
+  it.each([
+    ["エージェントが居なくなる（null）", statusChanged("p1", null)],
+    [
+      "別のエージェントに入れ替わる",
+      statusChanged("p1", agent({ instanceId: "a2", state: "working" })),
+    ],
+    ["pane が閉じる", { event: "pane.closed", data: { paneId: "p1" } } as ServerEvent],
+  ])("待っている間に %s と agent_not_running（AC9）", async (_label, evt) => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd(), store);
+    await waitForPromptSent(h.client);
+    h.respond(IDLE);
+    h.client.emitEvent(statusChanged("p1", agent({ state: "working" })));
+    h.client.emitEvent(evt);
+    await expect(p).rejects.toMatchObject({ code: "agent_not_running" });
+  });
+
+  it("応答のエージェントが hello の時点と入れ替わっていたら agent_not_running（AC9）", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd(), store);
+    await waitForPromptSent(h.client);
+    h.respond(agent({ instanceId: "a2", state: "idle" }));
+    await expect(p).rejects.toMatchObject({ code: "agent_not_running" });
+  });
+
+  it("サーバのエラー（agent_blocked）で終わり、タイマーを残さない（AC5）", async () => {
+    vi.useFakeTimers();
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: agent({ state: "blocked" }) }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd({ timeoutMs: 10_000 }), store);
+    await waitForPromptSent(h.client);
+    h.fail("agent_blocked");
+    await expect(p).rejects.toMatchObject({ code: "agent_blocked" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("待っている間にサーバが切断したら connection_closed", async () => {
+    const h = promptHarness([{ id: "p1", tabId: "t1", agent: IDLE }]);
+    useClient(h.client);
+    const p = runAgentPrompt(promptCmd(), store);
+    await waitForPromptSent(h.client);
+    h.respond(IDLE);
+    h.client.emitClose(1006, "");
+    await expect(p).rejects.toMatchObject({ code: "connection_closed" });
+  });
+});
+
+describe("runAgentSendKeys", () => {
+  it("agent.send_keys でキー列を送り、{ ok: true, paneId } を出す（AC10）", async () => {
+    const client = fakeClient([{ id: "p1", tabId: "t1", agent: agent({ state: "blocked" }) }]);
+    useClient(client);
+    await runAgentSendKeys(
+      { kind: "agent-send-keys", opts: OPTS, paneId: "p1", keys: ["esc", "C-c"] },
+      store,
+    );
+    expect(mockedWithSession).toHaveBeenCalledWith(OPTS, store, expect.any(Function));
+    expect(client.request).toHaveBeenCalledWith("agent.send_keys", {
+      paneId: "p1",
+      instanceId: "a1",
+      keys: ["esc", "C-c"],
+    });
+    expect(mockedPrintJson).toHaveBeenCalledWith({ ok: true, paneId: "p1" });
+  });
+
+  it("エージェントが居なければ送らずに agent_not_found（AC11）", async () => {
+    const client = fakeClient([{ id: "p1", tabId: "t1", agent: null }]);
+    useClient(client);
+    await expect(
+      runAgentSendKeys({ kind: "agent-send-keys", opts: OPTS, paneId: "p1", keys: ["esc"] }, store),
+    ).rejects.toMatchObject({ code: "agent_not_found" });
     expect(client.request).not.toHaveBeenCalled();
   });
 });

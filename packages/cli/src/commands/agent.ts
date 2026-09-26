@@ -3,7 +3,10 @@ import {
   currentScreen,
   judgeWait,
   lastLines,
+  PROMPT_EFFECT_TIMEOUT_MS,
+  PromptWait,
   resolveUntil,
+  statusOf,
   toAgentView,
   type AgentStatus,
   type AgentView,
@@ -16,12 +19,17 @@ import { withSession } from "../withSession.js";
 import { RpcFailure, type WtmClient } from "../wsClient.js";
 import { readPaneSnapshot } from "./pane.js";
 
-/** `agent list` / `get` / `wait` / `read`（20260926-agent-automation-api design.md「振る舞いの詳細」）。 */
+/**
+ * `agent list` / `get` / `wait` / `read`（20260926-agent-automation-api design.md「振る舞いの詳細」）、
+ * `agent prompt` / `send-keys`（20260926-agent-prompt-send-keys design.md「`wtmctl agent prompt`（CLI）」）。
+ */
 
 type AgentListCmd = Extract<Command, { kind: "agent-list" }>;
 type AgentGetCmd = Extract<Command, { kind: "agent-get" }>;
 type AgentWaitCmd = Extract<Command, { kind: "agent-wait" }>;
 type AgentReadCmd = Extract<Command, { kind: "agent-read" }>;
+type AgentPromptCmd = Extract<Command, { kind: "agent-prompt" }>;
+type AgentSendKeysCmd = Extract<Command, { kind: "agent-send-keys" }>;
 
 interface AgentPane {
   paneId: string;
@@ -184,4 +192,170 @@ export async function runAgentRead(cmd: AgentReadCmd, store: SessionStore): Prom
   });
   const screen = currentScreen(text);
   printLine(lastLines(cmd.raw ? screen : stripAnsi(screen), cmd.lines));
+}
+
+function stalledError(current: AgentInfo): RpcFailure {
+  return new RpcFailure(
+    "agent_prompt_stalled",
+    `agent prompt produced no observed working or blocked state within ${PROMPT_EFFECT_TIMEOUT_MS} ms; current status is ${statusOf(current)}`,
+  );
+}
+
+/**
+ * prompt を送り、送った後に working/blocked を観測してから `until` を待つ（herdr の `prompt_agent`。`src/api/wait.rs:177-329`）。
+ * 活動として数えるのは要求を送った後に届いた状態だけ（hello の応答から要求までの状態は数えない）。
+ */
+function promptAndWait(
+  client: WtmClient,
+  events: EventFeed,
+  target: AgentPane,
+  workspaces: Map<string, string>,
+  text: string,
+  until: readonly AgentStatus[],
+  deadline: number | undefined,
+): Promise<AgentView> {
+  let tabId = target.tabId;
+  return new Promise<AgentView>((resolve, reject) => {
+    let settled = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let stallTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      if (stallTimer !== undefined) clearTimeout(stallTimer);
+      fn();
+    };
+    const fail = (err: Error): void => finish(() => reject(err));
+
+    if (deadline !== undefined) {
+      deadlineTimer = setTimeout(
+        () => fail(new RpcFailure("timeout", "timed out waiting for agent status")),
+        Math.max(0, deadline - Date.now()),
+      );
+    }
+    client.onClose((_code, reason) => {
+      fail(
+        new RpcFailure(
+          "connection_closed",
+          `server closed the connection: ${reason || "(no reason given)"}`,
+        ),
+      );
+    });
+
+    let submitted = false;
+    let tracker: PromptWait | null = null;
+    let latest: AgentInfo = target.agent;
+    const beforeResponse: (AgentInfo | null)[] = [];
+    const observe = (agent: AgentInfo | null): void => {
+      if (settled || tracker === null) return;
+      if (agent !== null) latest = agent;
+      const verdict = tracker.observe(agent);
+      if (verdict === "gone" || agent === null) fail(notRunning());
+      else if (verdict === "match") {
+        finish(() => resolve(viewOf({ paneId: target.paneId, tabId, agent }, workspaces)));
+      } else if (tracker.activityObserved && stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+      }
+    };
+    const onStatus = (agent: AgentInfo | null): void => {
+      if (!submitted) return;
+      if (tracker === null) beforeResponse.push(agent);
+      else observe(agent);
+    };
+    events.drain((evt: ServerEvent) => {
+      if (settled) return;
+      switch (evt.event) {
+        case "tab.created":
+        case "tab.updated":
+          workspaces.set(evt.data.tab.id, evt.data.tab.workspaceId);
+          return;
+        case "pane.updated":
+          if (evt.data.pane.id === target.paneId) tabId = evt.data.pane.tabId;
+          return;
+        case "pane.closed":
+          if (evt.data.paneId === target.paneId) onStatus(null);
+          return;
+        case "pane.agent_status_changed":
+          if (evt.data.paneId === target.paneId) onStatus(evt.data.agent);
+          return;
+        default:
+          return;
+      }
+    });
+
+    // hello の間に締め切りを過ぎていたら送らない（締め切りの後に送ることになるため）。
+    if (deadline !== undefined && deadline - Date.now() <= 0) {
+      fail(new RpcFailure("timeout", "timed out waiting for agent status"));
+      return;
+    }
+    submitted = true;
+    client
+      .request("agent.prompt", { paneId: target.paneId, instanceId: target.agent.instanceId, text })
+      .then(
+        (result) => {
+          if (settled) return;
+          const agent = result.agent;
+          if (agent.instanceId !== target.agent.instanceId) {
+            fail(notRunning());
+            return;
+          }
+          latest = agent;
+          const startedWorking = statusOf(agent) === "working";
+          tracker = new PromptWait(agent.instanceId, until, startedWorking);
+          if (startedWorking) observe(agent);
+          for (const a of beforeResponse.splice(0)) observe(a);
+          if (settled || tracker.activityObserved) return;
+          // 締め切りまでの残りが 5 秒以下なら、stalled ではなく締め切りの timeout で終わる（herdr `wait.rs:254-265`）。
+          const remaining = deadline === undefined ? Infinity : deadline - Date.now();
+          if (remaining > PROMPT_EFFECT_TIMEOUT_MS) {
+            stallTimer = setTimeout(() => fail(stalledError(latest)), PROMPT_EFFECT_TIMEOUT_MS);
+          }
+        },
+        (err: unknown) => fail(err instanceof Error ? err : new Error(String(err))),
+      );
+  });
+}
+
+export async function runAgentPrompt(cmd: AgentPromptCmd, store: SessionStore): Promise<void> {
+  const agent = await withSession(cmd.opts, store, async (client) => {
+    // --timeout は送信の時間も含めて数える（herdr と同じ）。
+    const deadline = cmd.timeoutMs === undefined ? undefined : Date.now() + cmd.timeoutMs;
+    const events = new EventFeed();
+    const hello = await client.hello(events.push);
+    const target = requireAgentPane(hello.snapshot, cmd.paneId);
+    const workspaces = workspacesByTab(hello.snapshot);
+    if (!cmd.wait) {
+      const result = await client.request("agent.prompt", {
+        paneId: cmd.paneId,
+        instanceId: target.agent.instanceId,
+        text: cmd.text,
+      });
+      return viewOf({ ...target, agent: result.agent }, workspaces);
+    }
+    return promptAndWait(
+      client,
+      events,
+      target,
+      workspaces,
+      cmd.text,
+      resolveUntil(cmd.until),
+      deadline,
+    );
+  });
+  printJson({ agent });
+}
+
+export async function runAgentSendKeys(cmd: AgentSendKeysCmd, store: SessionStore): Promise<void> {
+  await withSession(cmd.opts, store, async (client) => {
+    const hello = await client.hello();
+    const target = requireAgentPane(hello.snapshot, cmd.paneId);
+    await client.request("agent.send_keys", {
+      paneId: cmd.paneId,
+      instanceId: target.agent.instanceId,
+      keys: cmd.keys,
+    });
+  });
+  printJson({ ok: true, paneId: cmd.paneId });
 }

@@ -5,7 +5,7 @@ import { MemoryLogger } from "../log/Logger.js";
 import { EventBus } from "../bus/EventBus.js";
 import type { CreatePaneOptions, TerminalManager } from "../terminal/TerminalManager.js";
 import type { TerminalHost } from "../terminal/TerminalHost.js";
-import type { Mirror } from "../terminal/Mirror.js";
+import type { InputModes, Mirror } from "../terminal/Mirror.js";
 import type { PersistScheduler } from "../session/PersistScheduler.js";
 import { SessionModel } from "../session/SessionModel.js";
 import { SessionService } from "../session/SessionService.js";
@@ -50,6 +50,12 @@ class FakeMirror implements Mirror {
   resize(): void {}
   dispose(): void {}
   notifyAppearanceMayHaveChanged(): void {}
+  inputModes(): InputModes {
+    return { bracketedPaste: false, applicationCursorKeys: false };
+  }
+  flush(): Promise<void> {
+    return Promise.resolve();
+  }
 }
 
 let nextPid = 1000;
@@ -60,6 +66,9 @@ class FakeTerminalHost implements TerminalHost {
   lastOutputAtValue = 0;
   constructor(readonly paneId: string) {}
   write(): void {}
+  writeModal(): Promise<void> {
+    return Promise.resolve();
+  }
   resize(): void {}
   lastOutputAt(): number {
     return this.lastOutputAtValue;

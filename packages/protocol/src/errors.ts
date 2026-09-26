@@ -19,7 +19,13 @@ export type ErrorCode =
   | "worktree_is_main"
   // ロック済み worktree の削除（20260925-worktree-remove-locked）。`--force` を1回渡しても
   // 解決しない（git は `-f -f` を要求する）ため、`worktree_dirty` とは別の種類として分ける。
-  | "worktree_locked";
+  | "worktree_locked"
+  // エージェントへの入力（20260926-agent-prompt-send-keys）。名前は herdr の code に揃える。
+  | "agent_not_found"
+  | "agent_blocked"
+  | "empty_agent_prompt"
+  | "invalid_key"
+  | "agent_prompt_failed";
 
 export interface ProtocolError {
   code: ErrorCode;

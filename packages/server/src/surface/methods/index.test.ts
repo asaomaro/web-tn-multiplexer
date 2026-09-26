@@ -62,6 +62,9 @@ class FakeHost implements TerminalHost {
     }
   }
   write(): void {}
+  writeModal(): Promise<void> {
+    return Promise.resolve();
+  }
   resize(): void {}
   lastOutputAt(): number {
     return Date.now();

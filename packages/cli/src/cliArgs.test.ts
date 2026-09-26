@@ -265,6 +265,38 @@ describe("parseArgs — agent", () => {
       timeoutMs: 900,
     });
   });
+  // 20260926-agent-prompt-send-keys
+  it("prompt: --wait 無しなら until は空・timeoutMs は undefined", () => {
+    expect(parseArgs(["agent", "prompt", "p1", "line1\nline2"], noEnv)).toEqual({
+      kind: "agent-prompt",
+      opts,
+      paneId: "p1",
+      text: "line1\nline2",
+      wait: false,
+      until: [],
+      timeoutMs: undefined,
+    });
+  });
+  it("prompt: --wait と --until の繰り返し・--timeout", () => {
+    expect(parseArgs(["agent", "prompt", "p1", "hi", "--wait", "--until", "idle", "--until", "blocked", "--timeout", "120000"], noEnv)).toEqual({
+      kind: "agent-prompt",
+      opts,
+      paneId: "p1",
+      text: "hi",
+      wait: true,
+      until: ["idle", "blocked"],
+      timeoutMs: 120000,
+    });
+    expect(parseArgs(["agent", "prompt", "p1", "hi", "--wait"], noEnv)).toMatchObject({ wait: true, until: [], timeoutMs: undefined });
+  });
+  it("send-keys: paneId の後の位置引数を全部キーとして集める", () => {
+    expect(parseArgs(["agent", "send-keys", "p1", "esc", "C-c", "enter"], noEnv)).toEqual({
+      kind: "agent-send-keys",
+      opts,
+      paneId: "p1",
+      keys: ["esc", "C-c", "enter"],
+    });
+  });
   it.each([
     [["agent", "wait", "p1", "--until", "finished"]],
     [["agent", "wait", "p1", "--until"]],
@@ -282,6 +314,18 @@ describe("parseArgs — agent", () => {
     [["agent", "list", "p1"]],
     [["agent", "start"]],
     [["agent"]],
+    [["agent", "prompt"]],
+    [["agent", "prompt", "p1"]],
+    [["agent", "prompt", "p1", "hi", "extra"]],
+    [["agent", "prompt", "p1", "hi", "--until", "idle"]],
+    [["agent", "prompt", "p1", "hi", "--timeout", "1000"]],
+    [["agent", "prompt", "p1", "hi", "--wait", "--until", "finished"]],
+    [["agent", "prompt", "p1", "hi", "--wait", "--timeout", "0"]],
+    [["agent", "prompt", "p1", "hi", "--wait", "--timeout", "2147483648"]],
+    [["agent", "prompt", "p1", "hi", "--raw"]],
+    [["agent", "send-keys"]],
+    [["agent", "send-keys", "p1"]],
+    [["agent", "send-keys", "p1", "esc", "--wait"]],
   ])("使い方の誤り: %j", (argv) => {
     expect(() => parseArgs(argv, noEnv)).toThrow(CliUsageError);
   });

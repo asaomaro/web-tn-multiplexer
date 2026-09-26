@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentIntegrationKind, Pane, SessionSnapshot, Tab, Workspace, WorkspaceGroup, WorktreeEntry } from "./model.js";
+import type { AgentInfo, AgentIntegrationKind, Pane, SessionSnapshot, Tab, Workspace, WorkspaceGroup, WorktreeEntry } from "./model.js";
 import { THEME_NAMES } from "./theme.js";
 
 /**
@@ -394,6 +394,37 @@ export type AgentIntegrationUninstallResult = AgentIntegrationInstallResult;
 export const AgentIntegrationSetAutoResumeParams = z.object({ enabled: z.boolean() });
 export type AgentIntegrationSetAutoResumeParams = z.infer<typeof AgentIntegrationSetAutoResumeParams>;
 
+// --- agent への入力（20260926-agent-prompt-send-keys。herdr の agent.prompt / agent.send_keys）---
+
+/**
+ * 本文の上限（UTF-8 のバイト数）。INPUT フレームの上限（server `WsGateway.ts` の MAX_INPUT_FRAME_BYTES）と同じ値。
+ * RPC は JSON で運ぶので、制御文字の多い本文は JSON の上で膨らみ（1 文字 6 バイト）、WebSocket の上限（4MB）で先に切断されうる。
+ */
+export const MAX_AGENT_PROMPT_BYTES = 1024 * 1024;
+
+/**
+ * 空の本文はスキーマでは弾かない（サーバが `empty_agent_prompt` で返す。herdr と同じ code）。
+ * `instanceId` を渡すと、その pane のエージェントがそれと違えば何も書かずに `agent_not_found`（呼び出し側が見た
+ * エージェントから入れ替わっていたら送らない）。
+ */
+export const AgentPromptParams = z.object({
+  paneId,
+  instanceId: z.string().min(1).optional(),
+  text: z.string().refine((t) => new TextEncoder().encode(t).byteLength <= MAX_AGENT_PROMPT_BYTES, "text too large"),
+});
+export type AgentPromptParams = z.infer<typeof AgentPromptParams>;
+export interface AgentPromptResult {
+  /** 送信を始める時点のエージェント。 */
+  agent: AgentInfo;
+}
+
+export const AgentSendKeysParams = z.object({
+  paneId,
+  instanceId: z.string().min(1).optional(),
+  keys: z.array(z.string()).min(1).max(256),
+});
+export type AgentSendKeysParams = z.infer<typeof AgentSendKeysParams>;
+
 export const METHOD_SCHEMAS = {
   "client.hello": ClientHelloParams,
   "client.view": ClientViewParams,
@@ -442,6 +473,8 @@ export const METHOD_SCHEMAS = {
   "agent_integration.install": AgentIntegrationInstallParams,
   "agent_integration.uninstall": AgentIntegrationUninstallParams,
   "agent_integration.set_auto_resume": AgentIntegrationSetAutoResumeParams,
+  "agent.prompt": AgentPromptParams,
+  "agent.send_keys": AgentSendKeysParams,
 } as const;
 
 export type MethodName = keyof typeof METHOD_SCHEMAS;
@@ -495,6 +528,8 @@ export interface MethodResultMap {
   "agent_integration.install": AgentIntegrationInstallResult;
   "agent_integration.uninstall": AgentIntegrationUninstallResult;
   "agent_integration.set_auto_resume": Record<string, never>;
+  "agent.prompt": AgentPromptResult;
+  "agent.send_keys": Record<string, never>;
 }
 
 export type ParamsOf<M extends MethodName> = z.infer<(typeof METHOD_SCHEMAS)[M]>;

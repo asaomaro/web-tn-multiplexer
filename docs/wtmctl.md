@@ -35,6 +35,8 @@ wtmctl agent list
 wtmctl agent get <paneId>
 wtmctl agent wait <paneId> [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
 wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>]
+wtmctl agent prompt <paneId> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
+wtmctl agent send-keys <paneId> <key>...
 ```
 
 ## エージェント（`agent`）
@@ -70,37 +72,67 @@ pane の中で検出されたコーディングエージェント（Claude Code�
   テキストで出す（alternate screen を使うエージェントでは今の alt screen の中身だけ）。既定で ANSI エスケープを除く（`--raw` で除かない。そのときは端末の制御列〔カーソル移動・モード設定〕を
   含むので、端末へそのまま流さない）。`--timeout` は画面内容がサーバから届くまで
   待つ上限（既定 5000ms。超えたら `timeout`）。
+- `agent prompt <paneId> <text>` … エージェントへ prompt を送って確定する。`{"agent":{…}}` を出す（`--wait` 無しは送信を始めた時点の
+  エージェント、`--wait` は一致した時点のもの）。
+  - 本文は、送る瞬間にその pane の端末で bracketed paste が有効なら `ESC[200~`…`ESC[201~` で包んで 1 つの貼り付けとして送る
+    （複数行でも途中の改行で確定されない。本文の中の `ESC[200~`・`ESC[201~` は取り除く）。無効なら包まずに送る。
+  - `agent list`/`get` と同じく、コマンドが接続したときに見たエージェントにだけ送る。送る前に別のエージェントに入れ替わっていたら
+    何も送らずに `agent_not_found`（`send-keys` も同じ）。
+  - 本文を書いてから **300ms** 置いて Enter（CR）を送る（貼り付けの直後の Enter を「貼り付けの続きの改行」として扱うエージェントがあるため。
+    herdr と同じ間）。本文から Enter までの間に届いた他の入力（ブラウザでの打鍵・`pane input` 等）は Enter の後へ回す。
+  - エージェントが `blocked`（承認・質問の入力待ち）なら**何も送らずに** `agent_blocked`。別の入力の後ろで待っている間に `blocked` になった・
+    エージェントが終了した場合も、本文を書く直前にもう一度確かめて送らない（`agent_blocked` / `agent_not_found`）。ただし状態の判定は
+    周期的（500ms ごと）で、本文から Enter までの 300ms の間は確かめ直さないので、その分の窓は残る。本文が空なら `empty_agent_prompt`、
+    1MB を超えると `invalid_params`。本文が `--` で始まると未知のオプションとして使い方の誤り（終了コード 2）になる（`pane input` と同じ制約）。
+  - 送信の途中で端末が閉じると `agent_prompt_failed`（閉じた時点によって、本文が書かれている場合も書かれていない場合もある）。
+  - `--wait` … 送った後、エージェントが `working` か `blocked` になった（一瞬でもよい）ことを確かめてから、`--until`（省略時は `idle`・`done`・`blocked`）の
+    どれかになるまで待つ。送信を書き終えてから **5 秒**以内に `working`/`blocked` を観測できなければ `agent_prompt_stalled`（メッセージに今の状態）。
+    送る前から `working` ならこの確認を省く（そのときは今の作業の完了で返りうる。1 回の送信ごとの「ターン」は追わない）。
+  - `--timeout` は送信の時間も含めた全体の上限（`--wait` と一緒のときだけ指定できる。`--until` も同じ）。残りが 5 秒以下なら
+    `agent_prompt_stalled` ではなく締め切りで `timeout`。省略すると、活動を確かめた後は無期限に待つ。
+  - 待っている間にエージェントが終了した・入れ替わった・pane が閉じたら `agent_not_running`。
+  - `timeout`・`agent_prompt_stalled`・`agent_prompt_failed`・`agent_not_running`・`connection_closed` は「送られなかった」ことを意味しない。送り直す前に `agent read` で確かめる（二重に送らないため）。
+- `agent send-keys <paneId> <key>...` … エージェントの UI（承認ダイアログ・メニュー）へキーを送る。`blocked` でも送れる。`{"ok":true,"paneId":…}` を出す。
+  - キー名: `enter`/`return`・`esc`/`escape`・`tab`・`shift+tab`・`backspace`/`bs`・`space`・`up`/`down`/`left`/`right`・`f1`〜`f12`・1 文字
+    （`y` 等。大文字は shift つき）・記号名（`minus` `comma` `period` `slash` `backslash` `quote` `double_quote` `semicolon` `colon`
+    `percent` `ampersand` `backtick` `plus`）。修飾は `ctrl`/`control`・`alt`/`option`/`meta`・`shift` を `+` でつなぐ（例 `ctrl+c`。別名は `C-c` だけで、`C-x` のような書き方は使えない）。
+  - 矢印は端末のアプリケーションカーソルモードに合わせて送る。符号化は xterm の既定のもの（`ctrl+enter` のように既定の符号化で表せない組み合わせは使えない）。
+  - 不明なキー名が 1 つでもあれば**何も送らずに** `invalid_key`。
 - 対象の pane が無い・エージェントが検出されていないと `agent_not_found`。
 - 読み取り（`get`・`wait`・`read`）は既読を進めない（`done` は `done` のまま）。
 
-### 例: エージェントに作業させて、手が空くのを待って結果を読む
+### 例: エージェントに作業させて、終わるのを待って結果を読む
 
 ```bash
-pane=p2                                       # wtmctl agent list で調べた pane ID
-wtmctl pane input "$pane" "テストを直して"       # エージェントの入力欄へ文字だけ送る
-wtmctl pane input "$pane" $'\r'                # 別の呼び出しで Enter（CR）を送る
-wtmctl agent wait "$pane" --until working --until blocked --timeout 30000   # 作業が始まった（か、すぐ承認待ちになった）のを確かめる
-wtmctl agent wait "$pane" --timeout 600000     # idle / done / blocked になるまで待つ
+pane=p2                                                    # wtmctl agent list で調べた pane ID
+wtmctl agent prompt "$pane" "テストを直して" --wait --timeout 600000   # 送って、作業が始まったのを確かめ、終わるまで待つ
 wtmctl agent read "$pane" --lines 120
 ```
 
-`pane run` は末尾に LF（`\n`）を付けて送る。シェルではこれで実行されるが、raw mode で動くエージェントの画面では
-LF が Enter ではなく改行の入力として扱われることがあるので、上のように Enter は CR（`\r`）で別に送る
-（文字と同じ書き込みに CR を続けると、貼り付けの一部として扱われて確定されないことがある。herdr の `agent prompt` が
-遅延 Enter を使うのと同じ理由。この送り方は実際のエージェントでは未検証）。
+### 例: 承認待ちで止まったら、画面を読んで答える
 
-入力を送った直後にいきなり `agent wait`（既定の `--until`）を打つと、エージェントがまだ作業を始める前の
-`idle` で即座に返ることがある。上のように先に `--until working`（すぐ承認待ちになる場合に備えて `--until blocked` も）で作業の開始を待つ（作業がごく短いと `working` を
-見逃して時間切れになりうる。そのときは `agent read` で結果を確かめる）。
+```bash
+wtmctl agent wait "$pane" --until blocked --timeout 600000
+wtmctl agent read "$pane" --lines 40
+wtmctl agent send-keys "$pane" esc                         # 取り消す（答えるなら例えば y や enter）
+```
 
 ## herdr との対応と違い
 
-herdr の `agent list` / `agent get` / `agent wait` / `agent read` に相当する（`docs/herdr-parity.md` の H39）。違い:
+herdr の `agent list` / `agent get` / `agent wait` / `agent read` / `agent prompt`（`--wait`）/ `agent send-keys` に相当する
+（`docs/herdr-parity.md` の H39）。違い:
 
 - 対象は **pane ID だけ**。herdr のエージェント名（`agent start` / `agent rename` で付ける名前）は無い。
-- `agent start`・`agent prompt`（`--wait` を含む）・`agent send-keys`・`agent rename`・`agent focus`・`agent explain`・
-  `agent attach` は無い。prompt は `pane run` / `pane input` で送る（bracketed paste や遅延 Enter の送り分けはしない）。
+- `agent start`・`agent rename`・`agent focus`・`agent explain`・`agent attach` は無い。
+- `agent prompt`: herdr の Windows 向けの回避策（Codex への貼り付けの区切り・Copilot へのフォーカス通知）と `agent_not_ready`（名前付きで
+  起動中の判定）は無い。`--timeout` が送信の途中で尽きたらその時点で `timeout` になる（herdr の Unix 版は送信の完了を待つ）。
+  待ち行列の後ろで待っている間の `blocked`・エージェントの終了を書く直前にも確かめる（herdr は受け付けの時点だけ）。
+  本文の中の貼り付けの印（`ESC[200~`・`ESC[201~`）を取り除く（herdr はそのまま包む）。
+- `agent send-keys`: キーの符号化は xterm の既定だけ（kitty keyboard protocol には合わせない）。`cmd`/`super`/`hyper` の修飾は無い。
 - `agent read` に `--source` は無い（常にスクロールバック込みの画面の末尾 N 行。alternate screen を使うエージェントでは
   今の alt screen の中身だけ）。alternate screen の履歴を自動でスクロールして読む機能も無い。
 - 出力は camelCase で、herdr の `.result.agent` は `.agent` に当たる（例: `jq -r .agent.status`）。
-- エラーの code（`agent_not_found`・`agent_not_running`・`timeout`）と、`--until` の既定・終了コードは herdr と同じ。
+- エラーの code（`agent_not_found`・`agent_not_running`・`timeout`・`agent_blocked`・`agent_prompt_stalled`・`empty_agent_prompt`・
+  `invalid_key`）と、`--until` の既定・300ms の遅延 Enter・5 秒の活動の確認・終了コードは herdr と同じ。
+- 本物の Claude Code 等での送信は確かめていない（bracketed paste を有効にする偽のエージェントでの結合テストだけ。
+  `.aidev/works/20260926-agent-prompt-send-keys/test-result.md`）。

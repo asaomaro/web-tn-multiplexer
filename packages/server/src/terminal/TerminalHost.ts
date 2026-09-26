@@ -2,7 +2,16 @@ import type { PaneId, TerminalPalette } from "@wtm/protocol";
 import type { PtyProcess } from "../pty/PtyBackend.js";
 import type { Disposable } from "../util/Disposable.js";
 import { DefaultOutputFanout, type OutputFanout } from "./OutputFanout.js";
-import { XtermMirror, type Mirror } from "./Mirror.js";
+import { XtermMirror, type InputModes, type Mirror } from "./Mirror.js";
+
+/**
+ * 端末のモードに合わせて作る入力（20260926-agent-prompt-send-keys design.md「`TerminalHost.writeModal` と後回し」）。
+ * `build` はミラーの flush 後のモードで呼ばれ、返した部分を `delayMs` ずつ間を置いて順に書く。
+ */
+export interface ModalInput {
+  build(modes: InputModes): string[];
+  delayMs: number;
+}
 
 /** pane 1 つ分の端末（architecture.md「TerminalHost」）。PTY・ミラー・配信・流量制御をまとめる（D26）。 */
 export interface TerminalHost {
@@ -11,6 +20,11 @@ export interface TerminalHost {
   readonly mirror: Mirror;
   readonly fanout: OutputFanout;
   write(input: Uint8Array | string): void;
+  /**
+   * モード付き入力を書く。書き終えるまで（flush から最後の部分まで）に届いた `write`・`writeModal` は後回しにし、
+   * 終わったら届いた順に書く。終了（dispose・PTY の終了）したら reject する。
+   */
+  writeModal(input: ModalInput): Promise<void>;
   resize(cols: number, rows: number): void;
   lastOutputAt(): number;
   onExit(cb: (code: number) => void): Disposable;
@@ -20,6 +34,13 @@ export interface TerminalHost {
 const PAUSE_THRESHOLD_BYTES = 1024 * 1024; // 1MB（design「流量制御」）
 const enc = new TextEncoder();
 
+interface ModalJob {
+  input: ModalInput;
+  resolve: () => void;
+  reject: (err: Error) => void;
+}
+type QueuedInput = { kind: "raw"; data: Uint8Array | string } | { kind: "modal"; job: ModalJob };
+
 export class DefaultTerminalHost implements TerminalHost {
   readonly mirror: Mirror;
   readonly fanout: OutputFanout;
@@ -28,6 +49,13 @@ export class DefaultTerminalHost implements TerminalHost {
   private readonly disposables: Disposable[] = [];
   private paused = false;
   private disposed = false;
+  /** モード付き入力を処理中（この間の入力は `queue` へ）。 */
+  private busy = false;
+  private inputClosed = false;
+  private activeModal: ModalJob | null = null;
+  private readonly queue: QueuedInput[] = [];
+  private delayTimer: ReturnType<typeof setTimeout> | null = null;
+  private wakeDelay: (() => void) | null = null;
 
   constructor(
     readonly paneId: PaneId,
@@ -68,6 +96,7 @@ export class DefaultTerminalHost implements TerminalHost {
     this.disposables.push(this.mirror.onResponse((data) => this.pty.write(data)));
     this.disposables.push(
       pty.onExit((e) => {
+        this.closeInput();
         for (const fn of [...this.exitListeners]) fn(e.exitCode);
       }),
     );
@@ -78,7 +107,90 @@ export class DefaultTerminalHost implements TerminalHost {
   }
 
   write(input: Uint8Array | string): void {
+    if (this.busy) {
+      this.queue.push({ kind: "raw", data: input });
+      return;
+    }
     this.pty.write(input);
+  }
+
+  writeModal(input: ModalInput): Promise<void> {
+    if (this.inputClosed) return Promise.reject(new Error("terminal closed"));
+    return new Promise<void>((resolve, reject) => {
+      const job: ModalJob = { input, resolve, reject };
+      if (this.busy) this.queue.push({ kind: "modal", job });
+      else void this.runModal(job);
+    });
+  }
+
+  private async runModal(job: ModalJob): Promise<void> {
+    this.busy = true;
+    this.activeModal = job;
+    try {
+      await this.mirror.flush();
+      if (this.activeModal !== job) return; // 待っている間に終了した（closeInput が reject 済み）
+      const parts = job.input.build(this.mirror.inputModes());
+      for (let i = 0; i < parts.length; i++) {
+        if (i > 0) {
+          await this.delay(job.input.delayMs);
+          if (this.activeModal !== job) return;
+        }
+        this.pty.write(parts[i]!);
+      }
+      this.activeModal = null;
+      job.resolve();
+    } catch (err) {
+      if (this.activeModal !== job) return;
+      this.activeModal = null;
+      job.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+    this.drainQueue();
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const wake = (): void => {
+        this.delayTimer = null;
+        this.wakeDelay = null;
+        resolve();
+      };
+      this.wakeDelay = wake;
+      this.delayTimer = setTimeout(wake, ms);
+    });
+  }
+
+  /** 後回しにした入力を届いた順に書く。次のモード付き入力に当たったらそれを始めて止まる。 */
+  private drainQueue(): void {
+    while (this.queue.length > 0) {
+      const next = this.queue.shift()!;
+      if (next.kind === "modal") {
+        void this.runModal(next.job);
+        return;
+      }
+      try {
+        this.pty.write(next.data);
+      } catch {
+        // 想定外の例外（PTY の終了は closeInput が先に queue を空にする）。ここで止めると busy が戻らず、
+        // 以後の入力が全部溜まったままになるので、後ろの入力の処理を続ける。
+      }
+    }
+    this.busy = false;
+  }
+
+  /** 終了（dispose・PTY の終了）。処理中と後回しのモード付き入力を reject し、後回しの素の入力は捨てる。 */
+  private closeInput(): void {
+    if (this.inputClosed) return;
+    this.inputClosed = true;
+    const err = new Error("terminal closed");
+    const active = this.activeModal;
+    this.activeModal = null;
+    active?.reject(err);
+    for (const q of this.queue.splice(0)) {
+      if (q.kind === "modal") q.job.reject(err);
+    }
+    this.busy = false;
+    if (this.delayTimer !== null) clearTimeout(this.delayTimer);
+    this.wakeDelay?.();
   }
 
   resize(cols: number, rows: number): void {
@@ -98,6 +210,7 @@ export class DefaultTerminalHost implements TerminalHost {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.closeInput();
     for (const d of this.disposables) d.dispose();
     this.mirror.dispose();
     try {
