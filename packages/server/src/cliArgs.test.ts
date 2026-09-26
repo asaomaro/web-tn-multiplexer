@@ -27,6 +27,20 @@ describe("parseArgs（CLI の引数）", () => {
     });
   });
 
+  it("--pane-history は値を取らずに有効にする。無ければ指定なし（20260926-screen-history-replay の AC11）", () => {
+    expect(parseArgs(["serve", "--pane-history", "--port", "7781"])).toMatchObject({ command: "serve", serve: { paneHistory: true, port: "7781" } });
+    expect(parseArgs(["serve"]).serve.paneHistory).toBeUndefined();
+  });
+
+  it("--pane-history は wtm serve だけのオプション（wtm token reset では ConfigError）", () => {
+    expect(configErrorOf(["token", "reset", "--pane-history"]).message).toBe("--pane-history is not an option of wtm token reset");
+    expect(configErrorOf(["session", "list", "--pane-history"]).message).toBe("--pane-history is not an option of wtm session");
+  });
+
+  it("使い方の表示に --pane-history がある（AC11）", () => {
+    expect(configErrorOf(["serve", "--no-such-option"]).hint).toContain("[--pane-history]");
+  });
+
   it("--worktree-dir に値が続かなければ ConfigError（20260924-worktree-dir-config）", () => {
     // message で next() の「missing value」経路を通ったことを確かめる（switch 分岐が無いだけでも
     // ConfigError にはなる「unknown option」と区別するため。taskcheck T2 round1 指摘）。

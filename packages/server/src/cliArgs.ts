@@ -13,7 +13,7 @@ export interface ParsedArgs {
 }
 
 const USAGE =
-  "使い方: wtm serve [--host H] [--port P] [--cert F] [--key F] [--origin O]... [--state-dir D] [--session NAME] [--scrollback N] [--shell S] [--worktree-dir D] / wtm token reset [--state-dir D] [--session NAME] / wtm session list [--state-dir D] [--json] / wtm session delete NAME [--state-dir D] [--json]";
+  "使い方: wtm serve [--host H] [--port P] [--cert F] [--key F] [--origin O]... [--state-dir D] [--session NAME] [--scrollback N] [--shell S] [--worktree-dir D] [--pane-history] / wtm token reset [--state-dir D] [--session NAME] / wtm session list [--state-dir D] [--json] / wtm session delete NAME [--state-dir D] [--json]";
 
 /**
  * CLI の引数を解釈する（`wtm serve [...]` / `wtm token reset [--state-dir D] [--session NAME]` / `wtm session list|delete`）。`main.ts` から分けたのは単体テストのため
@@ -85,6 +85,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         break;
       case "--worktree-dir":
         serve.worktreeDir = next();
+        break;
+      case "--pane-history":
+        // 値を取らない（20260926-screen-history-replay）。画面履歴の保存と再生を有効にする（既定は無効）。
+        serve.paneHistory = true;
         break;
       default:
         throw new ConfigError(`unknown option: ${arg}`, USAGE);

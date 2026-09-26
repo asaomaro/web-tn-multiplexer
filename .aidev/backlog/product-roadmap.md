@@ -263,8 +263,24 @@ parent: 20260918-web-terminal-multiplexer
       Web 版では別の URL〔ポート〕を開くことに当たる）、session ごとのポートの記憶（名前だけで同じポートに起動し直す）、
       環境変数での既定の session の選択（herdr の `HERDR_SESSION`）〔D8〕 (needs: 20260926-named-session)
       （出典: .aidev/works/20260926-named-session/decisions.md D1・requirements.md の対象外）。
-- [ ] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）〔D8〕 (needs: 20260918-web-terminal-multiplexer)
+- [x] セッション永続化の拡張: 画面履歴の保存と再生（opt-in）〔D8〕 (needs: 20260918-web-terminal-multiplexer)
       （出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
+      → 着地: 20260926-screen-history-replay（feature/screen-history-replay）。herdr の `[experimental] pane_history` に当たる
+      `wtm serve --pane-history`（既定は無効。`packages/server/src/cliArgs.ts`・`config.ts` の `paneHistory`）。各 pane の通常の画面と
+      スクロールバックを色つき ANSI で状態ディレクトリの `session-history.json`（0600。`packages/server/src/persist/PaneHistoryFile.ts`）に
+      30 秒ごと〔出力のあった pane だけ・内容が同じなら書かない〕と正常な停止のときに保存し（`session/PaneHistoryRecorder.ts`・`terminal/Mirror.ts`
+      `historyAnsi()`）、復元で新しいシェルより前にミラーへ流して「前回のセッションの画面」の区切りの行を出す（`session/SessionService.ts`
+      `spawnForPane`）。流す前に文字・色・カーソルの移動以外の制御を落とす（`terminal/historyAnsi.ts` `sanitizeHistoryAnsi`）。付けずに起動・
+      `session.json` が無い／壊れた起動では消す（`composeServer.ts`）。会話を自動再開する pane には流さない。上限は pane ごと 2MiB・ファイル 64MiB。
+      実測: 全体テスト 3803 本 green（`pnpm -s test`）・負の確認 22 変異すべて検知・smoke pass（3 本）・独立 review 2 ラウンド（should 2・nit 2、
+      いずれも解消）。E2E は未実行。Windows ネイティブ・macOS は未検証。`docs/herdr-parity.md` H32 を更新済み。
+- [ ] 画面履歴の残り（設定画面から）: `--pane-history` の有効・無効を設定画面（ブラウザ）から切り替える（herdr の Settings > Experiments >
+      pane screen history）。サーバ全体の秘密の扱いを変える操作なので、ログインしたブラウザならどこからでも有効にできてよいかの判断が要る〔D8〕
+      (needs: 20260926-screen-history-replay)（出典: .aidev/works/20260926-screen-history-replay/decisions.md D1）。
+- [ ] 画面履歴の既知の制約: (1) 120 桁より広い端末で保存した行は、直列化の `CSI n C`（書かれていないマスの移動）が 120 桁で作るミラーの右端で
+      止まり、空白の幅が詰まる（保存した幅を記録して流す前にミラーを広げる案。write と resize の順序の保証の確認が要る）。(2) 上限 2MiB を超える
+      巨大な 1 論理行があると、行の境目で切る切り詰めがその行を丸ごと落とす (needs: 20260926-screen-history-replay)
+      （出典: .aidev/works/20260926-screen-history-replay/decisions.md D7）。
 - [ ] セッション永続化の拡張: 更新時の引き継ぎ（live handoff）〔D8〕 (needs: 20260918-web-terminal-multiplexer)
       （出典: .aidev/works/20260918-web-terminal-multiplexer/research.md。2026-09-23、4分割した一部）。
 - [x] 端末機能の拡張: スクロールバックを $EDITOR で開く〔D8〕（herdr の `edit_scrollback`。2026-09-26、画像表示と 2 つに割った一部）（出典: .aidev/works/20260918-web-terminal-multiplexer/research.md）

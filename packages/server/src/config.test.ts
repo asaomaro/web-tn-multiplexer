@@ -51,6 +51,11 @@ describe("resolveServeOptions", () => {
     expect(() => resolveServeOptions({ scrollback: "abc" })).toThrow(ConfigError);
   });
 
+  it("paneHistory は既定で無効、--pane-history のときだけ有効（20260926-screen-history-replay の AC4）", () => {
+    expect(resolveServeOptions({}).paneHistory).toBe(false);
+    expect(resolveServeOptions({ paneHistory: true }).paneHistory).toBe(true);
+  });
+
   it("worktreeDir は素通しする（既定値の解決はしない。20260924-worktree-dir-config）", () => {
     expect(resolveServeOptions({}).worktreeDir).toBeUndefined();
     expect(resolveServeOptions({ worktreeDir: "/custom/worktrees" }).worktreeDir).toBe("/custom/worktrees");
