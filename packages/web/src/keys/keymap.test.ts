@@ -264,6 +264,38 @@ describe("resolveKeymap — 上書きと衝突（AC4・AC6・AC8。D7）", () =>
     expect(problems.filter((p) => p.includes("貼り付け"))).toHaveLength(2); // prefix の後・直接
   });
 
+  it("予約：prefix の後の Enter・Space・↓（shift 付きも含む）・Shift+F10 は落とす（pane の枠のメニューが先に取る。20260925-pane-frame-focus-keys。review 指摘で shift 付きを、T1 round2 taskcheck 指摘で shift+f10 を追加）", () => {
+    const { keymap, problems } = resolveKeymap(
+      prefs({
+        bindings: {
+          zoom: [
+            "prefix+enter",
+            "prefix+space",
+            "prefix+down",
+            "prefix+shift+enter",
+            "prefix+shift+space",
+            "prefix+shift+down",
+            "prefix+shift+f10",
+            "ctrl+alt+z",
+          ],
+        },
+      }),
+    );
+    expect(keymap.bindingsOf("zoom")).toEqual(["ctrl+alt+z"]);
+    expect(problems).toHaveLength(7);
+    expect(problems.every((p) => p.includes("pane の枠のメニュー"))).toBe(true);
+  });
+
+  it("予約：直接の Shift+F10 も落とす（pane の枠のメニューを開くキーとして使う。isDirectChord は F キーを shift 付きでも direct として通すため、RESERVED_AFTER_PREFIX と同じ理由で RESERVED_DIRECT にも予約が要る。T1 round2 taskcheck 指摘）", () => {
+    const { keymap, problems } = resolveKeymap(
+      prefs({ bindings: { zoom: ["shift+f10", "ctrl+alt+z"] } }),
+    );
+    expect(keymap.bindingsOf("zoom")).toEqual(["ctrl+alt+z"]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("pane の枠のメニュー");
+    expect(problems[0]).not.toContain("貼り付け"); // ctrl+shift+v 専用の固定文言に引きずられていないことの確認（review round2 指摘）
+  });
+
   it("読めない文字列は落として記録する", () => {
     const { keymap, problems } = resolveKeymap(
       prefs({ bindings: { zoom: ["prefix+z", "prefix+meta+z"] } }),

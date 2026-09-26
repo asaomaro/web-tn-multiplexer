@@ -235,6 +235,40 @@ describe("validateAssignment — prefix の後のキー（AC4・AC6 (a)(b)(c)）
     ).toContain("貼り付け");
   });
 
+  it("(c) prefix の後の Enter・Space・↓ も拒否する（pane の枠のメニューが先に取るので、割り当てても効かない。20260925-pane-frame-focus-keys）", () => {
+    expect(
+      reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "Enter" }))),
+    ).toContain("pane の枠のメニュー");
+    expect(
+      reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: " " }))),
+    ).toContain("pane の枠のメニュー");
+    expect(
+      reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "ArrowDown" }))),
+    ).toContain("pane の枠のメニュー");
+  });
+
+  it("(c) prefix の後の Shift+Enter・Shift+Space・Shift+↓ も拒否する（PaneFrame.vue の onKeydown は ctrl/alt/meta だけを見て shift は見ないので、shift 付きも枠に止められる。review 指摘）", () => {
+    expect(
+      reason(
+        validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "Enter", shift: true })),
+      ),
+    ).toContain("pane の枠のメニュー");
+    expect(
+      reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: " ", shift: true }))),
+    ).toContain("pane の枠のメニュー");
+    expect(
+      reason(
+        validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "ArrowDown", shift: true })),
+      ),
+    ).toContain("pane の枠のメニュー");
+  });
+
+  it("(c) prefix の後の Shift+F10 も拒否する（PaneFrame.vue の F10 条件は shift 付きのときだけ発火し、その判定も shift を見ないので同じ穴。shift+f10 は F_KEY として chord 化できるので予約が要る。T1 round2 taskcheck 指摘）", () => {
+    expect(
+      reason(validateAssignment(DEFAULT_KEYMAP, after("goto"), key({ key: "F10", shift: true }))),
+    ).toContain("pane の枠のメニュー");
+  });
+
   it("「後続」の案内のキー（e）は空いているものとして通る（別の操作が優先される）", () => {
     // 20260922-appearance-settings-rest T7 で shift+r は reload_config の既定割り当てに昇格した
     // ので、「後続」の案内として残っているのは e だけ（下のテストで、shift+r は既に
@@ -306,6 +340,14 @@ describe("validateAssignment — 直接のキー（AC5・AC6 (d)(f)(g)）", () =
         ),
       ),
     ).toContain("貼り付け");
+  });
+
+  it("(f) Shift+F10 は pane の枠のメニューを開くキーとして使うので拒否する（isDirectChord は F キーを shift 付きでも direct として通すため、RESERVED_DIRECT 側にも同じ穴がある。ctrl+shift+v と理由が違うので、固定の『貼り付け』文言ではなく個別の理由を返す。T1 round2 taskcheck 指摘）", () => {
+    const r = reason(
+      validateAssignment(DEFAULT_KEYMAP, direct("zoom"), key({ key: "F10", shift: true })),
+    );
+    expect(r).toContain("pane の枠のメニュー");
+    expect(r).not.toContain("貼り付け"); // ctrl+shift+v 専用の固定文言に引きずられていないことの確認（review round2 指摘）
   });
 
   it("(g) prefix と同じキーは拒否する（prefix を変えるとその新しい prefix と比べる）", () => {

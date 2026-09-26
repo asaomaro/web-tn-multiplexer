@@ -31,13 +31,33 @@ const NOT_YET_BINDINGS: readonly (readonly [string, Action])[] = [
 /**
  * prefix の後のキーとして予約された chord → 理由（画面の拒否にも、読み込みで落とした記録にも使う。prefix 自身は別に判定する）。
  * `ctrl+shift+v` は貼り付けのショートカットで、`KeyInputController` が prefix の状態に関わらず**ルーターより先に**取る——割り当てても prefix の後では効かない。
+ * `enter`・`space`・`down`（と shift 付きの同キー）・`shift+f10` は pane の枠（`PaneFrame.vue`）のメニューを開くキーとして使う——枠が Tab で選べているときに割り当てても、その keydown は枠に止められて届かない
+ * （20260925-pane-frame-focus-keys。`PaneFrame.vue` の判定は ctrl/alt/meta だけを見て shift は見ないため、無修飾と shift 付きの両方が対象。`F10` は shift 付きのときだけ枠のメニューを開く（`shift+f10` は `F_KEY` 扱いで chord として表現できるため予約が要る）。`ContextMenu` は `NAMED_KEYS`/`F_KEY` のどちらにも対応が無く chord として表現できないため予約は不要）。
  */
 export const RESERVED_AFTER_PREFIX: ReadonlyMap<string, string> = new Map([
   [PREFIX_CANCEL_CHORD, "Esc は prefix の取り消しに使うので、prefix の後のキーにできません。"],
   ["ctrl+shift+v", "ctrl+shift+v は貼り付けに使うので、prefix の後のキーにできません。"],
+  ["enter", "Enter は pane の枠のメニューを開くキーとして使うので、prefix の後のキーにできません。"],
+  ["space", "Space は pane の枠のメニューを開くキーとして使うので、prefix の後のキーにできません。"],
+  ["down", "↓ は pane の枠のメニューを開くキーとして使うので、prefix の後のキーにできません。"],
+  ["shift+enter", "Shift+Enter は pane の枠のメニューを開くキーとして使うので、prefix の後のキーにできません。"],
+  ["shift+space", "Shift+Space は pane の枠のメニューを開くキーとして使うので、prefix の後のキーにできません。"],
+  ["shift+down", "Shift+↓ は pane の枠のメニューを開くキーとして使うので、prefix の後のキーにできません。"],
+  ["shift+f10", "Shift+F10 は pane の枠のメニューを開くキーとして使うので、prefix の後のキーにできません。"],
 ]);
-/** 直接のキーとして予約された chord。貼り付けのショートカット（`KeyInputController` が先に取る）。 */
-export const RESERVED_DIRECT: ReadonlySet<string> = new Set(["ctrl+shift+v"]);
+/**
+ * 直接のキーとして予約された chord → 理由（`RESERVED_AFTER_PREFIX` と同型。理由が異なる2エントリを
+ * 1つの固定文言では表せないため、20260925-pane-frame-focus-keys の T1 round2 taskcheck で
+ * `ReadonlySet` から `ReadonlyMap` へ変更した——`ctrl+shift+v` は貼り付け、`shift+f10` は pane の枠の
+ * メニューが理由で、両者は無関係）。
+ */
+export const RESERVED_DIRECT: ReadonlyMap<string, string> = new Map([
+  ["ctrl+shift+v", "ctrl+shift+v は貼り付けに使うので、直接のキーにできません。"],
+  [
+    "shift+f10",
+    "Shift+F10 は pane の枠のメニューを開くキーとして使うので、直接のキーにできません。",
+  ],
+]);
 
 /**
  * 解決した割り当ての表（design「解決した表」）。`KeyRouter` はこれを引くだけ。**割り当てが変わったときに 1 回だけ作り、押すたびには作り直さない**。
@@ -115,7 +135,7 @@ export function resolveKeymap(prefs: KeyPrefs): { keymap: ResolvedKeymap; proble
       else if (b.via === "prefix" && RESERVED_AFTER_PREFIX.has(chord))
         why = (RESERVED_AFTER_PREFIX.get(chord) ?? "").replace(/。$/, "");
       else if (b.via === "direct" && RESERVED_DIRECT.has(chord))
-        why = `${chord} は貼り付けに使うので直接のキーにできません`;
+        why = (RESERVED_DIRECT.get(chord) ?? "").replace(/。$/, "");
       else if (b.via === "direct" && !isDirectChord(chord))
         why = `${chord} は端末への入力を奪うので直接のキーにできません`;
       else if (owners.has(chord)) why = `${chord} はすでに ${owners.get(chord)} が使っています`;
