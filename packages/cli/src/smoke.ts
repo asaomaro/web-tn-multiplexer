@@ -104,6 +104,30 @@ async function main(): Promise<void> {
     if (!Array.isArray(listed.agents) || listed.agents.length !== 0) throw new Error(`agent list should be an empty agents array: ${agents.stdout}`);
     console.log("smoke(cli): wtmctl agent list ok (no agents)");
 
+    // 20260926-agent-prompt-send-keys: ビルド済みの RPC（agent.prompt / agent.send_keys）までの配線を確かめる。
+    // 検出したエージェントは居ないので状態を注入する（前面はシェルなので AgentMonitor は上書きしない）。prompt はシェルに
+    // 「本文 → 300ms → Enter」で届くので、echo の往復で確定されたことを見る。
+    server.session.updatePaneRuntime(pane.id, {
+      agent: { instanceId: "smoke-agent", kind: "claude", label: "Claude Code", state: "idle", completionSeq: 0, serverSeenSeq: 0, verified: true, since: Date.now() },
+    });
+    const keys = await runCli(["agent", "send-keys", pane.id, "C-c", "--url", url], env);
+    if (keys.exitCode !== 0) throw new Error(`agent send-keys failed (exit ${keys.exitCode}): ${keys.stderr}`);
+    console.log("smoke(cli): wtmctl agent send-keys ok (the RPC accepted the keys)");
+    const promptMarker = `wtmctl-smoke-prompt-${Date.now()}`;
+    const prompted = await runCli(["agent", "prompt", pane.id, `echo ${promptMarker}`, "--url", url], env);
+    if (prompted.exitCode !== 0) throw new Error(`agent prompt failed (exit ${prompted.exitCode}): ${prompted.stderr}`);
+    let sawPrompt = false;
+    const promptDeadline = Date.now() + 8_000;
+    while (Date.now() < promptDeadline && !sawPrompt) {
+      const read = await runCli(["pane", "read", pane.id, "--url", url], env);
+      if (read.exitCode !== 0) throw new Error(`pane read failed (exit ${read.exitCode}): ${read.stderr}`);
+      // 入力の行（echo …）だけでなく、実行された結果の行（マーカーだけの行）が出ていること。
+      if (read.stdout.split("\n").some((l) => l.trim() === promptMarker)) sawPrompt = true;
+      else await new Promise((r) => setTimeout(r, 200));
+    }
+    if (!sawPrompt) throw new Error(`agent prompt was not submitted (marker "${promptMarker}" never printed)`);
+    console.log("smoke(cli): wtmctl agent prompt ok (submitted; the shell printed the marker)");
+
     console.log("smoke(cli): PASS");
     process.exitCode = 0;
   } finally {

@@ -25,6 +25,8 @@ const USAGE = [
   "wtmctl agent get <paneId> [--url <URL>] [--token <TOKEN>]",
   "wtmctl agent wait <paneId> [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
   "wtmctl agent read <paneId> [--lines <N>] [--raw] [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent prompt <paneId> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent send-keys <paneId> <key>... [--url <URL>] [--token <TOKEN>]",
 ].join("\n");
 
 export const DEFAULT_URL = "http://127.0.0.1:7780";
@@ -61,7 +63,17 @@ export type Command =
   | { kind: "agent-list"; opts: GlobalOpts }
   | { kind: "agent-get"; opts: GlobalOpts; paneId: string }
   | { kind: "agent-wait"; opts: GlobalOpts; paneId: string; until: AgentStatus[]; timeoutMs: number | undefined }
-  | { kind: "agent-read"; opts: GlobalOpts; paneId: string; lines: number; raw: boolean; timeoutMs: number };
+  | { kind: "agent-read"; opts: GlobalOpts; paneId: string; lines: number; raw: boolean; timeoutMs: number }
+  | {
+      kind: "agent-prompt";
+      opts: GlobalOpts;
+      paneId: string;
+      text: string;
+      wait: boolean;
+      until: AgentStatus[];
+      timeoutMs: number | undefined;
+    }
+  | { kind: "agent-send-keys"; opts: GlobalOpts; paneId: string; keys: string[] };
 
 const DEFAULT_READ_TIMEOUT_MS = 5000;
 /** herdr の `agent read` の既定（recent の 80 行）。 */
@@ -343,6 +355,40 @@ function parseAgent(sub: string | undefined, rest: readonly string[], env: NodeJ
       raw: bools.has("--raw"),
       timeoutMs: timeoutRaw === undefined ? DEFAULT_READ_TIMEOUT_MS : parsePositiveInt(timeoutRaw, "--timeout"),
     };
+  }
+  // 20260926-agent-prompt-send-keys。`<text>` が `--` で始まると未知のオプションとして拒否される（`pane input` と同じ既知の制約）。
+  if (sub === "prompt") {
+    const { positionals, values, bools, multi } = parseFlags(rest, {
+      values: [...URL_TOKEN.values!, "--timeout"],
+      bools: ["--wait"],
+      multi: ["--until"],
+    });
+    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    const text = requirePositional(positionals, 1, "text", USAGE);
+    rejectExtra(positionals, 2, USAGE);
+    const wait = bools.has("--wait");
+    const timeoutRaw = values.get("--timeout");
+    const untilRaw = multi.get("--until") ?? [];
+    // herdr と同じく、--until・--timeout は --wait と一緒のときだけ（clap の `requires("wait")`）。
+    if (!wait && (timeoutRaw !== undefined || untilRaw.length > 0)) {
+      throw new CliUsageError("--until and --timeout require --wait", "--until・--timeout は --wait と一緒に指定してください。");
+    }
+    return {
+      kind: "agent-prompt",
+      opts: globalOptsFrom(values, env),
+      paneId,
+      text,
+      wait,
+      until: untilRaw.map(parseAgentStatus),
+      timeoutMs: timeoutRaw === undefined ? undefined : parseTimerMs(timeoutRaw),
+    };
+  }
+  if (sub === "send-keys") {
+    const { positionals, values } = parseFlags(rest, URL_TOKEN);
+    const paneId = requirePositional(positionals, 0, "paneId", USAGE);
+    const keys = positionals.slice(1);
+    if (keys.length === 0) throw new CliUsageError("missing key", USAGE);
+    return { kind: "agent-send-keys", opts: globalOptsFrom(values, env), paneId, keys };
   }
   throw new CliUsageError(`unknown subcommand: wtmctl agent ${sub ?? ""}`.trimEnd(), USAGE);
 }

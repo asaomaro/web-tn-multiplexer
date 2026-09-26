@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Disposable } from "../util/Disposable.js";
 import { DefaultOutputFanout, type ClientSink } from "./OutputFanout.js";
-import type { Mirror, MirrorSnapshot } from "./Mirror.js";
+import type { InputModes, Mirror, MirrorSnapshot } from "./Mirror.js";
 
 /** 継ぎ目のタイミングを完全に制御できる偽のミラー（T12「テスト方針」）。 */
 class FakeMirror implements Mirror {
@@ -58,6 +58,12 @@ class FakeMirror implements Mirror {
   }
   notifyAppearanceMayHaveChanged(): void {
     // no-op
+  }
+  inputModes(): InputModes {
+    return { bracketedPaste: false, applicationCursorKeys: false };
+  }
+  flush(): Promise<void> {
+    return Promise.resolve();
   }
 }
 

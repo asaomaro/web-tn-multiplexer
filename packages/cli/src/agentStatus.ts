@@ -82,6 +82,36 @@ export function judgeWait(
   return until.includes(statusOf(current)) ? "match" : "pending";
 }
 
+/** herdr の `AGENT_PROMPT_EFFECT_TIMEOUT_MS`（`src/api/wait.rs:20`）。送信後に活動（working/blocked）を観測するまでの上限。 */
+export const PROMPT_EFFECT_TIMEOUT_MS = 5000;
+
+/**
+ * `agent prompt --wait` の判定（20260926-agent-prompt-send-keys design.md「cli」）。送信を始めた後に `working`/`blocked` を
+ * 一度でも観測する（活動の確認）までは `until` に一致しても返さず、観測した後は `until` のどれかで一致する。時計は持たない。
+ */
+export class PromptWait {
+  private activity: boolean;
+
+  constructor(
+    private readonly expectedInstanceId: string,
+    private readonly until: readonly AgentStatus[],
+    activityObserved: boolean,
+  ) {
+    this.activity = activityObserved;
+  }
+
+  get activityObserved(): boolean {
+    return this.activity;
+  }
+
+  observe(current: AgentInfo | null): WaitVerdict {
+    if (current === null || current.instanceId !== this.expectedInstanceId) return "gone";
+    const status = statusOf(current);
+    if (!this.activity && (status === "working" || status === "blocked")) this.activity = true;
+    return this.activity && this.until.includes(status) ? "match" : "pending";
+  }
+}
+
 const ALT_SCREEN_ENTER = "\u001B[?1049h";
 
 /**

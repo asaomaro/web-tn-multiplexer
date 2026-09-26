@@ -43,6 +43,9 @@ class FakeTerminalHost implements TerminalHost {
   write(input: string | Uint8Array): void {
     this.writes.push(input);
   }
+  writeModal(): Promise<void> {
+    return Promise.resolve();
+  }
   resize(cols: number, rows: number): void {
     this.resized = { cols, rows };
   }

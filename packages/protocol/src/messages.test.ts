@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentIntegrationInstallParams,
+  AgentPromptParams,
+  AgentSendKeysParams,
   ClientThemeParams,
   GroupAddMemberParams,
   GroupCreateParams,
@@ -8,6 +10,7 @@ import {
   GroupRemoveMemberParams,
   GroupRenameParams,
   GroupToggleCollapsedParams,
+  MAX_AGENT_PROMPT_BYTES,
   METHOD_SCHEMAS,
   NewCwd,
   PaneEditScrollbackParams,
@@ -236,5 +239,31 @@ describe("ClientThemeParams", () => {
 
   it("方式の表に client.theme がある", () => {
     expect(METHOD_SCHEMAS["client.theme"]).toBe(ClientThemeParams);
+  });
+});
+
+// 20260926-agent-prompt-send-keys：herdr の agent.prompt / agent.send_keys に相当する方式。
+describe("AgentPromptParams / AgentSendKeysParams", () => {
+  it("本文は UTF-8 で 1MB まで受け、超えたら弾く（空は通す——サーバが empty_agent_prompt で返す）", () => {
+    expect(AgentPromptParams.parse({ paneId: "p1", text: "" })).toEqual({ paneId: "p1", text: "" });
+    expect(AgentPromptParams.parse({ paneId: "p1", text: "a".repeat(MAX_AGENT_PROMPT_BYTES) }).text).toHaveLength(MAX_AGENT_PROMPT_BYTES);
+    expect(() => AgentPromptParams.parse({ paneId: "p1", text: "a".repeat(MAX_AGENT_PROMPT_BYTES + 1) })).toThrow();
+    // 3 バイトの文字で数える（文字数ではなくバイト数）。
+    const third = Math.floor(MAX_AGENT_PROMPT_BYTES / 3) + 1;
+    expect(() => AgentPromptParams.parse({ paneId: "p1", text: "あ".repeat(third) })).toThrow();
+    expect(() => AgentPromptParams.parse({ paneId: "", text: "x" })).toThrow();
+    expect(AgentPromptParams.parse({ paneId: "p1", instanceId: "a1", text: "x" })).toEqual({ paneId: "p1", instanceId: "a1", text: "x" });
+    expect(() => AgentPromptParams.parse({ paneId: "p1", instanceId: "", text: "x" })).toThrow();
+  });
+
+  it("キーは 1〜256 個", () => {
+    expect(AgentSendKeysParams.parse({ paneId: "p1", keys: ["esc"] })).toEqual({ paneId: "p1", keys: ["esc"] });
+    expect(() => AgentSendKeysParams.parse({ paneId: "p1", keys: [] })).toThrow();
+    expect(() => AgentSendKeysParams.parse({ paneId: "p1", keys: Array.from({ length: 257 }, () => "a") })).toThrow();
+  });
+
+  it("方式の表にある", () => {
+    expect(METHOD_SCHEMAS["agent.prompt"]).toBe(AgentPromptParams);
+    expect(METHOD_SCHEMAS["agent.send_keys"]).toBe(AgentSendKeysParams);
   });
 });

@@ -33,6 +33,13 @@ const MESSAGES: Record<ErrorCode, string> = {
   // ロック済み worktree の削除（20260925-worktree-remove-locked）。`worktree_dirty` と同じ理由で
   // 防御的に登録（通常は `sendWorktreeRemove` が catch して `--force` の確認へ進む）。
   worktree_locked: "この worktree はロックされています。",
+  // エージェントへの入力（20260926-agent-prompt-send-keys）。今は外部操作（wtmctl）だけが送る方式で、ブラウザには
+  // 通常来ない——表が全 code の網羅を要求するので登録しておく（想定外の経路で表に出た場合の保険）。
+  agent_not_found: "対象の pane・エージェントが見つかりませんでした（既に閉じられた・終了した等）。",
+  agent_blocked: "エージェントが承認・質問の入力待ちのため、送りませんでした。",
+  empty_agent_prompt: "送る内容が空です。",
+  invalid_key: "知らないキーの名前が含まれていたため、何も送りませんでした。",
+  agent_prompt_failed: "エージェントへの送信に失敗しました（端末が閉じた等）。",
 };
 
 /**

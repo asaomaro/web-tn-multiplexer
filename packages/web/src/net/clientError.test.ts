@@ -86,3 +86,17 @@ describe("errorCodeOf", () => {
     expect(errorCodeOf(err)).toBe("worktree_dirty");
   });
 });
+
+// 20260926-agent-prompt-send-keys：エージェントへの入力の code にも日本語の文言がある（汎用の文言ではない）。
+describe("エージェントへの入力のエラー（20260926-agent-prompt-send-keys）", () => {
+  it.each(["agent_not_found", "agent_blocked", "empty_agent_prompt", "invalid_key", "agent_prompt_failed"])("%s", (code) => {
+    const text = clientErrorMessage(code);
+    expect(text).not.toContain(code);
+    expect(text).toMatch(/[ぁ-んァ-ン]/);
+  });
+
+  it("5 つの文言は互いに違う", () => {
+    const codes = ["agent_not_found", "agent_blocked", "empty_agent_prompt", "invalid_key", "agent_prompt_failed"];
+    expect(new Set(codes.map(clientErrorMessage)).size).toBe(codes.length);
+  });
+});

@@ -337,3 +337,35 @@ describe("XtermMirror — plainText（20260926-edit-scrollback の AC3）", () =
     mirror.dispose();
   });
 });
+
+describe("XtermMirror — inputModes / flush（20260926-agent-prompt-send-keys）", () => {
+  it("既定ではどちらのモードも無効", () => {
+    const mirror = new XtermMirror(80, 24, 1000);
+    expect(mirror.inputModes()).toEqual({ bracketedPaste: false, applicationCursorKeys: false });
+    mirror.dispose();
+  });
+
+  it("書いた直後ではなく、flush の後にモードの切り替えが反映される（送る瞬間のモードを読むには flush を待つ）", async () => {
+    const mirror = new XtermMirror(80, 24, 1000);
+    mirror.write("\x1b[?2004h\x1b[?1h");
+    expect(mirror.inputModes()).toEqual({ bracketedPaste: false, applicationCursorKeys: false });
+    await mirror.flush();
+    expect(mirror.inputModes()).toEqual({ bracketedPaste: true, applicationCursorKeys: true });
+    mirror.write("\x1b[?2004l");
+    await mirror.flush();
+    expect(mirror.inputModes()).toEqual({ bracketedPaste: false, applicationCursorKeys: true });
+    mirror.dispose();
+  });
+
+  it("大きな出力の後ろのモードの切り替えも、flush はその処理を待つ（タイマー 1 回分を待つだけでは足りない）", async () => {
+    const mirror = new XtermMirror(80, 24, 1000);
+    const chunk = `${"x".repeat(100)}\r\n`.repeat(280);
+    for (let i = 0; i < 200; i++) mirror.write(chunk);
+    mirror.write("\x1b[?2004h");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mirror.inputModes().bracketedPaste).toBe(false);
+    await mirror.flush();
+    expect(mirror.inputModes().bracketedPaste).toBe(true);
+    mirror.dispose();
+  });
+});
