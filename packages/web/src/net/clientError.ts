@@ -47,6 +47,14 @@ const MESSAGES: Record<ErrorCode, string> = {
   // 表が全 code の網羅を要求するので登録しておく。
   pane_attached: "この pane には既に別の端末が直結しています。",
   not_attached: "この pane に直結していません。",
+  // エージェントの起動（20260926-agent-start）。今は wtmctl agent start だけが送る方式で、ブラウザには通常来ない。
+  unsupported_agent_kind: "その種類のエージェントは起動できません。",
+  invalid_agent_argument: "エージェントへの引数に制御文字が含まれるか、長すぎるため、何も送りませんでした。",
+  invalid_agent_timeout: "起動を待つ時間が受け付ける範囲の外です。",
+  agent_pane_not_found: "起動先の pane が見つかりませんでした。",
+  agent_pane_busy: "起動先の pane でシェル以外のものが動いているため、何も送りませんでした。",
+  unsupported_agent_shell: "起動先の pane のシェルには、まだ対応していません。",
+  agent_start_input_failed: "エージェントの起動のための入力を送れませんでした（端末が閉じた等）。",
 };
 
 /**

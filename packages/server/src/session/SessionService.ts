@@ -106,6 +106,9 @@ export interface SessionServiceOptions {
  * モデルを書き換える唯一の入口（architecture.md「SessionService」・依存の規則 3）。
  * 検証 → モデルの変更 → 端末の生成・破棄 → イベント → 保存の予約、の順で行う。
  */
+/** 復元で打ち込んだ会話の再開コマンドを「まだ起動中」とみなす時間（`agent start` の既定の締め切りと同じ）。 */
+const RESUME_PENDING_MS = 30_000;
+
 export class SessionService {
   private readonly model: SessionModel;
   private readonly terminals: TerminalManager;
@@ -145,6 +148,11 @@ export class SessionService {
    * 戻ったときに世代が変わっていれば、後から来た名前変更が勝つ（古い結果を捨てる）。workspace が閉じたら消す。
    */
   private readonly labelGen = new Map<WorkspaceId, number>();
+  /** `agent start` の起動中（検出前）の名前の予約（20260926-agent-start design「server `SessionService` に足すもの」）。 */
+  private readonly agentLaunches = new Map<PaneId, { token: number; name: string; kind: string }>();
+  private nextAgentLaunchToken = 1;
+  /** 復元で会話の再開コマンドを打ち込んだ時刻（まだエージェントが検出されていない pane だけ。20260926-agent-start の cross 点検）。 */
+  private readonly resumeWrittenAt = new Map<PaneId, number>();
 
   constructor(opts: SessionServiceOptions) {
     this.model = opts.model;
@@ -425,6 +433,7 @@ export class SessionService {
    * undefined」は `toEqual` 等では区別できないため、実際に省く形にしておく必要がある。
    */
   private publishPaneClosed(paneId: PaneId, successorPaneId: PaneId | undefined): void {
+    this.resumeWrittenAt.delete(paneId); // 20260926-agent-start の review ラウンド 1（閉じた pane の記録を残さない）
     const editor = this.scrollbackEditors.get(paneId);
     if (editor) {
       this.scrollbackEditors.delete(paneId);
@@ -901,6 +910,16 @@ export class SessionService {
     // 同じ「実際に変わったときだけ発行する」規約に揃える。
     // 名前は AgentTracker が知らないので、同じ検出（instanceId）の間だけ前の名前を引き継ぐ（20260926-agent-start-rename design
     // 「名前の引き継ぎ」）。別の instanceId（入れ替わり）・null（終了）には引き継がない＝名前は消える。
+    // 起動中の予約のある pane に新しい検出が来たら予約を終え、種類が合えば予約の名前を付ける（20260926-agent-start）。
+    // 付ける名前は予約（受け付け時に assertAgentNameAvailable を通った値）から来る。下の引き継ぎは同じ instanceId のときだけなので上書きしない。
+    if (patch.agent) this.resumeWrittenAt.delete(paneId);
+    const launch = this.agentLaunches.get(paneId);
+    if (launch && patch.agent && patch.agent.instanceId !== pane.agent?.instanceId) {
+      this.agentLaunches.delete(paneId);
+      if (patch.agent.kind === launch.kind && this.agentNameHolder(launch.name, paneId) === null) {
+        patch = { ...patch, agent: { ...patch.agent, name: launch.name } };
+      }
+    }
     if (patch.agent && patch.agent.name === undefined && pane.agent?.name !== undefined && pane.agent.instanceId === patch.agent.instanceId) {
       patch = { ...patch, agent: { ...patch.agent, name: pane.agent.name } };
     }
@@ -934,11 +953,7 @@ export class SessionService {
     if (expectedInstanceId !== undefined && agent.instanceId !== expectedInstanceId) {
       throw new RpcError("agent_not_found", `agent ${expectedInstanceId} is no longer running in pane: ${paneId}`);
     }
-    if (name !== null) {
-      if (!isValidAgentName(name)) throw new RpcError("invalid_agent_name", INVALID_AGENT_NAME_MESSAGE);
-      const holder = this.model.listPanes().find((p) => p.id !== paneId && p.agent?.name === name);
-      if (holder) throw new RpcError("agent_name_taken", `agent name ${name} is already used by pane ${holder.id}`);
-    }
+    if (name !== null) this.assertAgentNameAvailable(name, paneId);
     const next: AgentInfo = { ...agent };
     if (name === null) delete next.name;
     else next.name = name;
@@ -946,6 +961,40 @@ export class SessionService {
     const updated = this.model.updatePaneRuntime(paneId, { agent: next });
     this.bus.publish({ event: "pane.agent_status_changed", data: { paneId, agent: updated.agent } });
     return next;
+  }
+
+  /** 名前の書式と一意性（live なエージェントの名前・起動中の予約。`exceptPaneId` の pane は除く）。外れれば RpcError。 */
+  assertAgentNameAvailable(name: string, exceptPaneId: PaneId | null): void {
+    if (!isValidAgentName(name)) throw new RpcError("invalid_agent_name", INVALID_AGENT_NAME_MESSAGE);
+    const holder = this.agentNameHolder(name, exceptPaneId);
+    if (holder !== null) throw new RpcError("agent_name_taken", `agent name ${name} is already used by pane ${holder}`);
+  }
+
+  /** その名前を live なエージェントか起動中の予約で使っている、今も存在する他の pane（書式は見ない）。 */
+  private agentNameHolder(name: string, exceptPaneId: PaneId | null): PaneId | null {
+    for (const p of this.model.listPanes()) {
+      if (p.id === exceptPaneId) continue;
+      if (p.agent?.name === name || this.agentLaunches.get(p.id)?.name === name) return p.id;
+    }
+    return null;
+  }
+
+  /** `agent start` の起動中の予約を作る（20260926-agent-start）。戻り値は `endAgentLaunch` に渡す印。 */
+  beginAgentLaunch(paneId: PaneId, name: string, kind: string): number {
+    if (this.agentLaunches.has(paneId)) throw new RpcError("agent_pane_busy", `agent target pane ${paneId} is not an available shell`);
+    this.assertAgentNameAvailable(name, null);
+    const token = this.nextAgentLaunchToken++;
+    this.agentLaunches.set(paneId, { token, name, kind });
+    return token;
+  }
+
+  /** 印が一致するときだけ予約を解く（締め切り・書き込みの失敗）。検出で先に終わっていれば何もしない。 */
+  endAgentLaunch(paneId: PaneId, token: number): void {
+    if (this.agentLaunches.get(paneId)?.token === token) this.agentLaunches.delete(paneId);
+  }
+
+  hasAgentLaunch(paneId: PaneId): boolean {
+    return this.agentLaunches.has(paneId);
   }
 
   updateWorkspaceGit(workspaceId: WorkspaceId, git: GitInfo | null): void {
@@ -1150,6 +1199,16 @@ export class SessionService {
     const command = resumeCommandFor(agentSession.kind, agentSession.sessionId);
     if (!command) return;
     this.terminals.get(paneId)?.write(`${command}\r`);
+    this.resumeWrittenAt.set(paneId, this.clock.now());
+  }
+
+  /** 会話の再開コマンドを打ち込んでから `RESUME_PENDING_MS` の間で、まだエージェントが検出されていないか（`agent start` はその pane に打ち込まない）。 */
+  hasPendingResume(paneId: PaneId): boolean {
+    const at = this.resumeWrittenAt.get(paneId);
+    if (at === undefined) return false;
+    if (this.clock.now() - at <= RESUME_PENDING_MS) return true;
+    this.resumeWrittenAt.delete(paneId);
+    return false;
   }
 
   // --- helpers ------------------------------------------------------------

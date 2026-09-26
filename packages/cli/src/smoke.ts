@@ -12,11 +12,12 @@
  * 一時ディレクトリへ逃がし、実行者の実際のキャッシュに触れない。
  */
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { composeServer, NodePtyBackend, type ComposedServer } from "@wtm/server";
@@ -115,6 +116,15 @@ async function main(): Promise<void> {
   const homeDir = await mkdtemp(join(tmpdir(), "wtmctl-smoke-home-"));
   console.log(`smoke(cli): temp server state dir ${serverStateDir}, sandboxed HOME ${homeDir}`);
 
+  // pane のシェルに本物のエージェント（この機械の claude 等）を起動させない（20260926-agent-start decisions.md D11）。
+  // 利用者の rc を読ませず（HOME）、PATH の先頭に「呼ばれたら印を残して失敗する」偽の claude を置く。pane のシェルはこの環境を継承する。
+  const stubBin = join(homeDir, "stub-bin");
+  const stubMarker = join(homeDir, "stub-claude-called");
+  await mkdir(stubBin, { recursive: true });
+  await writeFile(join(stubBin, "claude"), `#!/bin/sh\ntouch '${stubMarker}'\nexit 1\n`, { mode: 0o755 });
+  process.env["HOME"] = homeDir;
+  process.env["PATH"] = `${stubBin}${delimiter}${process.env["PATH"] ?? ""}`;
+
   const port = await getFreePort();
   const server = await composeServer({ host: "127.0.0.1", port: String(port), stateDir: serverStateDir, origin: [] });
   await server.listen();
@@ -187,6 +197,16 @@ async function main(): Promise<void> {
       throw new Error(`agent get by pane id should show no name after --clear (exit ${byId.exitCode}): ${byId.stdout} ${byId.stderr}`);
     }
     console.log("smoke(cli): wtmctl agent rename ok (named, resolved by name, cleared)");
+    // 20260926-agent-start: ビルド済みの wtmctl → RPC agent.start → AgentStarter の配線。エージェントの居る pane には何も打ち込まず
+    // agent_pane_busy（本物のエージェントは起動しない）。表に無い kind は使用誤り（2）。
+    const badKind = await runCli(["agent", "start", "smoke-start", "--kind", "sh", "--pane", pane.id, "--url", url], env);
+    if (badKind.exitCode !== 2) throw new Error(`agent start with an unknown kind should be a usage error (exit ${badKind.exitCode}): ${badKind.stderr}`);
+    const busy = await runCli(["agent", "start", "smoke-start", "--kind", "claude", "--pane", pane.id, "--url", url, "--", "$(echo x)"], env);
+    if (busy.exitCode !== 1 || !busy.stderr.includes("agent_pane_busy")) {
+      throw new Error(`agent start on a pane with an agent should be agent_pane_busy (exit ${busy.exitCode}): ${busy.stdout} ${busy.stderr}`);
+    }
+    if (existsSync(stubMarker)) throw new Error("agent start must not have typed anything into the pane");
+    console.log("smoke(cli): wtmctl agent start ok (usage error for an unknown kind, agent_pane_busy on a pane with an agent)");
     const keys = await runCli(["agent", "send-keys", pane.id, "C-c", "--url", url], env);
     if (keys.exitCode !== 0) throw new Error(`agent send-keys failed (exit ${keys.exitCode}): ${keys.stderr}`);
     console.log("smoke(cli): wtmctl agent send-keys ok (the RPC accepted the keys)");

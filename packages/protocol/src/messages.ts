@@ -470,6 +470,26 @@ export interface AgentRenameResult {
   agent: AgentInfo;
 }
 
+/**
+ * 空いているシェル pane でエージェントを起動する（20260926-agent-start。herdr の agent.start）。名前の書式・kind・引数・timeout の範囲は
+ * スキーマでは弾かない（サーバが herdr と同じ code で返す）。打ち込んだ時点で応答し、起動完了は呼び出し側がイベントで待つ。
+ */
+export const AgentStartParams = z.object({
+  name: z.string(),
+  kind: z.string(),
+  paneId,
+  args: z.array(z.string()),
+  timeoutMs: z.number().int().optional(),
+});
+export type AgentStartParams = z.infer<typeof AgentStartParams>;
+export interface AgentStartResult {
+  paneId: string;
+  name: string;
+  kind: string;
+  /** 実行ファイルと引数（クォートする前）。 */
+  argv: string[];
+}
+
 export const METHOD_SCHEMAS = {
   "client.hello": ClientHelloParams,
   "client.view": ClientViewParams,
@@ -524,6 +544,7 @@ export const METHOD_SCHEMAS = {
   "agent.prompt": AgentPromptParams,
   "agent.send_keys": AgentSendKeysParams,
   "agent.rename": AgentRenameParams,
+  "agent.start": AgentStartParams,
 } as const;
 
 export type MethodName = keyof typeof METHOD_SCHEMAS;
@@ -583,6 +604,7 @@ export interface MethodResultMap {
   "agent.prompt": AgentPromptResult;
   "agent.send_keys": Record<string, never>;
   "agent.rename": AgentRenameResult;
+  "agent.start": AgentStartResult;
 }
 
 export type ParamsOf<M extends MethodName> = z.infer<(typeof METHOD_SCHEMAS)[M]>;

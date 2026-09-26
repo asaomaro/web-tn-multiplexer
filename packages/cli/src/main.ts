@@ -13,6 +13,7 @@ import {
   runAgentSendKeys,
   runAgentWait,
 } from "./commands/agent.js";
+import { runAgentStart } from "./commands/agentStart.js";
 import { runPaneAttach } from "./commands/attach.js";
 import { runTabClose, runTabCreate } from "./commands/tab.js";
 import { runPaneClose, runPaneInput, runPaneRead, runPaneRun, runPaneSplit } from "./commands/pane.js";
@@ -45,6 +46,7 @@ function printHelp(): void {
       "wtmctl agent prompt <target> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
       "wtmctl agent send-keys <target> <key>... [--url <URL>] [--token <TOKEN>]",
       "wtmctl agent rename <target> <name>|--clear [--url <URL>] [--token <TOKEN>]",
+      "wtmctl agent start <name> --kind <KIND> --pane <paneId> [--timeout <ms>] [--url <URL>] [--token <TOKEN>] [-- <args>...]",
       "",
       "環境変数: WTMCTL_URL（既定 http://127.0.0.1:7780）・WTMCTL_TOKEN",
       "",
@@ -55,6 +57,8 @@ function printHelp(): void {
       "--wait は送信後 5 秒以内に working/blocked を観測できなければ agent_prompt_stalled で終わります。",
       "pane attach は手元の端末をその pane に直結します。Ctrl+B q で切り離し、Ctrl+B Ctrl+B で Ctrl+B を送ります。",
       "同じ pane に直結できるのは 1 つだけで、--takeover で既存の直結を奪えます。",
+      "agent start は前面がシェル自身だけの pane（sh/bash/dash/zsh/ksh/mksh）に、--kind の決まった実行ファイルと -- の後の引数を",
+      "単一引用符で包んで打ち込み、名前を付けて idle になるまで待ちます（既定 30 秒。blocked なら agent_not_ready）。",
     ].join("\n"),
   );
 }
@@ -109,6 +113,8 @@ async function main(): Promise<void> {
       return runAgentSendKeys(cmd, store);
     case "agent-rename":
       return runAgentRename(cmd, store);
+    case "agent-start":
+      return runAgentStart(cmd, store);
     default: {
       // 網羅性チェック：`Command` に新しい種類が足されたのにここへ分岐を足し忘れると、ここで型エラーになる
       // （coding のタスク横断点検で見つけた——`switch` 単体では TS は非網羅を黙って許す。この tsconfig は

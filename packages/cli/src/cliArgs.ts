@@ -1,3 +1,4 @@
+import { AGENT_START_KINDS } from "@wtm/protocol";
 import { AGENT_STATUSES, type AgentStatus } from "./agentStatus.js";
 
 /**
@@ -29,6 +30,7 @@ const USAGE = [
   "wtmctl agent prompt <target> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>] [--url <URL>] [--token <TOKEN>]",
   "wtmctl agent send-keys <target> <key>... [--url <URL>] [--token <TOKEN>]",
   "wtmctl agent rename <target> <name>|--clear [--url <URL>] [--token <TOKEN>]",
+  "wtmctl agent start <name> --kind <KIND> --pane <paneId> [--timeout <ms>] [--url <URL>] [--token <TOKEN>] [-- <args>...]",
   "（<target> は pane ID か、agent rename で付けた名前）",
 ].join("\n");
 
@@ -80,7 +82,17 @@ export type Command =
     }
   | { kind: "agent-send-keys"; opts: GlobalOpts; paneId: string; keys: string[] }
   /** `name: null` は `--clear`（名前を外す）。 */
-  | { kind: "agent-rename"; opts: GlobalOpts; paneId: string; name: string | null };
+  | { kind: "agent-rename"; opts: GlobalOpts; paneId: string; name: string | null }
+  /** `args` は `--` の後の全部（エージェントへの引数。20260926-agent-start）。 */
+  | {
+      kind: "agent-start";
+      opts: GlobalOpts;
+      name: string;
+      agentKind: string;
+      paneId: string;
+      timeoutMs: number | undefined;
+      args: string[];
+    };
 
 const DEFAULT_READ_TIMEOUT_MS = 5000;
 /** herdr の `agent read` の既定（recent の 80 行）。 */
@@ -417,5 +429,39 @@ function parseAgent(sub: string | undefined, rest: readonly string[], env: NodeJ
     rejectExtra(positionals, 2, USAGE);
     return { kind: "agent-rename", opts: globalOptsFrom(values, env), paneId, name };
   }
+  if (sub === "start") return parseAgentStart(rest, env);
   throw new CliUsageError(`unknown subcommand: wtmctl agent ${sub ?? ""}`.trimEnd(), USAGE);
+}
+
+const AGENT_START_USAGE =
+  "wtmctl agent start <name> --kind <KIND> --pane <paneId> [--timeout <ms>] [--url <URL>] [--token <TOKEN>] [-- <args>...]";
+
+/** 20260926-agent-start（herdr の `agent start`）。最初の `--` より後はすべてエージェントへの引数で、オプションとして読まない。 */
+function parseAgentStart(rest: readonly string[], env: NodeJS.ProcessEnv): Command {
+  const separator = rest.indexOf("--");
+  const head = separator === -1 ? rest : rest.slice(0, separator);
+  const args = separator === -1 ? [] : rest.slice(separator + 1);
+  const { positionals, values } = parseFlags(head, { values: ["--url", "--token", "--kind", "--pane", "--timeout"] });
+  const name = requirePositional(positionals, 0, "name", AGENT_START_USAGE);
+  rejectExtra(positionals, 1, AGENT_START_USAGE);
+  const agentKind = values.get("--kind");
+  if (agentKind === undefined) throw new CliUsageError("missing required --kind", AGENT_START_USAGE);
+  if (!AGENT_START_KINDS.includes(agentKind)) {
+    throw new CliUsageError(`unsupported interactive agent kind: ${agentKind}`, `--kind には ${AGENT_START_KINDS.join("|")} のどれかを指定してください。`);
+  }
+  const paneId = values.get("--pane");
+  if (paneId === undefined) throw new CliUsageError("missing required --pane", AGENT_START_USAGE);
+  const timeoutRaw = values.get("--timeout");
+  if (timeoutRaw !== undefined && !/^[0-9]+$/.test(timeoutRaw)) {
+    throw new CliUsageError(`invalid value for --timeout: ${timeoutRaw}`, "--timeout には整数（ms）を指定してください。");
+  }
+  return {
+    kind: "agent-start",
+    opts: globalOptsFrom(values, env),
+    name,
+    agentKind,
+    paneId,
+    timeoutMs: timeoutRaw === undefined ? undefined : Number(timeoutRaw),
+    args,
+  };
 }

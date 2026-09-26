@@ -39,6 +39,7 @@ wtmctl agent read <target> [--lines <N>] [--raw] [--timeout <ms>]
 wtmctl agent prompt <target> <text> [--wait] [--until working|blocked|idle|done|unknown]... [--timeout <ms>]
 wtmctl agent send-keys <target> <key>...
 wtmctl agent rename <target> <name>|--clear
+wtmctl agent start <name> --kind <KIND> --pane <paneId> [--timeout <ms>] [-- <args>...]
 ```
 
 ## pane への直結（`pane attach`）
@@ -148,6 +149,48 @@ pane の中で検出されたコーディングエージェント（Claude Code�
 - 対象の pane が無い・エージェントが検出されていない・どのエージェントも持たない名前だと `agent_not_found`。
 - 読み取り（`get`・`wait`・`read`）は既読を進めない（`done` は `done` のまま）。
 
+### エージェントを起動する（`agent start`）
+
+`wtmctl agent start <name> --kind <KIND> --pane <paneId> [--timeout <ms>] [-- <args>...]` は、**前面がシェル自身だけの pane**
+（プロンプトで待っているシェル）に `KIND` のエージェントを起動し、`<name>` を付け、入力を受け付けられる状態（`idle`）になるまで待ってから
+`agent get` と同じ形で出す。pane は作らない（先に `pane split` 等で用意する）。
+
+- `KIND` は次の表からだけ選ぶ。打ち込む実行ファイルは表で決まっていて、任意のコマンド行は受け付けない（表に無いものは使用誤り＝終了コード 2）。
+  `pi` `claude` `codex` `gemini` `cursor`（`cursor-agent`）`devin` `agy` `cline` `opencode` `copilot` `kimi` `kiro`（`kiro-cli`）`droid` `amp`
+  `grok` `hermes` `kilo` `qodercli` `qwen` `letta` `maki` `muse`（括弧の無いものは kind と同じ名前）。
+- `--` の後はすべてエージェントへの引数（`--kind` 等もオプションとして読まない）。各引数は**単一引用符で包んで**打ち込むので、
+  `;`・`$(…)`・バッククォート・`'`・`"`・`*`・`~`・`!` 等を含んでもそのまま 1 つの引数として届き、シェルの構文として解釈されない。
+  **制御文字（改行・タブ・ESC 等）を含む引数**と、打ち込む 1 行が 4000 バイトを超えるものは `invalid_agent_argument` で何も送らない。
+- 打ち込むのは、Ctrl-C（継続行＝引用符が開いたままの入力を捨てさせる）→ 200 ms 後に Ctrl-E・Ctrl-U（打ちかけの行を消す）＋コマンド行
+  （シェルが bracketed paste を有効にしていれば貼り付けとして）＋Enter。**シェルがまだ読んでいない打鍵は Ctrl-C で消える**（シェルの起動直後に
+  打った内容等）。Ctrl-C を受けたシェルは新しいプロンプトを出し、`$?` は 130 になる。vi の編集モードのシェルでは打ちかけの消去が
+  効かないことがある。200 ms は保証ではなく、極端な高負荷でシェルが Ctrl-C を処理する前に行を読み始めると、行の先頭が落ちうる。
+- 起動できる pane: サーバが Linux／WSL2 で、pane の前面プロセスグループがシェル自身だけで、そのシェルが `sh`・`bash`・`dash`・`zsh`・`ksh`・
+  `mksh` のどれか。エージェントが検出されている・同じ pane で別の起動中・サーバの復元で会話の再開コマンドを打ち込んでから 30 秒以内でまだ
+  検出されていない・前面が別のコマンド（エディタ等）・前面を確かめられないときは
+  `agent_pane_busy`（CLI は 2 秒まで 100 ms おきに再試行する）。fish・csh・tcsh・nu・elvish・xonsh・pwsh・powershell・cmd の pane と、
+  Windows で動くサーバでは `unsupported_agent_shell`。どれも**何も打ち込まない**。macOS 等（`/proc` が無い）では前面を確かめられないので
+  常に `agent_pane_busy`。前面は受け付けた時点と、書き込む直前（ブラウザ等からの他の入力を後回しにしている間）の 2 回確かめる。
+  それでも、書き込む直前の確認の少し前に打たれたコマンドがまだ起動し終えていない（シェルが fork・exec している途中の）瞬間には
+  見分けられず、そのコマンドに Ctrl-C と行が届きうる（herdr も同じ）。確かめ直しの間（最長 2 秒）は、その pane への他の入力が遅れて届く。
+- 名前: 書式と一意性は `agent rename` と同じ（`invalid_agent_name`・`agent_name_taken`）。起動中（まだ検出されていない）の名前も予約され、
+  他の `agent start`・`agent rename` には使えない。期待した種類のエージェントがその pane で検出された時点で名前が付き、以後は `agent rename` で
+  付けた名前と同じ（終了・入れ替わり・pane の close で消える）。サーバは打ち込んだ時点から `--timeout` の間に検出されなければ予約を解く
+  （CLI は送る前から数えるので、CLI が `timeout` を返した後も数秒は予約が残り、その間に検出されれば名前が付く）。
+- 待ち合わせ: 検出後 3 秒は状態を判定しない（`unknown`）ので、成功は検出から 3 秒以上後。`idle`（または `done`）で成功。
+  - `blocked`（信頼の確認・承認等）になったら `agent_not_ready`。名前は付いたままなので、`agent read`・`agent send-keys` で答え、
+    `agent wait <name>` で待ち直せる。
+  - 別の種類のエージェントが検出された → `agent_kind_mismatch`。名前の付いたエージェントが終了した・入れ替わった・pane が閉じた →
+    `agent_start_failed`。`--timeout`（既定 30000。3000 より大きく 300000 以下。範囲外は `invalid_agent_timeout`、0 以上の整数でなければ使用誤り）を
+    過ぎた → `timeout`（検出されて名前が付いていれば、名前は付いたまま）。
+- 他の code: `unsupported_agent_kind`（サーバ）・`agent_pane_not_found`・`agent_start_input_failed`（端末に書けなかった）。
+
+```bash
+pane=$(wtmctl pane split p1 --direction right | jq -r .pane.id)
+wtmctl agent start reviewer --kind codex --pane "$pane" -- -m gpt-5.4
+wtmctl agent prompt reviewer "この差分をレビューして" --wait --timeout 600000
+```
+
 ### 例: エージェントに作業させて、終わるのを待って結果を読む
 
 ```bash
@@ -187,9 +230,18 @@ herdr の `agent list` / `agent get` / `agent wait` / `agent read` / `agent prom
 - 名前の書式・一意性・`<target>` の解決順（pane ID → 名前）・`--clear`・code（`invalid_agent_name`・`agent_name_taken`・
   `agent_not_found`）は herdr と同じ。違うのは、名前が消える条件（herdr は検出の一時的な揺れでは消さないが、本製品は検出が一度
   外れると別のエージェントとして数え直すので消える）と、保存しないこと（herdr は session に保存して復元する）。
-- `agent start`（空いているシェルの pane でエージェントを起動して名前を付ける）・`agent focus`・`agent explain`・`agent attach` は無い。
+- `agent start`: 空いているシェルの判定・kind の表と実行ファイル・`--` の後の引数・制御文字の拒否・起動中の名前の予約・`blocked` で
+  `agent_not_ready`・既定 30 秒と範囲・`agent_pane_busy` の 2 秒の再試行・code は herdr と同じ。違い:
+  - 対応するシェルは POSIX 系（sh・bash・dash・zsh・ksh・mksh）だけで、それ以外と Windows のサーバは `unsupported_agent_shell`（herdr に無い code。
+    herdr は fish・csh 等にも POSIX のクォートを使い、Windows は PowerShell／cmd.exe 向けに組み立てる）。
+  - 引数は全部を単一引用符で包む（herdr は安全な文字だけの引数を裸で出す）。打ち込む前に Ctrl-C と Ctrl-E・Ctrl-U を送る（herdr は送らない）。
+    打ち込む 1 行は 4000 バイトまで。
+  - `--kind` は正規の名前だけ（herdr は `claude-code` 等の別名も受ける）。`omp`・`mastracode` は無い（本製品が検出できない）。
+  - 起動中（検出前）は `agent list` に出ない。検出されて名前が付いた後は、締め切りを過ぎても名前を外さない（herdr は起動完了前なら外す）。
+    `agent_pane_busy` の再試行はシェルが初期化中かを見ずに行う。起動時の会話の再開・名前の保存は無い。
+- `agent focus`・`agent explain`・`agent attach` は無い。
 - `agent prompt`: herdr の Windows 向けの回避策（Codex への貼り付けの区切り・Copilot へのフォーカス通知）と `agent_not_ready`（名前付きで
-  起動中の判定）は無い。`--timeout` が送信の途中で尽きたらその時点で `timeout` になる（herdr の Unix 版は送信の完了を待つ）。
+  起動中の判定。本製品では `agent start` だけが返す）は無い。`--timeout` が送信の途中で尽きたらその時点で `timeout` になる（herdr の Unix 版は送信の完了を待つ）。
   待ち行列の後ろで待っている間の `blocked`・エージェントの終了を書く直前にも確かめる（herdr は受け付けの時点だけ）。
   本文の中の貼り付けの印（`ESC[200~`・`ESC[201~`）を取り除く（herdr はそのまま包む）。
 - `agent send-keys`: キーの符号化は xterm の既定だけ（kitty keyboard protocol には合わせない）。`cmd`/`super`/`hyper` の修飾は無い。
